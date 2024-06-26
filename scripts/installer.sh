@@ -19,7 +19,26 @@ run_migrations() {
 }
 
 flux_is_ok() {
-  kubectl wait --for=condition=available -n cozy-fluxcd deploy/source-controller deploy/helm-controller --timeout=10s 
+  kubectl wait --for=condition=available -n cozy-fluxcd deploy/source-controller deploy/helm-controller --timeout=1s
+}
+
+ensure_fluxcd() {
+  if flux_is_ok; then
+    return
+  fi
+  if kubectl get crd helmreleases.helm.toolkit.fluxcd.io helmrepositories.source.toolkit.fluxcd.io; then
+    targets="apply resume"
+  else
+    targets="apply-locally"
+  fi
+  make -C packages/system/fluxcd-operator $targets
+  wait_for_crds fluxinstances.fluxcd.controlplane.io
+  make -C packages/system/fluxcd $targets
+  wait_for_crds helmreleases.helm.toolkit.fluxcd.io helmrepositories.source.toolkit.fluxcd.io
+}
+
+wait_for_crds() {
+  timeout 60 sh -c "until kubectl get crd $*; do sleep 1; done"
 }
 
 install_basic_charts() {
@@ -40,18 +59,18 @@ run_migrations
 make -C packages/core/platform namespaces-apply
 
 # Install fluxcd
-make -C packages/core/fluxcd apply
-
-# Reconcile Helm repositories
-kubectl annotate helmrepositories.source.toolkit.fluxcd.io -A -l cozystack.io/repository reconcile.fluxcd.io/requestedAt=$(date +"%Y-%m-%dT%H:%M:%SZ") --overwrite
+ensure_fluxcd
 
 # Install platform chart
 make -C packages/core/platform apply
 
-# Install basic system charts (should be after platform chart applied)
+# Install basic charts
 if ! flux_is_ok; then
   install_basic_charts
 fi
+
+# Reconcile Helm repositories
+kubectl annotate helmrepositories.source.toolkit.fluxcd.io -A -l cozystack.io/repository reconcile.fluxcd.io/requestedAt=$(date +"%Y-%m-%dT%H:%M:%SZ") --overwrite
 
 # Reconcile platform chart
 trap 'exit' INT TERM
