@@ -7,6 +7,7 @@ build:
 	make -C packages/system/kubeovn image
 	make -C packages/system/dashboard image
 	make -C packages/system/kamaji image
+	make -C packages/core/testing image
 	make -C packages/core/installer image
 	make manifests
 
@@ -26,3 +27,8 @@ repos:
 
 assets:
 	make -C packages/core/installer/ assets
+
+test:
+	make -C packages/core/testing apply
+	make -C packages/core/testing test
+	make -C packages/core/testing delete
