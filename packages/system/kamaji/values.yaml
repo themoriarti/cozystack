@@ -3,5 +3,13 @@ kamaji:
     deploy: false
   image:
     pullPolicy: IfNotPresent
-    tag: v0.12.0@sha256:197d7c36f76d4d9c09cc82eb87f9e36f05799a2b9158ae27e4729f2dd636ad0d
+    tag: v0.14.1@sha256:5a1c82f19552e4ec852880b943290921ec38f4f70b1256848e335f2b96ce09e3
     repository: ghcr.io/aenix-io/cozystack/kamaji
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 500Mi
+    requests:
+      cpu: 100m
+      memory: 100Mi

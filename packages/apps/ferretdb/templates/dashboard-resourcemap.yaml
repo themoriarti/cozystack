@@ -8,9 +8,7 @@ rules:
   resources:
   - services
   resourceNames:
-  - {{ .Release.Name }}-r
-  - {{ .Release.Name }}-ro
-  - {{ .Release.Name }}-rw
+  - {{ .Release.Name }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - ""

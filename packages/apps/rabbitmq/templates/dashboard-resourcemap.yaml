@@ -6,16 +6,17 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - services
+  - secrets
   resourceNames:
-  - {{ .Release.Name }}-r
-  - {{ .Release.Name }}-ro
-  - {{ .Release.Name }}-rw
+  - {{ .Release.Name }}-default-user
+  {{- range $name, $u := .Values.users }}
+  - {{ $.Release.Name }}-{{ kebabcase $name }}-credentials
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - ""
   resources:
-  - secrets
+  - services
   resourceNames:
-  - {{ .Release.Name }}-credentials
+  - {{ .Release.Name }}
   verbs: ["get", "list", "watch"]

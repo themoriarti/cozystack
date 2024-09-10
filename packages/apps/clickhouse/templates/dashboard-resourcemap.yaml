@@ -8,9 +8,7 @@ rules:
   resources:
   - services
   resourceNames:
-  - {{ .Release.Name }}-r
-  - {{ .Release.Name }}-ro
-  - {{ .Release.Name }}-rw
+  - chi-clickhouse-test-clickhouse-0-0
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - ""
