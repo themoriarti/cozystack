@@ -8,7 +8,7 @@ rules:
   resources:
   - services
   resourceNames:
-  - chendpoint-{{ .Release.Name }}
+  - {{ .Release.Name }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - ""

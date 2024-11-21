@@ -174,3 +174,10 @@ releases:
   namespace: cozy-external-secrets-operator
   optional: true
   dependsOn: [cilium]
+
+- name: keycloak
+  releaseName: keycloak
+  chart: cozy-keycloak
+  namespace: cozy-keycloak
+  optional: true
+  dependsOn: [postgres-operator]

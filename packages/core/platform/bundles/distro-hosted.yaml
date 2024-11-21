@@ -124,3 +124,10 @@ releases:
   namespace: cozy-external-secrets-operator
   optional: true
   dependsOn: []
+
+- name: keycloak
+  releaseName: keycloak
+  chart: cozy-keycloak
+  namespace: cozy-keycloak
+  optional: true
+  dependsOn: [postgres-operator]
