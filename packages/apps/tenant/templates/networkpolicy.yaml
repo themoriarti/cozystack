@@ -160,6 +160,18 @@ spec:
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
+  name: allow-to-keycloak
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-keycloak
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
   name: allow-to-cdi-upload-proxy
   namespace: {{ include "tenant.name" . }}
 spec:
@@ -180,4 +192,16 @@ spec:
   - toEndpoints:
     - matchLabels:
         cozystack.io/service: ingress
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-keycloak
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-keycloak
 {{- end }}
