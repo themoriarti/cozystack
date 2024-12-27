@@ -93,7 +93,8 @@ tenant 1.5.0 48128743
 tenant 1.6.0 df448b99
 tenant 1.6.1 edbbb9be
 tenant 1.6.2 ccedc5fe
-tenant 1.6.3 HEAD
+tenant 1.6.3 2057bb96
+tenant 1.6.4 HEAD
 virtual-machine 0.1.4 f2015d6
 virtual-machine 0.1.5 7cd7de7
 virtual-machine 0.2.0 5ca8823
@@ -101,7 +102,8 @@ virtual-machine 0.3.0 b908400
 virtual-machine 0.4.0 4746d51
 virtual-machine 0.5.0 HEAD
 vm-disk 0.1.0 HEAD
-vm-instance 0.1.0 HEAD
+vm-instance 0.1.0 ced8e5b9
+vm-instance 0.2.0 HEAD
 vpn 0.1.0 f642698
 vpn 0.2.0 7151424
 vpn 0.3.0 a2bcf100
