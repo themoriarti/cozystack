@@ -203,7 +203,7 @@ We truncate at 63 chars because some Kubernetes name fields are limited to this 
 {{- end -}}
 
 {{/*
-Create the name of the backend service account to use - only used when podsecuritypolicy is also enabled
+Create the name of the default backend service account to use
 */}}
 {{- define "ingress-nginx.defaultBackend.serviceAccountName" -}}
 {{- if .Values.defaultBackend.serviceAccount.create -}}
@@ -241,15 +241,6 @@ Return the appropriate apiGroup for PodSecurityPolicy.
 {{- print "policy" -}}
 {{- else -}}
 {{- print "extensions" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Check the ingress controller version tag is at most three versions behind the last release
-*/}}
-{{- define "isControllerTagValid" -}}
-{{- if not (semverCompare ">=0.27.0-0" .Values.controller.image.tag) -}}
-{{- fail "Controller container image tag should be 0.27.0 or higher" -}}
 {{- end -}}
 {{- end -}}
 
