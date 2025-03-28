@@ -205,7 +205,7 @@ releases:
   releaseName: piraeus-operator
   chart: cozy-piraeus-operator
   namespace: cozy-linstor
-  dependsOn: [cilium,kubeovn,cert-manager]
+  dependsOn: [cilium,kubeovn,cert-manager,victoria-metrics-operator]
 
 - name: linstor
   releaseName: linstor
