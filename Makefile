@@ -19,10 +19,6 @@ build:
 	make -C packages/core/installer image
 	make manifests
 
-manifests:
-	(cd packages/core/installer/; helm template -n cozy-installer installer .) > manifests/cozystack-installer.yaml
-	sed -i 's|@sha256:[^"]\+||' manifests/cozystack-installer.yaml
-
 repos:
 	rm -rf _out
 	make -C packages/apps check-version-map
@@ -32,6 +28,11 @@ repos:
 	make -C packages/extra repo
 	mkdir -p _out/logos
 	cp ./packages/apps/*/logos/*.svg ./packages/extra/*/logos/*.svg _out/logos/
+
+
+manifests:
+	mkdir -p _out/assets
+	(cd packages/core/installer/; helm template -n cozy-installer installer .) > _out/assets/cozystack-installer.yaml
 
 assets:
 	make -C packages/core/installer/ assets
@@ -44,3 +45,6 @@ test:
 
 generate:
 	hack/update-codegen.sh
+
+upload_assets: manifests
+	hack/upload-assets.sh

@@ -34,6 +34,13 @@ releases:
   - values-talos.yaml
   - values-kubeovn.yaml
 
+- name: cilium-networkpolicy
+  releaseName: cilium-networkpolicy
+  chart: cozy-cilium-networkpolicy
+  namespace: cozy-cilium
+  privileged: true
+  dependsOn: [cilium]
+
 - name: kubeovn
   releaseName: kubeovn
   chart: cozy-kubeovn
@@ -181,13 +188,13 @@ releases:
   releaseName: kafka-operator
   chart: cozy-kafka-operator
   namespace: cozy-kafka-operator
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,victoria-metrics-operator]
 
 - name: clickhouse-operator
   releaseName: clickhouse-operator
   chart: cozy-clickhouse-operator
   namespace: cozy-clickhouse-operator
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,victoria-metrics-operator]
 
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator

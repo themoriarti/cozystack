@@ -31,6 +31,13 @@ releases:
       autoDirectNodeRoutes: true
       routingMode: native
 
+- name: cilium-networkpolicy
+  releaseName: cilium-networkpolicy
+  chart: cozy-cilium-networkpolicy
+  namespace: cozy-cilium
+  privileged: true
+  dependsOn: [cilium]
+
 - name: cozy-proxy
   releaseName: cozystack
   chart: cozy-cozy-proxy
@@ -127,14 +134,14 @@ releases:
   chart: cozy-kafka-operator
   namespace: cozy-kafka-operator
   optional: true
-  dependsOn: [cilium]
+  dependsOn: [cilium,victoria-metrics-operator]
 
 - name: clickhouse-operator
   releaseName: clickhouse-operator
   chart: cozy-clickhouse-operator
   namespace: cozy-clickhouse-operator
   optional: true
-  dependsOn: [cilium]
+  dependsOn: [cilium,victoria-metrics-operator]
 
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator
@@ -154,7 +161,7 @@ releases:
   releaseName: piraeus-operator
   chart: cozy-piraeus-operator
   namespace: cozy-linstor
-  dependsOn: [cilium,cert-manager]
+  dependsOn: [cilium,cert-manager,victoria-metrics-operator]
 
 - name: snapshot-controller
   releaseName: snapshot-controller
