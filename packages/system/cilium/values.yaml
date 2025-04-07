@@ -15,6 +15,6 @@ cilium:
   image:
     repository: ghcr.io/cozystack/cozystack/cilium
     tag: 1.17.1
-    digest: "sha256:bb2ad64dfc01f774b429a96108527740c1f08230cac4b848a4939627dfce7a4a"
+    digest: "sha256:ac154cd13711444f9fd1a7c6e947f504c769cc654039b93630ccc0479111f2a3"
   envoy:
     enabled: false
