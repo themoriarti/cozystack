@@ -1,0 +1,27 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vmagent
+spec:
+  targetRef:
+    apiVersion: operator.victoriametrics.com/v1beta1
+    kind: VMAgent
+    name: vmagent
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: config-reloader
+        minAllowed:
+          cpu: 100m
+          memory: 25Mi
+        maxAllowed:
+          cpu: 1000m
+          memory: 256Mi
+      - containerName: vmagent
+        minAllowed:
+          cpu: 100m
+          memory: 25Mi
+        maxAllowed:
+          cpu: 4000m
+          memory: 6G
