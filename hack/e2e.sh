@@ -60,7 +60,7 @@ done
 
 # Prepare system drive
 if [ ! -f nocloud-amd64.raw ]; then
-  wget https://github.com/cozystack/cozystack/releases/latest/download/nocloud-amd64.raw.xz -O nocloud-amd64.raw.xz
+  wget https://github.com/cozystack/cozystack/releases/latest/download/nocloud-amd64.raw.xz -O nocloud-amd64.raw.xz --show-progress --output-file /dev/stdout --progress=dot:giga 2>/dev/null
   rm -f nocloud-amd64.raw
   xz --decompress nocloud-amd64.raw.xz
 fi

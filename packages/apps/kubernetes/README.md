@@ -27,20 +27,46 @@ How to access to deployed cluster:
 kubectl get secret -n <namespace> kubernetes-<clusterName>-admin-kubeconfig -o go-template='{{ printf "%s\n" (index .data "super-admin.conf" | base64decode) }}' > test
 ```
 
-# Series
+## Parameters
 
-<!-- source: https://github.com/kubevirt/common-instancetypes/blob/main/README.md -->
+### Common parameters
 
-.                           |  U  |  O  |  CX  |  M  |  RT
-----------------------------|-----|-----|------|-----|------
-*Has GPUs*                  |     |     |      |     |
-*Hugepages*                 |     |     |  ✓   |  ✓  |  ✓
-*Overcommitted Memory*      |     |  ✓  |      |     |
-*Dedicated CPU*             |     |     |  ✓   |     |  ✓
-*Burstable CPU performance* |  ✓  |  ✓  |      |  ✓  |
-*Isolated emulator threads* |     |     |  ✓   |     |  ✓
-*vNUMA*                     |     |     |  ✓   |     |  ✓
-*vCPU-To-Memory Ratio*      | 1:4 | 1:4 |  1:2 | 1:8 | 1:4
+| Name                    | Description                                                                                                                            | Value        |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| `host`                  | The hostname used to access the Kubernetes cluster externally (defaults to using the cluster name as a subdomain for the tenant host). | `""`         |
+| `controlPlane.replicas` | Number of replicas for Kubernetes control-plane components                                                                             | `2`          |
+| `storageClass`          | StorageClass used to store user data                                                                                                   | `replicated` |
+| `nodeGroups`            | nodeGroups configuration                                                                                                               | `{}`         |
+
+### Cluster Addons
+
+| Name                                          | Description                                                                                                                                                       | Value   |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `addons.certManager.enabled`                  | Enables the cert-manager                                                                                                                                          | `false` |
+| `addons.certManager.valuesOverride`           | Custom values to override                                                                                                                                         | `{}`    |
+| `addons.ingressNginx.enabled`                 | Enable Ingress-NGINX controller (expect nodes with 'ingress-nginx' role)                                                                                          | `false` |
+| `addons.ingressNginx.valuesOverride`          | Custom values to override                                                                                                                                         | `{}`    |
+| `addons.ingressNginx.hosts`                   | List of domain names that should be passed through to the cluster by upper cluster                                                                                | `[]`    |
+| `addons.gpuOperator.enabled`                  | Enables the gpu-operator                                                                                                                                          | `false` |
+| `addons.gpuOperator.valuesOverride`           | Custom values to override                                                                                                                                         | `{}`    |
+| `addons.fluxcd.enabled`                       | Enables Flux CD                                                                                                                                                   | `false` |
+| `addons.fluxcd.valuesOverride`                | Custom values to override                                                                                                                                         | `{}`    |
+| `addons.monitoringAgents.enabled`             | Enables MonitoringAgents (fluentbit, vmagents for sending logs and metrics to storage) if tenant monitoring enabled, send to tenant storage, else to root storage | `false` |
+| `addons.monitoringAgents.valuesOverride`      | Custom values to override                                                                                                                                         | `{}`    |
+| `addons.verticalPodAutoscaler.valuesOverride` | Custom values to override                                                                                                                                         | `{}`    |
+
+### Kamaji control plane
+
+| Name                                                            | Description                                                                                                                                                                                                       | Value   |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `kamajiControlPlane.apiServer.resources`                        | Resources                                                                                                                                                                                                         | `{}`    |
+| `kamajiControlPlane.apiServer.resourcesPreset`                  | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `small` |
+| `kamajiControlPlane.controllerManager.resources`                | Resources                                                                                                                                                                                                         | `{}`    |
+| `kamajiControlPlane.controllerManager.resourcesPreset`          | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `micro` |
+| `kamajiControlPlane.scheduler.resources`                        | Resources                                                                                                                                                                                                         | `{}`    |
+| `kamajiControlPlane.scheduler.resourcesPreset`                  | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `micro` |
+| `kamajiControlPlane.addons.konnectivity.server.resources`       | Resources                                                                                                                                                                                                         | `{}`    |
+| `kamajiControlPlane.addons.konnectivity.server.resourcesPreset` | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `micro` |
 
 
 ## U Series

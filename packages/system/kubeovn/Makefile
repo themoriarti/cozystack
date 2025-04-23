@@ -1,4 +1,4 @@
-KUBEOVN_TAG = v1.13.8
+KUBEOVN_TAG=$(shell awk '$$1 == "version:" {print $$2}' charts/kubeovn/Chart.yaml)
 
 export NAME=kubeovn
 export NAMESPACE=cozy-$(NAME)
@@ -13,6 +13,8 @@ update:
 	tar xzvf - --strip 1 kube-ovn-$${tag#*v}/charts
 	patch --no-backup-if-mismatch -p4 < patches/cozyconfig.diff
 	patch --no-backup-if-mismatch -p4 < patches/mtu.diff
+	version=$$(awk '$$1 == "version:" {print $$2}' charts/kube-ovn/Chart.yaml) && \
+	sed -i "s/ARG VERSION=.*/ARG VERSION=$${version}/" images/kubeovn/Dockerfile
 
 image:
 	docker buildx build images/kubeovn \

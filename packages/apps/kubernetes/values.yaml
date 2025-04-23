@@ -1,7 +1,7 @@
 ## @section Common parameters
 
 ## @param host The hostname used to access the Kubernetes cluster externally (defaults to using the cluster name as a subdomain for the tenant host).
-## @param controlPlane.replicas Number of replicas for Kubernetes contorl-plane components
+## @param controlPlane.replicas Number of replicas for Kubernetes control-plane components
 ## @param storageClass StorageClass used to store user data
 ##
 host: ""
@@ -23,6 +23,14 @@ nodeGroups:
     resources:
       cpu: ""
       memory: ""
+
+    ## List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)
+    ## e.g:
+    ## instanceType: "u1.xlarge"
+    ## gpus:
+    ## - name: nvidia.com/AD102GL_L40S
+    gpus: []
+
 
 ## @section Cluster Addons
 ##
@@ -50,6 +58,14 @@ addons:
     ## - foo.example.net
     ##
     hosts: []
+    valuesOverride: {}
+
+  ## GPU-operator: NVIDIA GPU Operator
+  ##
+  gpuOperator:
+    ## @param addons.gpuOperator.enabled Enables the gpu-operator
+    ## @param addons.gpuOperator.valuesOverride Custom values to override
+    enabled: false
     valuesOverride: {}
 
   ## Flux CD

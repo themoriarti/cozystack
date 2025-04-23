@@ -59,7 +59,7 @@ kubernetes 0.16.0 077045b0
 kubernetes 0.17.0 1fbbfcd0
 kubernetes 0.17.1 fd240701
 kubernetes 0.18.0 721c12a7
-kubernetes 0.18.1 HEAD
+kubernetes 0.19.0 HEAD
 mysql 0.1.0 263e47be
 mysql 0.2.0 c24a103f
 mysql 0.3.0 53f2365e
@@ -144,7 +144,8 @@ virtual-machine 0.7.1 0ab39f20
 virtual-machine 0.8.0 3fa4dd3a
 virtual-machine 0.8.1 93c46161
 virtual-machine 0.8.2 de19450f
-virtual-machine 0.9.0 HEAD
+virtual-machine 0.9.0 721c12a7
+virtual-machine 0.9.1 HEAD
 vm-disk 0.1.0 d971f2ff
 vm-disk 0.1.1 HEAD
 vm-instance 0.1.0 1ec10165
@@ -154,7 +155,8 @@ vm-instance 0.4.0 e23286a3
 vm-instance 0.4.1 0ab39f20
 vm-instance 0.5.0 3fa4dd3a
 vm-instance 0.5.1 de19450f
-vm-instance 0.6.0 HEAD
+vm-instance 0.6.0 721c12a7
+vm-instance 0.6.1 HEAD
 vpn 0.1.0 263e47be
 vpn 0.2.0 53f2365e
 vpn 0.3.0 6c5cf5bf

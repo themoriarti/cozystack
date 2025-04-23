@@ -74,7 +74,8 @@ spec:
           {{- if .Values.gpus }}
           gpus:
           {{- range $i, $gpu := .Values.gpus }}
-          - deviceName: {{ $gpu.name }}
+          - name: gpu{{ add $i 1 }}
+            deviceName: {{ $gpu.name }}
           {{- end }}
           {{- end }}
           disks:

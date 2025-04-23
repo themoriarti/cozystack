@@ -5,7 +5,7 @@ metadata:
   name: {{ .Release.Name }}-cert-manager
   labels:
     cozystack.io/repository: system
-    coztstack.io/target-cluster-name: {{ .Release.Name }}
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
   interval: 5m
   releaseName: cert-manager
