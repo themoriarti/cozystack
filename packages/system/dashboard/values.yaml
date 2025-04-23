@@ -15,17 +15,19 @@ kubeapps:
     flux:
       enabled: true
   dashboard:
+    resourcesPreset: "none"
     image:
       registry: ghcr.io/cozystack/cozystack
       repository: dashboard
-      tag: v0.29.1
+      tag: v0.30.2
       digest: "sha256:a83fe4654f547469cfa469a02bda1273c54bca103a41eb007fdb2e18a7a91e93"
   kubeappsapis:
+    resourcesPreset: "none"
     image:
       registry: ghcr.io/cozystack/cozystack
       repository: kubeapps-apis
-      tag: v0.29.1
-      digest: "sha256:8cc327760c33a15022b847d3fa8d22b87891e17a74dc56f50f52cae032a81d8c"
+      tag: v0.30.2
+      digest: "sha256:3b5805b56f2fb9fd25f4aa389cdfbbb28a3f2efb02245c52085a45d1dc62bf92"
     pluginConfig:
       flux:
         packages:

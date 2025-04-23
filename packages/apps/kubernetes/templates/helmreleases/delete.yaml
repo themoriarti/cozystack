@@ -32,6 +32,9 @@ spec:
                 {{ .Release.Name }}-cilium
                 {{ .Release.Name }}-csi
                 {{ .Release.Name }}-cert-manager
+                {{ .Release.Name }}-cert-manager-crds
+                {{ .Release.Name }}-vertical-pod-autoscaler
+                {{ .Release.Name }}-vertical-pod-autoscaler-crds
                 {{ .Release.Name }}-ingress-nginx
                 {{ .Release.Name }}-fluxcd-operator
                 {{ .Release.Name }}-fluxcd
@@ -67,6 +70,9 @@ rules:
       - {{ .Release.Name }}-cilium
       - {{ .Release.Name }}-csi
       - {{ .Release.Name }}-cert-manager
+      - {{ .Release.Name }}-cert-manager-crds
+      - {{ .Release.Name }}-vertical-pod-autoscaler
+      - {{ .Release.Name }}-vertical-pod-autoscaler-crds
       - {{ .Release.Name }}-ingress-nginx
       - {{ .Release.Name }}-fluxcd-operator
       - {{ .Release.Name }}-fluxcd

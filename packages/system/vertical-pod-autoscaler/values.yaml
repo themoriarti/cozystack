@@ -1,4 +1,7 @@
 vertical-pod-autoscaler:
+  crds:
+    enabled: false
+
   updater:
     resources:
       limits:

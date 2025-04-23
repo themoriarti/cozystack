@@ -12,20 +12,21 @@
 
 **Cozystack** is a free PaaS platform and framework for building clouds.
 
-With Cozystack, you can transform your bunch of servers into an intelligent system with a simple REST API for spawning Kubernetes clusters, Database-as-a-Service, virtual machines, load balancers, HTTP caching services, and other services with ease.
+With Cozystack, you can transform a bunch of servers into an intelligent system with a simple REST API for spawning Kubernetes clusters,
+Database-as-a-Service, virtual machines, load balancers, HTTP caching services, and other services with ease.
 
-You can use Cozystack to build your own cloud or to provide a cost-effective development environments.  
+Use Cozystack to build your own cloud or provide a cost-effective development environment.  
 
 ## Use-Cases
 
-* [**Using Cozystack to build public cloud**](https://cozystack.io/docs/use-cases/public-cloud/)  
-You can use Cozystack as backend for a public cloud
+* [**Using Cozystack to build a public cloud**](https://cozystack.io/docs/guides/use-cases/public-cloud/)  
+You can use Cozystack as a backend for a public cloud
 
-* [**Using Cozystack to build private cloud**](https://cozystack.io/docs/use-cases/private-cloud/)  
-You can use Cozystack as platform to build a private cloud powered by Infrastructure-as-Code approach
+* [**Using Cozystack to build a private cloud**](https://cozystack.io/docs/guides/use-cases/private-cloud/)  
+You can use Cozystack as a platform to build a private cloud powered by Infrastructure-as-Code approach
 
-* [**Using Cozystack as Kubernetes distribution**](https://cozystack.io/docs/use-cases/kubernetes-distribution/)  
-You can use Cozystack as Kubernetes distribution for Bare Metal
+* [**Using Cozystack as a Kubernetes distribution**](https://cozystack.io/docs/guides/use-cases/kubernetes-distribution/)  
+You can use Cozystack as a Kubernetes distribution for Bare Metal
 
 ## Screenshot
 
@@ -33,11 +34,11 @@ You can use Cozystack as Kubernetes distribution for Bare Metal
 
 ## Documentation
 
-The documentation is located on official [cozystack.io](https://cozystack.io) website.
+The documentation is located on the [cozystack.io](https://cozystack.io) website.
 
-Read [Get Started](https://cozystack.io/docs/get-started/) section for a quick start.
+Read the [Getting Started](https://cozystack.io/docs/getting-started/) section for a quick start.
 
-If you encounter any difficulties, start with the [troubleshooting guide](https://cozystack.io/docs/troubleshooting/), and work your way through the process that we've outlined.
+If you encounter any difficulties, start with the [troubleshooting guide](https://cozystack.io/docs/operations/troubleshooting/) and work your way through the process that we've outlined.
 
 ## Versioning
 
@@ -50,15 +51,15 @@ A full list of the available releases is available in the GitHub repository's [R
 
 Contributions are highly appreciated and very welcomed!
 
-In case of bugs, please, check if the issue has been already opened by checking the [GitHub Issues](https://github.com/cozystack/cozystack/issues) section.
-In case it isn't, you can open a new one: a detailed report will help us to replicate it, assess it, and work on a fix.
+In case of bugs, please check if the issue has already been opened by checking the [GitHub Issues](https://github.com/cozystack/cozystack/issues) section.
+If it isn't, you can open a new one. A detailed report will help us replicate it, assess it, and work on a fix.
 
-You can express your intention in working on the fix on your own.
+You can express your intention to on the fix on your own.
 Commits are used to generate the changelog, and their author will be referenced in it.
 
-In case of **Feature Requests** please use the [Discussion's Feature Request section](https://github.com/cozystack/cozystack/discussions/categories/feature-requests).
+If you have **Feature Requests** please use the [Discussion's Feature Request section](https://github.com/cozystack/cozystack/discussions/categories/feature-requests).
 
-You can join our weekly community meetings (just add this events to your [Google Calendar](https://calendar.google.com/calendar?cid=ZTQzZDIxZTVjOWI0NWE5NWYyOGM1ZDY0OWMyY2IxZTFmNDMzZTJlNjUzYjU2ZGJiZGE3NGNhMzA2ZjBkMGY2OEBncm91cC5jYWxlbmRhci5nb29nbGUuY29t) or [iCal](https://calendar.google.com/calendar/ical/e43d21e5c9b45a95f28c5d649c2cb1e1f433e2e653b56dbbda74ca306f0d0f68%40group.calendar.google.com/public/basic.ics)) or [Telegram group](https://t.me/cozystack).
+You are welcome to join our weekly community meetings (just add this events to your [Google Calendar](https://calendar.google.com/calendar?cid=ZTQzZDIxZTVjOWI0NWE5NWYyOGM1ZDY0OWMyY2IxZTFmNDMzZTJlNjUzYjU2ZGJiZGE3NGNhMzA2ZjBkMGY2OEBncm91cC5jYWxlbmRhci5nb29nbGUuY29t) or [iCal](https://calendar.google.com/calendar/ical/e43d21e5c9b45a95f28c5d649c2cb1e1f433e2e653b56dbbda74ca306f0d0f68%40group.calendar.google.com/public/basic.ics)) or [Telegram group](https://t.me/cozystack).
 
 ## License
 

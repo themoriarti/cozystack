@@ -216,6 +216,7 @@ data:
   values.yaml: |
     kubeapps:
       authProxy:
+        resourcesPreset: "none"
         enabled: true
         provider: "oidc"
         clientID: "kubeapps"

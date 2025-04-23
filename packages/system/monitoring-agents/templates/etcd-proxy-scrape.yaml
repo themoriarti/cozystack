@@ -1,19 +1,29 @@
 {{- if .Values.scrapeRules.etcd.enabled }}
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: kube-rbac-proxy
   namespace: cozy-monitoring
   labels:
-    app: kube-rbac-proxy
+    app.kubernetes.io/name: etcd
+    app.kubernetes.io/instance: etcd
+    app.kubernetes.io/part-of: control-plane
+    app.kubernetes.io/component: kube-rbac-proxy
 spec:
   selector:
     matchLabels:
-      app: kube-rbac-proxy
+      app.kubernetes.io/name: etcd
+      app.kubernetes.io/instance: etcd
+      app.kubernetes.io/part-of: control-plane
+      app.kubernetes.io/component: kube-rbac-proxy
   template:
     metadata:
       labels:
-        app: kube-rbac-proxy
+        app.kubernetes.io/name: etcd
+        app.kubernetes.io/instance: etcd
+        app.kubernetes.io/part-of: control-plane
+        app.kubernetes.io/component: kube-rbac-proxy
     spec:
       serviceAccountName: kube-rbac-proxy
       hostNetwork: true
@@ -38,7 +48,6 @@ spec:
           runAsNonRoot: true
 
 ---
-
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -46,7 +55,6 @@ metadata:
   namespace: cozy-monitoring
 
 ---
-
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -60,7 +68,6 @@ rules:
     verbs: ["create"]
 
 ---
-
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -75,15 +82,6 @@ subjects:
     namespace: cozy-monitoring
 
 ---
-
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: vm-scrape
-  namespace: cozy-monitoring
-
----
-
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -93,7 +91,6 @@ rules:
   verbs: ["get"]
 
 ---
-
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -104,21 +101,10 @@ roleRef:
   name: etcd-metrics-reader
 subjects:
 - kind: ServiceAccount
-  name: vm-scrape
+  name: vmagent-vmagent
   namespace: cozy-monitoring
 
 ---
-
-apiVersion: v1
-kind: Secret
-type: kubernetes.io/service-account-token
-metadata:
-  name: vm-token
-  annotations:
-    kubernetes.io/service-account.name: vm-scrape
-
----
-
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMPodScrape
 metadata:
@@ -129,10 +115,11 @@ spec:
       scheme: https
       tlsConfig:
         insecureSkipVerify: true
-      bearerTokenSecret:
-        name: vm-token
-        key: token
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
   selector:
     matchLabels:
-      app: kube-rbac-proxy
+      app.kubernetes.io/name: etcd
+      app.kubernetes.io/instance: etcd
+      app.kubernetes.io/part-of: control-plane
+      app.kubernetes.io/component: kube-rbac-proxy
 {{- end }}

@@ -22,5 +22,5 @@ spec:
   kind: virtual-machine
   type: virtual-machine
   selector:
-    vm.kubevirt.io/name: {{ $.Release.Name }}
+    {{- include "virtual-machine.selectorLabels" . | nindent 4 }}
   version: {{ $.Chart.Version }}

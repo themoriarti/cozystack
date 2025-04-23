@@ -19,21 +19,19 @@ fi
 miss_map=$(echo "$new_map" | awk 'NR==FNR { nm[$1 " " $2] = $3; next } { if (!($1 " " $2 in nm)) print $1, $2, $3}' - "$file")
 
 # search accross all tags sorted by version
-search_commits=$(git ls-remote --tags origin | grep 'refs/tags/v' | sort -k2,2 -rV | awk '{print $1}')
-# add latest main commit to search
-search_commits="${search_commits} $(git rev-parse "origin/main")"
+search_commits=$(git ls-remote --tags origin | awk -F/ '$3 ~ /v[0-9]+.[0-9]+.[0-9]+/ {print}' | sort -k2,2 -rV | awk '{print $1}')
 
 resolved_miss_map=$(
   echo "$miss_map" | while read -r chart version commit; do
     # if version is found in HEAD, it's HEAD
-    if grep -q "^version: $version$" ./${chart}/Chart.yaml; then
+    if [ "$(awk '$1 == "version:" {print $2}' ./${chart}/Chart.yaml)" = "${version}" ]; then
       echo "$chart $version HEAD"
       continue
     fi
 
     # if commit is not HEAD, check if it's valid
-    if [ $commit != "HEAD" ]; then
-      if ! git show "${commit}:./${chart}/Chart.yaml" 2>/dev/null | grep -q "^version: $version$"; then
+    if [ "$commit" != "HEAD" ]; then
+      if [ "$(git show "${commit}:./${chart}/Chart.yaml" | awk '$1 == "version:" {print $2}')" != "${version}" ]; then
         echo "Commit $commit for $chart $version is not valid" >&2
         exit 1
       fi
@@ -46,15 +44,15 @@ resolved_miss_map=$(
     # if commit is HEAD, but version is not found in HEAD, check all tags
     found_tag=""
     for tag in $search_commits; do
-      if git show "${tag}:./${chart}/Chart.yaml" 2>/dev/null | grep -q "^version: $version$"; then
+      if [ "$(git show "${tag}:./${chart}/Chart.yaml" | awk '$1 == "version:" {print $2}')" = "${version}" ]; then
         found_tag=$(git rev-parse --short "${tag}")
         break
       fi
     done
     
     if [ -z "$found_tag" ]; then
-      echo "Can't find $chart $version in any version tag or in the latest main commit" >&2
-      exit 1
+      echo "Can't find $chart $version in any version tag, removing it" >&2
+      continue
     fi
     
     echo "$chart $version $found_tag"

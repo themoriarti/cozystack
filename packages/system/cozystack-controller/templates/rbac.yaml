@@ -4,7 +4,7 @@ metadata:
   name: cozystack-controller
 rules:
 - apiGroups: [""]
-  resources: ["configmaps", "pods", "namespaces", "nodes", "services", "persistentvolumes"]
+  resources: ["configmaps", "pods", "namespaces", "nodes", "services", "persistentvolumes", "persistentvolumeclaims"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ['cozystack.io']
   resources: ['*']

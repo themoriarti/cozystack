@@ -3,7 +3,7 @@ set -o pipefail
 set -e
 
 BUNDLE=$(set -x; kubectl get configmap -n cozy-system cozystack -o 'go-template={{index .data "bundle-name"}}')
-VERSION=10
+VERSION=$(find scripts/migrations -mindepth 1 -maxdepth 1 -type f | sort -V | awk -F/ 'END {print $NF+1}')
 
 run_migrations() {
   if ! kubectl get configmap -n cozy-system cozystack-version; then
@@ -70,7 +70,7 @@ make -C packages/core/platform namespaces-apply
 ensure_fluxcd
 
 # Install platform chart
-make -C packages/core/platform apply
+make -C packages/core/platform reconcile
 
 # Install basic charts
 if ! flux_is_ok; then
@@ -93,5 +93,5 @@ done
 trap 'exit' INT TERM
 while true; do
   sleep 60 & wait
-  make -C packages/core/platform apply
+  make -C packages/core/platform reconcile
 done

@@ -3,7 +3,7 @@ name: Versioned Tag
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - 'v*.*.*' # vX.Y.Z or vX.Y.Z-rcN
 
 jobs:
   prepare-release:
@@ -15,6 +15,7 @@ jobs:
       pull-requests: write
 
     steps:
+      # Check if a non-draft release with this tag already exists
       - name: Check if release already exists
         id: check_release
         uses: actions/github-script@v7
@@ -23,28 +24,67 @@ jobs:
             const tag = context.ref.replace('refs/tags/', '');
             const releases = await github.rest.repos.listReleases({
               owner: context.repo.owner,
-              repo: context.repo.repo
+              repo:  context.repo.repo
             });
+            const exists = releases.data.some(r => r.tag_name === tag && !r.draft);
+            core.setOutput('skip', exists);
+            console.log(exists ? `Release ${tag} already published` : `No published release ${tag}`);
 
-            const existing = releases.data.find(r => r.tag_name === tag && !r.draft);
-            if (existing) {
-              core.setOutput('skip', 'true');
-            } else {
-              core.setOutput('skip', 'false');
-            }
-
+      # If a published release already exists, skip the rest of the workflow
       - name: Skip if release already exists
         if: steps.check_release.outputs.skip == 'true'
         run: echo "Release already exists, skipping workflow."
 
+      # Parse tag meta‑data (rc?, maintenance line, etc.)
+      - name: Parse tag
+        if: steps.check_release.outputs.skip == 'false'
+        id: tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ref = context.ref.replace('refs/tags/', '');           // e.g. v0.31.5-rc1
+            const m = ref.match(/^v(\d+\.\d+\.\d+)(-rc\d+)?$/);
+            if (!m) {
+              core.setFailed(`❌ tag '${ref}' must match 'vX.Y.Z' or 'vX.Y.Z-rcN'`);
+              return;
+            }
+            const version = m[1] + (m[2] ?? '');                         // 0.31.5‑rc1
+            const isRc    = Boolean(m[2]);
+            const [maj, min] = m[1].split('.');
+            core.setOutput('tag',     ref);
+            core.setOutput('version', version);
+            core.setOutput('is_rc',   isRc);
+            core.setOutput('line',    `${maj}.${min}`);                  // 0.31
+
+      # Detect base branch (main or release‑X.Y) the tag was pushed from
+      - name: Get base branch
+        if: steps.check_release.outputs.skip == 'false'
+        id: get_base
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const baseRef = context.payload.base_ref;
+            if (!baseRef) {
+              core.setFailed(`❌ base_ref is empty. Push the tag via 'git push origin HEAD:refs/tags/<tag>'.`);
+              return;
+            }
+            const branch = baseRef.replace('refs/heads/', '');
+            const ok     = branch === 'main' || /^release-\d+\.\d+$/.test(branch);
+            if (!ok) {
+              core.setFailed(`❌ Tagged commit must belong to 'main' or 'release-X.Y'. Got '${branch}'`);
+              return;
+            }
+            core.setOutput('branch', branch);
+
+      # Checkout & login once
       - name: Checkout code
         if: steps.check_release.outputs.skip == 'false'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          fetch-tags: true
+          fetch-tags:  true
 
-      - name: Login to GitHub Container Registry
+      - name: Login to GHCR
         if: steps.check_release.outputs.skip == 'false'
         uses: docker/login-action@v3
         with:
@@ -52,108 +92,160 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
           registry: ghcr.io
 
+      # Build project artifacts
       - name: Build
         if: steps.check_release.outputs.skip == 'false'
         run: make build
 
+      # Commit built artifacts
       - name: Commit release artifacts
         if: steps.check_release.outputs.skip == 'false'
-        env:
-          GIT_AUTHOR_NAME: ${{ github.actor }}
-          GIT_AUTHOR_EMAIL: ${{ github.actor }}@users.noreply.github.com
         run: |
-          git config user.name "$GIT_AUTHOR_NAME"
-          git config user.email "$GIT_AUTHOR_EMAIL"
+          git config user.name  "github-actions"
+          git config user.email "github-actions@github.com"
           git add .
           git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" -s || echo "No changes to commit"
+          git push origin HEAD || true
 
+      # Get `latest_version` from latest published release 
+      - name: Get latest published release
+        if: steps.check_release.outputs.skip == 'false'
+        id: latest_release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const rel = await github.rest.repos.getLatestRelease({
+                owner: context.repo.owner,
+                repo:  context.repo.repo
+              });
+              core.setOutput('tag', rel.data.tag_name);
+            } catch (_) {
+              core.setOutput('tag', '');
+            }
+
+      # Compare tag (A) with latest (B)
+      - name: Semver compare
+        if: steps.check_release.outputs.skip == 'false'
+        id: semver
+        uses: madhead/semver-utils@v4.3.0
+        with:
+          version:     ${{ steps.tag.outputs.tag }}            # A
+          compare-to:  ${{ steps.latest_release.outputs.tag }} # B
+
+      # Create or reuse DRAFT GitHub Release
+      - name: Create / reuse draft release
+        if: steps.check_release.outputs.skip == 'false'
+        id: release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag        = '${{ steps.tag.outputs.tag }}';
+            const isRc       = ${{ steps.tag.outputs.is_rc }};
+            const outdated   = '${{ steps.semver.outputs.comparison-result }}' === '<';
+            const makeLatest = outdated ? false : 'legacy';
+            const releases   = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo:  context.repo.repo
+            });
+            let rel          = releases.data.find(r => r.tag_name === tag);
+            if (!rel) {
+              rel = await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                tag_name:    tag,
+                name:        tag,
+                draft:       true,
+                prerelease:  isRc,
+                make_latest: makeLatest
+              });
+              console.log(`Draft release created for ${tag}`);
+            } else {
+              console.log(`Re‑using existing release ${tag}`);
+            }
+            core.setOutput('upload_url', rel.upload_url);
+
+      # Build + upload assets (optional)
+      - name: Build & upload assets
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          make assets
+          make upload_assets VERSION=${{ steps.tag.outputs.version }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Ensure long‑lived maintenance branch release‑X.Y
+      - name: Ensure maintenance branch release‑${{ steps.tag.outputs.line }}
+        if: |
+          steps.check_release.outputs.skip == 'false' &&
+          steps.get_base.outputs.branch == 'main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = `release-${'${{ steps.tag.outputs.line }}'}`;
+            try {
+              await github.rest.repos.getBranch({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                branch
+              });
+              console.log(`Branch '${branch}' already exists`);
+            } catch (_) {
+              await github.git.createRef({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                ref:   `refs/heads/${branch}`,
+                sha:   context.sha
+              });
+              console.log(`Branch '${branch}' created at ${context.sha}`);
+            }
+
+      # Create release‑X.Y.Z branch and push (force‑update)
       - name: Create release branch
         if: steps.check_release.outputs.skip == 'false'
         run: |
-          BRANCH_NAME="release-${GITHUB_REF#refs/tags/v}"
-          git branch -f "$BRANCH_NAME"
-          git push origin "$BRANCH_NAME" --force
+          BRANCH="release-${GITHUB_REF#refs/tags/v}"
+          git branch -f "$BRANCH"
+          git push -f origin "$BRANCH"
 
+      # Create pull request into original base branch (if absent)
       - name: Create pull request if not exists
         if: steps.check_release.outputs.skip == 'false'
         uses: actions/github-script@v7
         with:
           script: |
             const version = context.ref.replace('refs/tags/v', '');
-            const branch = `release-${version}`;
-            const base = 'main';
-      
+            const base    = '${{ steps.get_base.outputs.branch }}';
+            const head    = `release-${version}`;
+
             const prs = await github.rest.pulls.list({
               owner: context.repo.owner,
-              repo: context.repo.repo,
-              head: `${context.repo.owner}:${branch}`,
+              repo:  context.repo.repo,
+              head:  `${context.repo.owner}:${head}`,
               base
             });
-      
             if (prs.data.length === 0) {
-              const newPr = await github.rest.pulls.create({
+              const pr = await github.rest.pulls.create({
                 owner: context.repo.owner,
-                repo: context.repo.repo,
-                head: branch,
-                base: base,
+                repo:  context.repo.repo,
+                head,
+                base,
                 title: `Release v${version}`,
-                body:
-                  `This PR prepares the release \`v${version}\`.\n` +
-                  `(Please merge it before releasing draft)`,
+                body:  `This PR prepares the release \`v${version}\`.`,
                 draft: false
               });
-      
-              console.log(`Created pull request #${newPr.data.number} from ${branch} to ${base}`);
-      
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: newPr.data.number,
-                labels: ['release', 'ok-to-test']
+                repo:  context.repo.repo,
+                issue_number: pr.data.number,
+                labels: ['release']
               });
-      
+              console.log(`Created PR #${pr.data.number}`);
             } else {
-              console.log(`Pull request already exists from ${branch} to ${base}`);
+              console.log(`PR already exists from ${head} to ${base}`);
             }
 
-      - name: Create or reuse draft release
+      # Run tests 
+      - name: Test
         if: steps.check_release.outputs.skip == 'false'
-        id: create_release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const tag = context.ref.replace('refs/tags/', '');
-            const releases = await github.rest.repos.listReleases({
-              owner: context.repo.owner,
-              repo: context.repo.repo
-            });
-
-            let release = releases.data.find(r => r.tag_name === tag);
-            if (!release) {
-              release = await github.rest.repos.createRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag_name: tag,
-                name: `${tag}`,
-                draft: true,
-                prerelease: false
-              });
-            }
-            core.setOutput('upload_url', release.upload_url);
-
-      - name: Build assets
-        if: steps.check_release.outputs.skip == 'false'
-        run: make assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload assets
-        if: steps.check_release.outputs.skip == 'false'
-        run: make upload_assets VERSION=${GITHUB_REF#refs/tags/}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Delete pushed tag
-        if: steps.check_release.outputs.skip == 'false'
-        run: |
-          git push --delete origin ${GITHUB_REF#refs/tags/}
+        run: make test

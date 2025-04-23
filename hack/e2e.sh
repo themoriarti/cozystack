@@ -113,6 +113,11 @@ machine:
         - usermode_helper=disabled
     - name: zfs
     - name: spl
+  registries:
+    mirrors:
+      docker.io:
+        endpoints:
+        - https://mirror.gcr.io
   files:
   - content: |
       [plugins]
@@ -229,8 +234,8 @@ sleep 5
 kubectl get hr -A | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n " $1 " hr/" $2 " &"} END{print "wait"}' | sh -x
 
 # Wait for Cluster-API providers
-timeout 30 sh -c 'until kubectl get deploy -n cozy-cluster-api capi-controller-manager capi-kamaji-controller-manager capi-kubeadm-bootstrap-controller-manager capi-operator-cluster-api-operator capk-controller-manager; do sleep 1; done'
-kubectl wait deploy --timeout=30s --for=condition=available -n cozy-cluster-api capi-controller-manager capi-kamaji-controller-manager capi-kubeadm-bootstrap-controller-manager capi-operator-cluster-api-operator capk-controller-manager
+timeout 60 sh -c 'until kubectl get deploy -n cozy-cluster-api capi-controller-manager capi-kamaji-controller-manager capi-kubeadm-bootstrap-controller-manager capi-operator-cluster-api-operator capk-controller-manager; do sleep 1; done'
+kubectl wait deploy --timeout=1m --for=condition=available -n cozy-cluster-api capi-controller-manager capi-kamaji-controller-manager capi-kubeadm-bootstrap-controller-manager capi-operator-cluster-api-operator capk-controller-manager
 
 # Wait for linstor controller
 kubectl wait deploy --timeout=5m --for=condition=available -n cozy-linstor linstor-controller
@@ -313,7 +318,12 @@ kubectl patch -n tenant-root tenants.apps.cozystack.io root --type=merge -p '{"s
 timeout 60 sh -c 'until kubectl get hr -n tenant-root etcd ingress monitoring tenant-root; do sleep 1; done'
 
 # Wait for HelmReleases be installed
-kubectl wait --timeout=2m --for=condition=ready -n tenant-root hr etcd ingress monitoring tenant-root
+kubectl wait --timeout=2m --for=condition=ready -n tenant-root hr etcd ingress tenant-root
+
+if ! kubectl wait --timeout=2m --for=condition=ready -n tenant-root hr monitoring; then
+  flux reconcile hr monitoring -n tenant-root --force
+  kubectl wait --timeout=2m --for=condition=ready -n tenant-root hr monitoring
+fi
 
 kubectl patch -n tenant-root ingresses.apps.cozystack.io ingress --type=merge -p '{"spec":{
   "dashboard": true
@@ -328,7 +338,7 @@ kubectl wait --timeout=5m --for=jsonpath=.status.readyReplicas=3 -n tenant-root 
 
 # Wait for Victoria metrics
 kubectl wait --timeout=5m --for=jsonpath=.status.updateStatus=operational -n tenant-root vmalert/vmalert-shortterm vmalertmanager/alertmanager
-kubectl wait --timeout=5m --for=jsonpath=.status.status=operational -n tenant-root vlogs/generic
+kubectl wait --timeout=5m --for=jsonpath=.status.updateStatus=operational -n tenant-root vlogs/generic
 kubectl wait --timeout=5m --for=jsonpath=.status.clusterStatus=operational -n tenant-root vmcluster/shortterm vmcluster/longterm
 
 # Wait for grafana
@@ -347,5 +357,5 @@ kubectl patch -n cozy-system cm/cozystack --type=merge -p '{"data":{
   "oidc-enabled": "true"
 }}'
 
-timeout 60 sh -c 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator; do sleep 1; done'
+timeout 120 sh -c 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator; do sleep 1; done'
 kubectl wait --timeout=10m --for=condition=ready -n cozy-keycloak hr keycloak keycloak-configure keycloak-operator

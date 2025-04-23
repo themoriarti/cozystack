@@ -12,9 +12,20 @@ jobs:
       contents: read
       packages: write
 
+    # ─────────────────────────────────────────────────────────────
+    # Run automatically for internal PRs (same repo).
+    # For external PRs (forks) require the "ok‑to‑test" label.
+    # Never run when the PR carries the "release" label.
+    # ─────────────────────────────────────────────────────────────
     if: |
-      contains(github.event.pull_request.labels.*.name, 'ok-to-test') &&
-      !contains(github.event.pull_request.labels.*.name, 'release')
+      !contains(github.event.pull_request.labels.*.name, 'release') &&
+      (
+        github.event.pull_request.head.repo.full_name == github.repository ||
+        (
+          github.event.pull_request.head.repo.full_name != github.repository &&
+          contains(github.event.pull_request.labels.*.name, 'ok-to-test')
+        )
+      )
 
     steps:
       - name: Checkout code
@@ -30,10 +41,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
           registry: ghcr.io
 
-      - name: make build
-        run: |
-          make build
+      - name: Build
+        run: make build
 
-      - name: make test
-        run: |
-          make test
+      - name: Test
+        run: make test

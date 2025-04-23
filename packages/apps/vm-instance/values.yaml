@@ -12,7 +12,7 @@ externalPorts:
 running: true
 
 ## @param instanceType Virtual Machine instance type
-## @param instanceProfile Virtual Machine prefferences profile
+## @param instanceProfile Virtual Machine preferences profile
 ##
 instanceType: "u1.medium"
 instanceProfile: ubuntu
@@ -23,6 +23,12 @@ instanceProfile: ubuntu
 ## - name: example-system
 ## - name: example-data
 disks: []
+
+## @param gpus [array] List of GPUs to attach
+## Example:
+## gpus:
+## - name: nvidia.com/GA102GL_A10
+gpus: []
 
 ## @param resources.cpu The number of CPU cores allocated to the virtual machine
 ## @param resources.memory The amount of memory allocated to the virtual machine
@@ -47,5 +53,13 @@ sshKeys: []
 ##   password: ubuntu
 ##   chpasswd: { expire: False }
 ##
-cloudInit: |
-  #cloud-config
+cloudInit: ""
+
+## @param cloudInitSeed A seed string to generate an SMBIOS UUID for the VM.
+cloudInitSeed: ""
+## Change it to any new value to force a full cloud-init reconfiguration. Change it when you want to apply
+## to an existing VM settings that are usually written only once, like new SSH keys or new network configuration.
+## An empty value does nothing (and the existing UUID is not reverted). Please note that changing this value
+## does not trigger a VM restart. You must perform the restart separately.
+## Example:
+## cloudInitSeed: "upd1"

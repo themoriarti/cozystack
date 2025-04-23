@@ -88,7 +88,7 @@
     },
     "instanceProfile": {
       "type": "string",
-      "description": "Virtual Machine prefferences profile",
+      "description": "Virtual Machine preferences profile",
       "default": "ubuntu",
       "optional": true,
       "enum": [
@@ -145,6 +145,14 @@
         "type": "object"
       }
     },
+    "gpus": {
+      "type": "array",
+      "description": "List of GPUs to attach",
+      "default": [],
+      "items": {
+        "type": "object"
+      }
+    },
     "resources": {
       "type": "object",
       "properties": {
@@ -171,7 +179,12 @@
     "cloudInit": {
       "type": "string",
       "description": "cloud-init user data config. See cloud-init documentation for more details.",
-      "default": "#cloud-config\n"
+      "default": ""
+    },
+    "cloudInitSeed": {
+      "type": "string",
+      "description": "A seed string to generate an SMBIOS UUID for the VM.",
+      "default": ""
     }
   }
 }

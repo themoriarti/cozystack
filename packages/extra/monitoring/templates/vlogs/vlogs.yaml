@@ -4,6 +4,8 @@ kind: VLogs
 metadata:
   name: {{ .name }}
 spec:
+  image:
+    tag: v1.17.0-victorialogs
   storage:
     resources:
       requests:

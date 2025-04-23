@@ -59,7 +59,7 @@ image-matchbox:
 		> ../../extra/bootbox/images/matchbox.tag
 	rm -f images/matchbox.json
 
-assets: talos-iso talos-nocloud talos-metal
+assets: talos-iso talos-nocloud talos-metal talos-kernel talos-initramfs
 
 talos-initramfs talos-kernel talos-installer talos-iso talos-nocloud talos-metal:
 	mkdir -p ../../../_out/assets

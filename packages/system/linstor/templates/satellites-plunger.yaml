@@ -47,6 +47,29 @@ spec:
         - mountPath: /scripts
           name: script-volume
           readOnly: true
+      - name: drbd-logger
+        image: {{ include "cozy.linstor.version.satellite" . }}
+        command:
+        - "/scripts/plunger-drbd-logger.sh"
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+            - SYS_ADMIN
+            drop:
+            - ALL
+          privileged: true
+          readOnlyRootFilesystem: false
+        volumeMounts:
+        - mountPath: /dev
+          name: dev
+        - mountPath: /var/lib/drbd
+          name: var-lib-drbd
+        - mountPath: /var/lib/linstor.d
+          name: var-lib-linstor-d
+        - mountPath: /scripts
+          name: script-volume
+          readOnly: true
       volumes:
       - name: script-volume
         configMap:

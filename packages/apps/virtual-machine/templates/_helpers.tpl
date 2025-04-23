@@ -49,3 +49,23 @@ Selector labels
 app.kubernetes.io/name: {{ include "virtual-machine.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Generate a stable UUID for cloud-init re-initialization upon upgrade.
+*/}}
+{{- define "virtual-machine.stableUuid" -}}
+{{- $source := printf "%s-%s-%s" .Release.Namespace (include "virtual-machine.fullname" .) .Values.cloudInitSeed }}
+{{- $hash := sha256sum $source }}
+{{- $uuid := printf "%s-%s-4%s-9%s-%s" (substr 0 8 $hash) (substr 8 12 $hash) (substr 13 16 $hash) (substr 17 20 $hash) (substr 20 32 $hash) }}
+{{- if eq .Values.cloudInitSeed "" }}
+  {{- /*  Try to save previous uuid to not trigger full cloud-init again if user decided to remove the seed. */}}
+  {{- $vmResource := lookup "kubevirt.io/v1" "VirtualMachine" .Release.Namespace (include "virtual-machine.fullname" .) -}}
+  {{- if $vmResource }}
+    {{- $existingUuid := $vmResource | dig "spec" "template" "spec" "domain" "firmware" "uuid" "" }}
+    {{- if $existingUuid }}
+      {{- $uuid = $existingUuid }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- $uuid }}
+{{- end }}

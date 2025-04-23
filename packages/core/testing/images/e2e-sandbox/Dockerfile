@@ -14,3 +14,4 @@ RUN curl -LO "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kube
  && mv kubectl /usr/local/bin/kubectl
 RUN curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash -s - --version "v${HELM_VERSION}"
 RUN wget https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -O /usr/local/bin/yq && chmod +x /usr/local/bin/yq
+RUN curl -s https://fluxcd.io/install.sh | bash

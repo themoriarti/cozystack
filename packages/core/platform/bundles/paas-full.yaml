@@ -116,7 +116,7 @@ releases:
   chart: cozy-monitoring-agents
   namespace: cozy-monitoring
   privileged: true
-  dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+  dependsOn: [victoria-metrics-operator, vertical-pod-autoscaler-crds]
   values:
     scrapeRules:
       etcd:
@@ -152,6 +152,17 @@ releases:
   chart: cozy-kubevirt-cdi
   namespace: cozy-kubevirt-cdi
   dependsOn: [cilium,kubeovn,kubevirt-cdi-operator]
+
+- name: gpu-operator
+  releaseName: gpu-operator
+  chart: cozy-gpu-operator
+  namespace: cozy-gpu-operator
+  privileged: true
+  optional: true
+  dependsOn: [cilium,kubeovn]
+  valuesFiles:
+  - values.yaml
+  - values-talos.yaml
 
 - name: metallb
   releaseName: metallb
@@ -259,7 +270,10 @@ releases:
             {{- end }}
     {{- end }}
     {{- end }}
+      frontend:
+        resourcesPreset: "none"
       dashboard:
+        resourcesPreset: "none"
         {{- $cozystackBranding:= lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
         {{- $branding := dig "data" "branding" "" $cozystackBranding }}
         {{- if $branding }}
@@ -387,6 +401,13 @@ releases:
   namespace: cozy-vertical-pod-autoscaler
   privileged: true
   dependsOn: [monitoring-agents]
+
+- name: vertical-pod-autoscaler-crds
+  releaseName: vertical-pod-autoscaler-crds
+  chart: cozy-vertical-pod-autoscaler-crds
+  namespace: cozy-vertical-pod-autoscaler
+  privileged: true
+  dependsOn: [cilium, kubeovn]
 
 - name: reloader
   releaseName: reloader
