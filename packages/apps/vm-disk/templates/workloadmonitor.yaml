@@ -1,13 +1,12 @@
----
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}
 spec:
-  replicas: {{ .Values.replicas }}
-  minReplicas: 1
-  kind: ferretdb
-  type: ferretdb
+  replicas: 0
+  minReplicas: 0
+  kind: vm-disk
+  type: vm-disk
   selector:
-    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
   version: {{ $.Chart.Version }}

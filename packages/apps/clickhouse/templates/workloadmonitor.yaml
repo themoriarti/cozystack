@@ -9,5 +9,5 @@ spec:
   kind: clickhouse
   type: clickhouse
   selector:
-    clickhouse.altinity.com/chi: {{ $.Release.Name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
   version: {{ $.Chart.Version }}

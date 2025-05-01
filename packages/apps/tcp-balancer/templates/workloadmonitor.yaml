@@ -6,8 +6,8 @@ metadata:
 spec:
   replicas: {{ .Values.replicas }}
   minReplicas: 1
-  kind: ferretdb
-  type: ferretdb
+  kind: tcp-balancer
+  type: haproxy
   selector:
     app.kubernetes.io/instance: {{ $.Release.Name }}
   version: {{ $.Chart.Version }}

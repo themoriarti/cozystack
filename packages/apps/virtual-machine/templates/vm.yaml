@@ -26,6 +26,8 @@ spec:
   dataVolumeTemplates:
   - metadata:
       name: {{ include "virtual-machine.fullname" . }}
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       storage:
         resources:

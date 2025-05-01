@@ -22,5 +22,5 @@ spec:
   kind: virtual-machine
   type: virtual-machine
   selector:
-    {{- include "virtual-machine.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
   version: {{ $.Chart.Version }}
