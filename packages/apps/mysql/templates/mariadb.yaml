@@ -57,6 +57,11 @@ spec:
     name: {{ .Release.Name }}-my-cnf
     key: config
 
+  service:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+
   storage:
     size: {{ .Values.size }}
     resizeInUseVolumes: true
