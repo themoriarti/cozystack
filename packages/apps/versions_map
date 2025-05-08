@@ -59,7 +59,8 @@ kubernetes 0.16.0 077045b0
 kubernetes 0.17.0 1fbbfcd0
 kubernetes 0.17.1 fd240701
 kubernetes 0.18.0 721c12a7
-kubernetes 0.19.0 HEAD
+kubernetes 0.19.0 93bdf411
+kubernetes 0.20.0 HEAD
 mysql 0.1.0 263e47be
 mysql 0.2.0 c24a103f
 mysql 0.3.0 53f2365e
@@ -89,7 +90,8 @@ postgres 0.7.0 4b90bf5a
 postgres 0.7.1 1ec10165
 postgres 0.8.0 4e68e65c
 postgres 0.9.0 8267072d
-postgres 0.10.0 HEAD
+postgres 0.10.0 721c12a7
+postgres 0.10.1 HEAD
 rabbitmq 0.1.0 263e47be
 rabbitmq 0.2.0 53f2365e
 rabbitmq 0.3.0 6c5cf5bf

@@ -10,6 +10,9 @@ spec:
     commonInstancetypesDeployment:
       enabled: false
     developerConfiguration:
+      {{- if .Values.cpuAllocationRatio }}
+      cpuAllocationRatio: {{ .Values.cpuAllocationRatio }}
+      {{- end }}
       featureGates:
       - HotplugVolumes
       - ExpandDisks

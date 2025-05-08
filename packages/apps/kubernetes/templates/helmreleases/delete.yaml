@@ -20,7 +20,7 @@ spec:
           effect: "NoSchedule"
       containers:
         - name: kubectl
-          image: docker.io/clastix/kubectl:v1.30.1
+          image: docker.io/clastix/kubectl:v1.32
           command:
             - /bin/sh
             - -c
@@ -30,6 +30,7 @@ spec:
                 patch
                 helmrelease
                 {{ .Release.Name }}-cilium
+                {{ .Release.Name }}-gateway-api-crds
                 {{ .Release.Name }}-csi
                 {{ .Release.Name }}-cert-manager
                 {{ .Release.Name }}-cert-manager-crds

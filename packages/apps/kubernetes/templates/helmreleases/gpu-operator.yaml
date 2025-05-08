@@ -17,6 +17,7 @@ spec:
         kind: HelmRepository
         name: cozystack-system
         namespace: cozy-system
+      version: '>= 0.0.0-0'
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig
@@ -30,11 +31,9 @@ spec:
   upgrade:
     remediation:
       retries: -1
-  {{- if .Values.addons.gpuOperator.valuesOverride }}
-  valuesFrom:
-  - kind: Secret
-    name: {{ .Release.Name }}-gpu-operator-values-override
-    valuesKey: values
+  {{- with .Values.addons.gpuOperator.valuesOverride }}
+  values:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
   dependsOn:
@@ -44,14 +43,4 @@ spec:
   {{- end }}
   - name: {{ .Release.Name }}-cilium
     namespace: {{ .Release.Namespace }}
-{{- end }}
-{{- if .Values.addons.gpuOperator.valuesOverride }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Release.Name }}-gpu-operator-values-override
-stringData:
-  values: |
-    {{- toYaml .Values.addons.gpuOperator.valuesOverride | nindent 4 }}
 {{- end }}

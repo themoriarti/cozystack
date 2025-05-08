@@ -17,6 +17,7 @@ spec:
         kind: HelmRepository
         name: cozystack-system
         namespace: cozy-system
+      version: '>= 0.0.0-0'
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig
@@ -61,6 +62,7 @@ spec:
         kind: HelmRepository
         name: cozystack-system
         namespace: cozy-system
+      version: '>= 0.0.0-0'
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-kubeconfig
@@ -73,11 +75,9 @@ spec:
   upgrade:
     remediation:
       retries: -1
-  {{- if .Values.addons.fluxcd.valuesOverride }}
-  valuesFrom:
-  - kind: Secret
-    name: {{ .Release.Name }}-fluxcd-values-override
-    valuesKey: values
+  {{- with .Values.addons.fluxcd.valuesOverride }}
+  values:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
   dependsOn:
   {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
@@ -88,15 +88,4 @@ spec:
     namespace: {{ .Release.Namespace }}
   - name: {{ .Release.Name }}-fluxcd-operator
     namespace: {{ .Release.Namespace }}
-{{- end }}
-
-{{- if .Values.addons.fluxcd.valuesOverride }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Release.Name }}-fluxcd-values-override
-stringData:
-  values: |
-    {{- toYaml .Values.addons.fluxcd.valuesOverride | nindent 4 }}
 {{- end }}

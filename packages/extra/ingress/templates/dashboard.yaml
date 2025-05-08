@@ -4,6 +4,15 @@
 {{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
 
+{{- $tenantRoot := dict }}
+{{- if .Capabilities.APIVersions.Has "helm.toolkit.fluxcd.io/v2" }}
+{{- $tenantRoot = lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" "tenant-root" "tenant-root" }}
+{{- end }}
+{{- if and $tenantRoot $tenantRoot.spec $tenantRoot.spec.values $tenantRoot.spec.values.host }}
+{{- $host = $tenantRoot.spec.values.host }}
+{{- else }}
+{{- end }}
+
 {{- if .Values.dashboard }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress

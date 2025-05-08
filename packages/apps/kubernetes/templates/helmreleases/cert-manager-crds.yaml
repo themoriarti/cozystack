@@ -16,6 +16,7 @@ spec:
         kind: HelmRepository
         name: cozystack-system
         namespace: cozy-system
+      version: '>= 0.0.0-0'
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig

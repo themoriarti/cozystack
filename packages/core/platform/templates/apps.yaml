@@ -8,7 +8,7 @@
     {{- $host = index $cozyConfig.data "root-host" }}
   {{- end }}
 {{- end }}
-{{- $tenantRoot := list }}
+{{- $tenantRoot := dict }}
 {{- if .Capabilities.APIVersions.Has "helm.toolkit.fluxcd.io/v2" }}
 {{- $tenantRoot = lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" "tenant-root" "tenant-root" }}
 {{- end }}
@@ -37,7 +37,7 @@ metadata:
   labels:
     cozystack.io/ui: "true"
 spec:
-  interval: 1m
+  interval: 0s
   releaseName: tenant-root
   install:
     remediation:

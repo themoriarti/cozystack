@@ -1,10 +1,37 @@
 # Release Workflow
 
-This section explains how Cozystack builds and releases are made.
+This document describes Cozystack’s release process.
+
+## Introduction
+
+Cozystack uses a staged release process to ensure stability and flexibility during development.
+
+There are three types of releases:
+
+- **Release Candidates (RC)** – Preview versions (e.g., `v0.42.0-rc.1`) used for final testing and validation.
+- **Regular Releases** – Final versions (e.g., `v0.42.0`) that are feature-complete and thoroughly tested.
+- **Patch Releases** – Bugfix-only updates (e.g., `v0.42.1`) made after a stable release, based on a dedicated release branch.
+
+Each type plays a distinct role in delivering reliable and tested updates while allowing ongoing development to continue smoothly.
+
+## Release Candidates
+
+Release candidates are Cozystack versions that introduce new features and are published before a stable release.
+Their purpose is to help validate stability before finalizing a new feature release.
+They allow for final rounds of testing and bug fixes without freezing development.
+
+Release candidates are given numbers `vX.Y.0-rc.N`, for example, `v0.42.0-rc.1`.
+They are created directly in the `main` branch.
+An RC is typically tagged when all major features for the upcoming release have been merged into main and the release enters its testing phase.
+However, new features and changes can still be added before the regular release `vX.Y.0`.
+
+Each RC contributes to a cumulative set of release notes that will be finalized when `vX.Y.0` is released.
+After testing, if no critical issues remain, the regular release (`vX.Y.0`) is tagged from the last RC or a later commit in main.
+This begins the regular release process, creates a dedicated `release-X.Y` branch, and opens the way for patch releases.
 
 ## Regular Releases
 
-When making regular releases, we take a commit in `main` and decide to make it a release `x.y.0`.
+When making a regular release, we tag the latest RC or a subsequent minimal-change commit as `vX.Y.0`.
 In this explanation, we'll use version `v0.42.0` as an example:
 
 ```mermaid

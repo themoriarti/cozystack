@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [labeled, opened, synchronize, reopened]
 
+concurrency:
+  group: pull-requests-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   e2e:
     name: Build and Test
@@ -12,20 +16,9 @@ jobs:
       contents: read
       packages: write
 
-    # ─────────────────────────────────────────────────────────────
-    # Run automatically for internal PRs (same repo).
-    # For external PRs (forks) require the "ok‑to‑test" label.
     # Never run when the PR carries the "release" label.
-    # ─────────────────────────────────────────────────────────────
     if: |
-      !contains(github.event.pull_request.labels.*.name, 'release') &&
-      (
-        github.event.pull_request.head.repo.full_name == github.repository ||
-        (
-          github.event.pull_request.head.repo.full_name != github.repository &&
-          contains(github.event.pull_request.labels.*.name, 'ok-to-test')
-        )
-      )
+      !contains(github.event.pull_request.labels.*.name, 'release')
 
     steps:
       - name: Checkout code

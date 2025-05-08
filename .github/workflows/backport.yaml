@@ -4,6 +4,10 @@ on:
   pull_request_target:
     types: [closed]   # fires when PR is closed (merged)
 
+concurrency:
+  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   pull-requests: write

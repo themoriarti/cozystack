@@ -212,15 +212,12 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 ) error {
 	logger := log.FromContext(ctx)
 
-	// Combine both init containers and normal containers to sum resources properly
-	combinedContainers := append(pod.Spec.InitContainers, pod.Spec.Containers...)
-
-	// totalResources will store the sum of all container resource limits
+	// totalResources will store the sum of all container resource requests
 	totalResources := make(map[string]resource.Quantity)
 
-	// Iterate over all containers to aggregate their Limits
-	for _, container := range combinedContainers {
-		for name, qty := range container.Resources.Limits {
+	// Iterate over all containers to aggregate their requests
+	for _, container := range pod.Spec.Containers {
+		for name, qty := range container.Resources.Requests {
 			if existing, exists := totalResources[name.String()]; exists {
 				existing.Add(qty)
 				totalResources[name.String()] = existing
@@ -249,7 +246,7 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 
 	workload := &cozyv1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pod.Name,
+			Name:      fmt.Sprintf("pod-%s", pod.Name),
 			Namespace: pod.Namespace,
 		},
 	}

@@ -14,9 +14,6 @@ spec:
     spec:
       backoffLimit: 2
       template:
-        spec:
-          restartPolicy: OnFailure
-      template:
         metadata:
           annotations:
             checksum/config: {{ include (print $.Template.BasePath "/backup-script.yaml") . | sha256sum }}
@@ -24,7 +21,7 @@ spec:
         spec:
           imagePullSecrets:
           - name: {{ .Release.Name }}-regsecret
-          restartPolicy: Never
+          restartPolicy: OnFailure
           containers:
           - name: pgdump
             image: "{{ $.Files.Get "images/postgres-backup.tag" | trim }}"

@@ -39,6 +39,15 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	t := getMonitoredObject(w)
+
+	if t == nil {
+		err = r.Delete(ctx, w)
+		if err != nil {
+			logger.Error(err, "failed to delete workload")
+		}
+		return ctrl.Result{}, err
+	}
+
 	err = r.Get(ctx, types.NamespacedName{Name: t.GetName(), Namespace: t.GetNamespace()}, t)
 
 	// found object, nothing to do
@@ -68,20 +77,23 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func getMonitoredObject(w *cozyv1alpha1.Workload) client.Object {
-	if strings.HasPrefix(w.Name, "pvc-") {
+	switch {
+	case strings.HasPrefix(w.Name, "pvc-"):
 		obj := &corev1.PersistentVolumeClaim{}
 		obj.Name = strings.TrimPrefix(w.Name, "pvc-")
 		obj.Namespace = w.Namespace
 		return obj
-	}
-	if strings.HasPrefix(w.Name, "svc-") {
+	case strings.HasPrefix(w.Name, "svc-"):
 		obj := &corev1.Service{}
 		obj.Name = strings.TrimPrefix(w.Name, "svc-")
 		obj.Namespace = w.Namespace
 		return obj
+	case strings.HasPrefix(w.Name, "pod-"):
+		obj := &corev1.Pod{}
+		obj.Name = strings.TrimPrefix(w.Name, "pod-")
+		obj.Namespace = w.Namespace
+		return obj
 	}
-	obj := &corev1.Pod{}
-	obj.Name = w.Name
-	obj.Namespace = w.Namespace
+	var obj client.Object
 	return obj
 }

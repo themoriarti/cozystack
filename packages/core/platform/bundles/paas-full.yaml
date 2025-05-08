@@ -134,6 +134,11 @@ releases:
   namespace: cozy-kubevirt
   privileged: true
   dependsOn: [cilium,kubeovn,kubevirt-operator]
+  {{- $cpuAllocationRatio := index $cozyConfig.data "cpu-allocation-ratio" }}
+  {{- if $cpuAllocationRatio }}
+  values:
+    cpuAllocationRatio: {{ $cpuAllocationRatio }}
+  {{- end }}
 
 - name: kubevirt-instancetypes
   releaseName: kubevirt-instancetypes

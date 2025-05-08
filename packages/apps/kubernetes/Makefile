@@ -1,4 +1,4 @@
-UBUNTU_CONTAINER_DISK_TAG = v1.30.1
+KUBERNETES_VERSION = v1.32
 KUBERNETES_PKG_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
 
 include ../../../scripts/common-envs.mk
@@ -6,21 +6,26 @@ include ../../../scripts/package.mk
 
 generate:
 	readme-generator -v values.yaml -s values.schema.json -r README.md
+	yq -o json -i '.properties.controlPlane.properties.apiServer.properties.resourcesPreset.enum = ["none","nano","micro","small","medium","large","xlarge","2xlarge"]' values.schema.json
+	yq -o json -i '.properties.controlPlane.properties.controllerManager.properties.resourcesPreset.enum = ["none","nano","micro","small","medium","large","xlarge","2xlarge"]' values.schema.json
+	yq -o json -i '.properties.controlPlane.properties.scheduler.properties.resourcesPreset.enum = ["none","nano","micro","small","medium","large","xlarge","2xlarge"]' values.schema.json
+	yq -o json -i '.properties.controlPlane.properties.konnectivity.properties.server.properties.resourcesPreset.enum = ["none","nano","micro","small","medium","large","xlarge","2xlarge"]' values.schema.json
 
 image: image-ubuntu-container-disk image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler
 
 image-ubuntu-container-disk:
 	docker buildx build --platform linux/amd64 --build-arg ARCH=amd64 images/ubuntu-container-disk \
 		--provenance false \
-		--tag $(REGISTRY)/ubuntu-container-disk:$(call settag,$(UBUNTU_CONTAINER_DISK_TAG)) \
-		--tag $(REGISTRY)/ubuntu-container-disk:$(call settag,$(UBUNTU_CONTAINER_DISK_TAG)-$(TAG)) \
+		--build-arg KUBERNETES_VERSION=${KUBERNETES_VERSION} \
+		--tag $(REGISTRY)/ubuntu-container-disk:$(call settag,$(KUBERNETES_VERSION)) \
+		--tag $(REGISTRY)/ubuntu-container-disk:$(call settag,$(KUBERNETES_VERSION)-$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/ubuntu-container-disk:latest \
 		--cache-to type=inline \
 		--metadata-file images/ubuntu-container-disk.json \
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
 		--load=$(LOAD)
-	echo "$(REGISTRY)/ubuntu-container-disk:$(call settag,$(UBUNTU_CONTAINER_DISK_TAG))@$$(yq e '."containerimage.digest"' images/ubuntu-container-disk.json -o json -r)" \
+	echo "$(REGISTRY)/ubuntu-container-disk:$(call settag,$(KUBERNETES_VERSION))@$$(yq e '."containerimage.digest"' images/ubuntu-container-disk.json -o json -r)" \
 		> images/ubuntu-container-disk.tag
 	rm -f images/ubuntu-container-disk.json
 

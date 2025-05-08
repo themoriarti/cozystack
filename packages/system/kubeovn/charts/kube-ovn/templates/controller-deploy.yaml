@@ -83,6 +83,9 @@ spec:
           - --node-switch={{ .Values.networking.NODE_SUBNET }}
           - --node-switch-cidr={{ index $cozyConfig.data "ipv4-join-cidr" }}
           - --service-cluster-ip-range={{ index $cozyConfig.data "ipv4-svc-cidr" }}
+          {{- if .Values.global.logVerbosity }}
+          - --v={{ .Values.global.logVerbosity }}
+          {{- end }}
           - --network-type={{- .Values.networking.NETWORK_TYPE }}
           - --default-provider-name={{ .Values.networking.vlan.PROVIDER_NAME }}
           - --default-interface-name={{- .Values.networking.vlan.VLAN_INTERFACE_NAME }}

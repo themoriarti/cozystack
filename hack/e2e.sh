@@ -60,7 +60,8 @@ done
 
 # Prepare system drive
 if [ ! -f nocloud-amd64.raw ]; then
-  wget https://github.com/cozystack/cozystack/releases/latest/download/nocloud-amd64.raw.xz -O nocloud-amd64.raw.xz --show-progress --output-file /dev/stdout --progress=dot:giga 2>/dev/null
+  wget https://github.com/cozystack/cozystack/releases/latest/download/nocloud-amd64.raw.xz \
+    -O nocloud-amd64.raw.xz --show-progress --output-file /dev/stdout --progress=dot:giga 2>/dev/null
   rm -f nocloud-amd64.raw
   xz --decompress nocloud-amd64.raw.xz
 fi
@@ -85,7 +86,8 @@ done
 # Start VMs
 for i in 1 2 3; do
   qemu-system-x86_64 -machine type=pc,accel=kvm -cpu host -smp 8 -m 16384 \
-    -device virtio-net,netdev=net0,mac=52:54:00:12:34:5$i -netdev tap,id=net0,ifname=cozy-srv$i,script=no,downscript=no \
+    -device virtio-net,netdev=net0,mac=52:54:00:12:34:5$i \
+    -netdev tap,id=net0,ifname=cozy-srv$i,script=no,downscript=no \
     -drive file=srv$i/system.img,if=virtio,format=raw \
     -drive file=srv$i/seed.img,if=virtio,format=raw \
     -drive file=srv$i/data.img,if=virtio,format=raw \
@@ -121,7 +123,7 @@ machine:
   files:
   - content: |
       [plugins]
-        [plugins."io.containerd.grpc.v1.cri"]
+        [plugins."io.containerd.cri.v1.runtime"]
           device_ownership_from_security_context = true      
     path: /etc/cri/conf.d/20-customization.part
     op: create
@@ -231,7 +233,14 @@ timeout 60 sh -c 'until kubectl get hr -A | grep cozy; do sleep 1; done'
 
 sleep 5
 
+# Wait for all HelmReleases to be installed
 kubectl get hr -A | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n " $1 " hr/" $2 " &"} END{print "wait"}' | sh -x
+
+failed_hrs=$(kubectl get hr -A | grep -v True)
+if [ -n "$(echo "$failed_hrs" | grep -v NAME)" ]; then
+  printf 'Failed HelmReleases:\n%s\n' "$failed_hrs" >&2
+  exit 1
+fi
 
 # Wait for Cluster-API providers
 timeout 60 sh -c 'until kubectl get deploy -n cozy-cluster-api capi-controller-manager capi-kamaji-controller-manager capi-kubeadm-bootstrap-controller-manager capi-operator-cluster-api-operator capk-controller-manager; do sleep 1; done'

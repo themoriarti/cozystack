@@ -17,6 +17,7 @@ spec:
         kind: HelmRepository
         name: cozystack-system
         namespace: cozy-system
+      version: '>= 0.0.0-0'
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig
@@ -30,11 +31,9 @@ spec:
   upgrade:
     remediation:
       retries: -1
-  {{- if .Values.addons.certManager.valuesOverride }}
-  valuesFrom:
-  - kind: Secret
-    name: {{ .Release.Name }}-cert-manager-values-override
-    valuesKey: values
+  {{- with .Values.addons.certManager.valuesOverride }}
+  values:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
   dependsOn:
@@ -46,14 +45,4 @@ spec:
     namespace: {{ .Release.Namespace }}
   - name: {{ .Release.Name }}-cert-manager-crds
     namespace: {{ .Release.Namespace }}
-{{- end }}
-{{- if .Values.addons.certManager.valuesOverride }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Release.Name }}-cert-manager-values-override
-stringData:
-  values: |
-    {{- toYaml .Values.addons.certManager.valuesOverride | nindent 4 }}
 {{- end }}

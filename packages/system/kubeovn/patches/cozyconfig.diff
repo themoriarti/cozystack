@@ -3,7 +3,7 @@ diff --git a/packages/system/kubeovn/charts/kube-ovn/templates/ovncni-ds.yaml b/
 index d9a9a67..b2e12dd 100644
 --- a/packages/system/kubeovn/charts/kube-ovn/templates/ovncni-ds.yaml
 +++ b/packages/system/kubeovn/charts/kube-ovn/templates/ovncni-ds.yaml
-@@ -51,18 +51,12 @@ spec:
+@@ -51,18 +51,15 @@ spec:
            - bash
            - /kube-ovn/start-cniserver.sh
          args:
@@ -21,6 +21,9 @@ index d9a9a67..b2e12dd 100644
 -          {{ .Values.ipv6.SVC_CIDR }}
 -          {{- end }}
 +          - --service-cluster-ip-range={{ index $cozyConfig.data "ipv4-svc-cidr" }}
++          {{- if .Values.global.logVerbosity }}
++          - --v={{ .Values.global.logVerbosity }}
++          {{- end }}
            {{- if eq .Values.networking.NETWORK_TYPE "vlan" }}
            - --iface=
            {{- else}}
@@ -28,7 +31,7 @@ diff --git a/packages/system/kubeovn/charts/kube-ovn/templates/controller-deploy
 index 0e69494..756eb7c 100644
 --- a/packages/system/kubeovn/charts/kube-ovn/templates/controller-deploy.yaml
 +++ b/packages/system/kubeovn/charts/kube-ovn/templates/controller-deploy.yaml
-@@ -52,46 +52,19 @@ spec:
+@@ -52,46 +52,22 @@ spec:
            image: {{ .Values.global.registry.address }}/{{ .Values.global.images.kubeovn.repository }}:{{ .Values.global.images.kubeovn.tag }}
            imagePullPolicy: {{ .Values.image.pullPolicy }}
            args:
@@ -77,6 +80,9 @@ index 0e69494..756eb7c 100644
 -          {{- end }}
 +          - --node-switch-cidr={{ index $cozyConfig.data "ipv4-join-cidr" }}
 +          - --service-cluster-ip-range={{ index $cozyConfig.data "ipv4-svc-cidr" }}
++          {{- if .Values.global.logVerbosity }}
++          - --v={{ .Values.global.logVerbosity }}
++          {{- end }}
            - --network-type={{- .Values.networking.NETWORK_TYPE }}
            - --default-provider-name={{ .Values.networking.vlan.PROVIDER_NAME }}
            - --default-interface-name={{- .Values.networking.vlan.VLAN_INTERFACE_NAME }}

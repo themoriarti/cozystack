@@ -1,6 +1,6 @@
 # flux-operator
 
-![Version: 0.18.0](https://img.shields.io/badge/Version-0.18.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.18.0](https://img.shields.io/badge/AppVersion-v0.18.0-informational?style=flat-square)
+![Version: 0.19.0](https://img.shields.io/badge/Version-0.19.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.19.0](https://img.shields.io/badge/AppVersion-v0.19.0-informational?style=flat-square)
 
 The [Flux Operator](https://github.com/controlplaneio-fluxcd/flux-operator) provides a
 declarative API for the installation and upgrade of CNCF [Flux](https://fluxcd.io) and the
@@ -33,6 +33,7 @@ see the Flux Operator [documentation](https://fluxcd.control-plane.io/operator/)
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | affinity | object | `{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"kubernetes.io/os","operator":"In","values":["linux"]}]}]}}}` | Pod affinity and anti-affinity settings. |
+| apiPriority | object | `{"enabled":false,"extraServiceAccounts":[],"level":"workload-high"}` | Kubernetes [API priority and fairness](https://kubernetes.io/docs/concepts/cluster-administration/flow-control/) settings. |
 | commonAnnotations | object | `{}` | Common annotations to add to all deployed objects including pods. |
 | commonLabels | object | `{}` | Common labels to add to all deployed objects including pods. |
 | extraArgs | list | `[]` | Container extra arguments. |

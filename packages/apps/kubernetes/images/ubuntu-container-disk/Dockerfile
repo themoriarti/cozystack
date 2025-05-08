@@ -1,3 +1,4 @@
+# TODO: Here we use ubuntu:22.04, as guestfish has some network issues running in ubuntu:24.04
 FROM ubuntu:22.04 as guestfish
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -5,6 +6,7 @@ RUN apt-get update \
  && apt-get -y install \
      libguestfs-tools \
      linux-image-generic \
+     wget \
      make \
      bash-completion \
  && apt-get clean
@@ -13,7 +15,10 @@ WORKDIR /build
 
 FROM guestfish as builder
 
-RUN wget -O image.img https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+# noble is a code name for the Ubuntu 24.04 LTS release
+RUN wget -O image.img https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img --show-progress --output-file /dev/stdout --progress=dot:giga 2>/dev/null
+
+ARG KUBERNETES_VERSION
 
 RUN qemu-img resize image.img 5G \
  && eval "$(guestfish --listen --network)" \
@@ -26,8 +31,8 @@ RUN qemu-img resize image.img 5G \
  && guestfish --remote sh "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg" \
  && guestfish --remote sh 'echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list' \
 # kubernetes repo
- && guestfish --remote sh "curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg" \
- && guestfish --remote sh "echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list" \
+ && guestfish --remote sh "curl -fsSL https://pkgs.k8s.io/core:/stable:/${KUBERNETES_VERSION}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg" \
+ && guestfish --remote sh "echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KUBERNETES_VERSION}/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list" \
 # install containerd
  && guestfish --remote command "apt-get update -y" \
  && guestfish --remote command "apt-get install -y containerd.io" \

@@ -5,7 +5,7 @@ include ../../scripts/common-envs.mk
 repo:
 	rm -rf "$(OUT)"
 	mkdir -p "$(OUT)"
-	helm package -d "$(OUT)" $$(find . -mindepth 2 -maxdepth 2 -name Chart.yaml | awk 'sub("/Chart.yaml", "")') --version $(VERSION)
+	helm package -d "$(OUT)" $$(find . -mindepth 2 -maxdepth 2 -name Chart.yaml | awk 'sub("/Chart.yaml", "")') --version $(COZYSTACK_VERSION)
 	cd "$(OUT)" && helm repo index .
 
 fix-chartnames:

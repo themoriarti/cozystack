@@ -1,3 +1,4 @@
+{{- if .Capabilities.APIVersions.Has "operator.victoriametrics.com/v1beta1" }}
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMPodScrape
 metadata:
@@ -42,3 +43,4 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/component: linstor-controller
+{{- end }}

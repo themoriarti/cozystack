@@ -3,7 +3,13 @@ name: Versioned Tag
 on:
   push:
     tags:
-      - 'v*.*.*' # vX.Y.Z or vX.Y.Z-rcN
+      - 'v*.*.*' # vX.Y.Z
+      - 'v*.*.*-rc.*' # vX.Y.Z-rc.N
+
+
+concurrency:
+  group: tags-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   prepare-release:
@@ -13,6 +19,7 @@ jobs:
       contents: write
       packages: write
       pull-requests: write
+      actions: write
 
     steps:
       # Check if a non-draft release with this tag already exists
@@ -42,18 +49,18 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const ref = context.ref.replace('refs/tags/', '');           // e.g. v0.31.5-rc1
-            const m = ref.match(/^v(\d+\.\d+\.\d+)(-rc\d+)?$/);
+            const ref = context.ref.replace('refs/tags/', '');           // e.g. v0.31.5-rc.1
+            const m = ref.match(/^v(\d+\.\d+\.\d+)(-rc\.\d+)?$/);        // ['0.31.5', '-rc.1']
             if (!m) {
-              core.setFailed(`❌ tag '${ref}' must match 'vX.Y.Z' or 'vX.Y.Z-rcN'`);
+              core.setFailed(`❌ tag '${ref}' must match 'vX.Y.Z' or 'vX.Y.Z-rc.N'`);
               return;
             }
-            const version = m[1] + (m[2] ?? '');                         // 0.31.5‑rc1
+            const version = m[1] + (m[2] ?? '');                         // 0.31.5‑rc.1
             const isRc    = Boolean(m[2]);
             const [maj, min] = m[1].split('.');
-            core.setOutput('tag',     ref);
-            core.setOutput('version', version);
-            core.setOutput('is_rc',   isRc);
+            core.setOutput('tag',     ref);                              // v0.31.5-rc.1
+            core.setOutput('version', version);                          // 0.31.5-rc.1
+            core.setOutput('is_rc',   isRc);                             // true
             core.setOutput('line',    `${maj}.${min}`);                  // 0.31
 
       # Detect base branch (main or release‑X.Y) the tag was pushed from
@@ -170,35 +177,9 @@ jobs:
         if: steps.check_release.outputs.skip == 'false'
         run: |
           make assets
-          make upload_assets VERSION=${{ steps.tag.outputs.version }}
+          make upload_assets VERSION=${{ steps.tag.outputs.tag }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Ensure long‑lived maintenance branch release‑X.Y
-      - name: Ensure maintenance branch release‑${{ steps.tag.outputs.line }}
-        if: |
-          steps.check_release.outputs.skip == 'false' &&
-          steps.get_base.outputs.branch == 'main'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const branch = `release-${'${{ steps.tag.outputs.line }}'}`;
-            try {
-              await github.rest.repos.getBranch({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                branch
-              });
-              console.log(`Branch '${branch}' already exists`);
-            } catch (_) {
-              await github.git.createRef({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                ref:   `refs/heads/${branch}`,
-                sha:   context.sha
-              });
-              console.log(`Branch '${branch}' created at ${context.sha}`);
-            }
 
       # Create release‑X.Y.Z branch and push (force‑update)
       - name: Create release branch
@@ -244,8 +225,3 @@ jobs:
             } else {
               console.log(`PR already exists from ${head} to ${base}`);
             }
-
-      # Run tests 
-      - name: Test
-        if: steps.check_release.outputs.skip == 'false'
-        run: make test

@@ -161,7 +161,7 @@ releases:
   releaseName: piraeus-operator
   chart: cozy-piraeus-operator
   namespace: cozy-linstor
-  dependsOn: [cilium,cert-manager,victoria-metrics-operator]
+  dependsOn: [cilium,cert-manager]
 
 - name: snapshot-controller
   releaseName: snapshot-controller

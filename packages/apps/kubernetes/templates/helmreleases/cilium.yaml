@@ -1,3 +1,18 @@
+{{- define "cozystack.defaultCiliumValues" -}}
+cilium:
+  k8sServiceHost: {{ .Release.Name }}.{{ .Release.Namespace }}.svc
+  k8sServicePort: 6443
+  routingMode: tunnel
+  enableIPv4Masquerade: true
+  ipv4NativeRoutingCIDR: ""
+  {{- if $.Values.addons.gatewayAPI.enabled }}
+  gatewayAPI:
+    enabled: true
+  envoy:
+    enabled: true
+  {{- end }}
+{{- end }}
+
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -16,6 +31,7 @@ spec:
         kind: HelmRepository
         name: cozystack-system
         namespace: cozy-system
+      version: '>= 0.0.0-0'
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig
@@ -30,14 +46,13 @@ spec:
     remediation:
       retries: -1
   values:
-    cilium:
-      k8sServiceHost: {{ .Release.Name }}.{{ .Release.Namespace }}.svc
-      k8sServicePort: 6443
-      routingMode: tunnel
-      enableIPv4Masquerade: true
-      ipv4NativeRoutingCIDR: ""
+    {{- toYaml (deepCopy .Values.addons.cilium.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultCiliumValues" .))) | nindent 4 }}
   dependsOn:
   {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
   - name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  {{- if $.Values.addons.gatewayAPI.enabled }}
+  - name: {{ .Release.Name }}-gateway-api-crds
     namespace: {{ .Release.Namespace }}
   {{- end }}
