@@ -21,6 +21,15 @@ kubeapps:
       repository: dashboard
       tag: v0.31.0-rc.1
       digest: "sha256:a83fe4654f547469cfa469a02bda1273c54bca103a41eb007fdb2e18a7a91e93"
+  redis:
+    master:
+      resourcesPreset: "none"
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          memory: 256Mi
   kubeappsapis:
     resourcesPreset: "none"
     image:

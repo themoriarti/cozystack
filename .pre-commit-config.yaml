@@ -18,6 +18,7 @@ repos:
               (cd "$dir" && make generate)
             fi
           done
+          git diff --color=always | cat
         '
       language: script
       files: ^.*$
