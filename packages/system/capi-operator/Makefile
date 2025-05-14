@@ -1,11 +1,11 @@
 export NAME=capi-operator
 export NAMESPACE=cozy-cluster-api
+export REPO_NAME=capi-operator
+export REPO_URL=https://kubernetes-sigs.github.io/cluster-api-operator
+export CHART_NAME=cluster-api-operator 
+export CHART_VERSION=^0.18
 
 include ../../../scripts/package.mk
 
-update:
-	rm -rf charts
-	helm repo add capi-operator https://kubernetes-sigs.github.io/cluster-api-operator
-	helm repo update capi-operator
-	helm pull capi-operator/cluster-api-operator --untar --untardir charts
-	rm -rf charts/cluster-api-operator/charts
+update: clean capi-operator-update
+	rm -rf charts/cluster-api-operator/charts/
