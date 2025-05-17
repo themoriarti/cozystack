@@ -150,14 +150,14 @@ spec:
     ingress:
       extraAnnotations:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
-      hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name $host) }}
+      hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name $host) }}:443
       className: "{{ $ingress }}"
   deployment:
     podAdditionalMetadata:
       labels:
         policy.cozystack.io/allow-to-etcd: "true"
   replicas: 2
-  version: 1.30.1
+  version: {{ $.Chart.AppVersion }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
@@ -283,7 +283,7 @@ spec:
         kind: KubevirtMachineTemplate
         name: {{ $.Release.Name }}-{{ $groupName }}-{{ $kubevirtmachinetemplateHash }}
         namespace: {{ $.Release.Namespace }}
-      version: v1.32.3
+      version: v{{ $.Chart.AppVersion }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: MachineHealthCheck

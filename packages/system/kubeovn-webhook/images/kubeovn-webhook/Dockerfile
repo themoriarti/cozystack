@@ -1,11 +1,14 @@
-FROM golang:1.23 as builder
+FROM golang:1.23 AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN go mod download
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o webhook .
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -o webhook .
 
 FROM alpine:3.21.3
 WORKDIR /app

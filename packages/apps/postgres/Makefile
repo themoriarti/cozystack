@@ -7,8 +7,10 @@ generate:
 	readme-generator -v values.yaml -s values.schema.json -r README.md
 
 image:
-	docker buildx build --platform linux/amd64 --build-arg ARCH=amd64 images/postgres-backup \
+	docker buildx build images/postgres-backup \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/postgres-backup:$(call settag,$(POSTGRES_BACKUP_TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/postgres-backup:latest \
 		--cache-to type=inline \
