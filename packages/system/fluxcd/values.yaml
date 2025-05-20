@@ -4,6 +4,7 @@ flux-instance:
       networkPolicy: true
       domain: cozy.local # -- default value is overriden in patches
     distribution:
+      artifact: ""
       version: 2.5.x
       registry: ghcr.io/fluxcd
     components:
