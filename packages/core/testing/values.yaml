@@ -1,2 +1,2 @@
 e2e:
-  image: ghcr.io/cozystack/cozystack/e2e-sandbox:v0.31.0-rc.1@sha256:a20a6834527ccfc8daf7413a15234f3f7dbbd7774810c8e1966736d487ef7d0c
+  image: ghcr.io/cozystack/cozystack/e2e-sandbox:v0.31.0-rc.2@sha256:2d35b2cce2f093c5c3145a08d9981e2bf28cf45a6804117d50bd6345a15ecd1a

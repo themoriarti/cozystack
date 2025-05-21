@@ -1,13 +1,11 @@
 metallb:
   crds:
     enabled: true
-
   controller:
     image:
-      repository: ghcr.io/cozystack/cozystack/metallb/controller
-      tag: v0.14.9@sha256:c86418d1072d6037341d731917d11a2f281fb17559d5bb650962512f9894fd50
-
+      repository: ghcr.io/cozystack/cozystack/metallb-controller
+      tag: v0.14.9@sha256:73c3156d913a2ff15a26ca42fcbeee6fa115602bcdb78870dcfab9359acd9cb3
   speaker:
     image:
-      repository: ghcr.io/cozystack/cozystack/metallb/speaker
-      tag: v0.14.9@sha256:60fddc8fd6c125180186db31990993b4ebea5023ad410bf08ca9537a956e8279
+      repository: ghcr.io/cozystack/cozystack/metallb-speaker
+      tag: v0.14.9@sha256:9af9f0a6922784f066653f2c0d940d5f2de7ffea132d2df488457b61465b7716
