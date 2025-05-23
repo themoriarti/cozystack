@@ -16,13 +16,15 @@ if [ ! -f "$file" ] || [ ! -s "$file" ]; then
   exit 0
 fi
 
-miss_map=$(echo "$new_map" | awk 'NR==FNR { nm[$1 " " $2] = $3; next } { if (!($1 " " $2 in nm)) print $1, $2, $3}' - "$file")
+miss_map=$(mktemp)
+trap 'rm -f "$miss_map"' EXIT
+echo -n "$new_map" | awk 'NR==FNR { nm[$1 " " $2] = $3; next } { if (!($1 " " $2 in nm)) print $1, $2, $3}' - "$file" > $miss_map
 
 # search accross all tags sorted by version
 search_commits=$(git ls-remote --tags origin | awk -F/ '$3 ~ /v[0-9]+.[0-9]+.[0-9]+/ {print}' | sort -k2,2 -rV | awk '{print $1}')
 
 resolved_miss_map=$(
-  echo "$miss_map" | while read -r chart version commit; do
+  while read -r chart version commit; do
     # if version is found in HEAD, it's HEAD
     if [ "$(awk '$1 == "version:" {print $2}' ./${chart}/Chart.yaml)" = "${version}" ]; then
       echo "$chart $version HEAD"
@@ -56,7 +58,7 @@ resolved_miss_map=$(
     fi
     
     echo "$chart $version $found_tag"
-  done
+  done < $miss_map
 )
 
 printf "%s\n" "$new_map" "$resolved_miss_map" | sort -k1,1 -k2,2 -V | awk '$1' > "$file"

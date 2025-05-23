@@ -1,8 +1,8 @@
-OUT=../_out/repos/apps
+OUT=../_out/repos/library
 TMP := $(shell mktemp -d)
 
 repo:
-	cd .. && ../hack/package_chart.sh apps $(OUT) $(TMP) library
+	cd .. && ../hack/package_chart.sh library $(OUT) $(TMP)
 
 fix-chartnames:
 	find . -maxdepth 2 -name Chart.yaml  | awk -F/ '{print $$2}' | while read i; do sed -i "s/^name: .*/name: $$i/" "$$i/Chart.yaml"; done
@@ -12,3 +12,4 @@ gen-versions-map: fix-chartnames
 
 check-version-map: gen-versions-map
 	git diff --exit-code -- versions_map
+
