@@ -6,6 +6,11 @@ ingress-nginx:
     hostNetwork: true
     service:
       enabled: false
+    {{- if not .Values.addons.certManager.enabled }}
+    admissionWebhooks:
+      certManager:
+        enabled: false
+    {{- end }}
   nodeSelector:
     node-role.kubernetes.io/ingress-nginx: ""
 {{- end }}

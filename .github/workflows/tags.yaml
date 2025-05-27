@@ -3,9 +3,10 @@ name: Versioned Tag
 on:
   push:
     tags:
-      - 'v*.*.*' # vX.Y.Z
-      - 'v*.*.*-rc.*' # vX.Y.Z-rc.N
-
+      - 'v*.*.*'          # vX.Y.Z
+      - 'v*.*.*-rc.*'     # vX.Y.Z-rc.N
+      - 'v*.*.*-beta.*'   # vX.Y.Z-beta.N
+      - 'v*.*.*-alpha.*'  # vX.Y.Z-alpha.N
 
 concurrency:
   group: tags-${{ github.workflow }}-${{ github.ref }}
@@ -42,7 +43,7 @@ jobs:
         if: steps.check_release.outputs.skip == 'true'
         run: echo "Release already exists, skipping workflow."
 
-      # Parse tag meta‑data (rc?, maintenance line, etc.)
+      # Parse tag meta-data (rc?, maintenance line, etc.)
       - name: Parse tag
         if: steps.check_release.outputs.skip == 'false'
         id: tag
@@ -50,12 +51,12 @@ jobs:
         with:
           script: |
             const ref = context.ref.replace('refs/tags/', '');           // e.g. v0.31.5-rc.1
-            const m = ref.match(/^v(\d+\.\d+\.\d+)(-rc\.\d+)?$/);        // ['0.31.5', '-rc.1']
+            const m = ref.match(/^v(\d+\.\d+\.\d+)(-(?:alpha|beta|rc)\.\d+)?$/);        // ['0.31.5', '-rc.1' | '-beta.1' | …]
             if (!m) {
-              core.setFailed(`❌ tag '${ref}' must match 'vX.Y.Z' or 'vX.Y.Z-rc.N'`);
+              core.setFailed(`❌ tag '${ref}' must match 'vX.Y.Z' or 'vX.Y.Z-(alpha|beta|rc).N'`);
               return;
             }
-            const version = m[1] + (m[2] ?? '');                         // 0.31.5‑rc.1
+            const version = m[1] + (m[2] ?? '');                         // 0.31.5-rc.1
             const isRc    = Boolean(m[2]);
             const [maj, min] = m[1].split('.');
             core.setOutput('tag',     ref);                              // v0.31.5-rc.1
@@ -63,7 +64,7 @@ jobs:
             core.setOutput('is_rc',   isRc);                             // true
             core.setOutput('line',    `${maj}.${min}`);                  // 0.31
 
-      # Detect base branch (main or release‑X.Y) the tag was pushed from
+      # Detect base branch (main or release-X.Y) the tag was pushed from
       - name: Get base branch
         if: steps.check_release.outputs.skip == 'false'
         id: get_base
@@ -168,7 +169,7 @@ jobs:
               });
               console.log(`Draft release created for ${tag}`);
             } else {
-              console.log(`Re‑using existing release ${tag}`);
+              console.log(`Re-using existing release ${tag}`);
             }
             core.setOutput('upload_url', rel.upload_url);
 
@@ -181,7 +182,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Create release‑X.Y.Z branch and push (force‑update)
+      # Create release-X.Y.Z branch and push (force-update)
       - name: Create release branch
         if: steps.check_release.outputs.skip == 'false'
         run: |

@@ -16,6 +16,8 @@ image-controller image-speaker:
 	$(eval VERSION := $(shell yq '.appVersion' charts/metallb/Chart.yaml))
 	docker buildx build images/metallb \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--target $(TARGET) \
 		--build-arg VERSION=$(VERSION) \
 		--tag $(REGISTRY)/metallb-$(TARGET):$(VERSION) \
@@ -23,8 +25,8 @@ image-controller image-speaker:
 		--cache-to type=inline \
 		--metadata-file images/$(TARGET).json \
 		--push=$(PUSH) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack"
-		--load=1
+		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
+		--load=$(LOAD)
 	REPOSITORY="$(REGISTRY)/metallb-$(TARGET)" \
 		yq -i '.metallb.$(TARGET).image.repository = strenv(REPOSITORY)' values.yaml
 	TAG=$(VERSION)@$$(yq e '."containerimage.digest"' images/$(TARGET).json -o json -r) \

@@ -27,10 +27,7 @@ spec:
   - metadata:
       name: {{ include "virtual-machine.fullname" . }}
     spec:
-      pvc:
-        volumeMode: Block
-        accessModes:
-        - ReadWriteMany
+      storage:
         resources:
           requests:
             storage: {{ .Values.systemDisk.storage | quote }}

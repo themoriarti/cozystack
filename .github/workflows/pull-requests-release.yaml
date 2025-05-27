@@ -80,6 +80,7 @@ jobs:
       - name: Ensure maintenance branch release-X.Y
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GH_PAT }}
           script: |
             const tag = '${{ steps.get_tag.outputs.tag }}';  // e.g. v0.1.3 or v0.1.3-rc3
             const match = tag.match(/^v(\d+)\.(\d+)\.\d+(?:[-\w\.]+)?$/);
@@ -89,21 +90,45 @@ jobs:
             }
             const line = `${match[1]}.${match[2]}`;
             const branch = `release-${line}`;
+
+            // Get main branch commit for the tag
+            const ref = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              ref:   `tags/${tag}`
+            });
+
+            const commitSha = ref.data.object.sha;
+
             try {
               await github.rest.repos.getBranch({
                 owner: context.repo.owner,
-                repo:  context.repo.repo,
+                repo: context.repo.repo,
                 branch
               });
-              console.log(`Branch '${branch}' already exists`);
-            } catch (_) {
-              await github.rest.git.createRef({
+           
+              await github.rest.git.updateRef({
                 owner: context.repo.owner,
-                repo:  context.repo.repo,
-                ref:   `refs/heads/${branch}`,
-                sha:   context.sha
+                repo: context.repo.repo,
+                ref: `heads/${branch}`,
+                sha: commitSha,
+                force: true
               });
-              console.log(`✅ Branch '${branch}' created at ${context.sha}`);
+              console.log(`🔁 Force-updated '${branch}' to ${commitSha}`);
+            } catch (err) {
+              if (err.status === 404) {
+                await github.rest.git.createRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `refs/heads/${branch}`,
+                  sha: commitSha
+                });
+                console.log(`✅ Created branch '${branch}' at ${commitSha}`);
+              } else {
+                console.error('Unexpected error --', err);
+                core.setFailed(`Unexpected error creating/updating branch: ${err.message}`);
+                throw err;
+              }
             }
 
       # Get the latest published release
@@ -137,12 +162,12 @@ jobs:
         with:
           script: |
             const tag = '${{ steps.get_tag.outputs.tag }}';              // v0.31.5-rc.1
-            const m = tag.match(/^v(\d+\.\d+\.\d+)(-rc\.\d+)?$/);
+            const m = tag.match(/^v(\d+\.\d+\.\d+)(-(?:alpha|beta|rc)\.\d+)?$/);
             if (!m) {
-              core.setFailed(`❌ tag '${tag}' must match 'vX.Y.Z' or 'vX.Y.Z-rc.N'`);
+              core.setFailed(`❌ tag '${tag}' must match 'vX.Y.Z' or 'vX.Y.Z-(alpha|beta|rc).N'`);
               return;
             }
-            const version = m[1] + (m[2] ?? '');                         // 0.31.5‑rc.1
+            const version = m[1] + (m[2] ?? '');                         // 0.31.5-rc.1
             const isRc    = Boolean(m[2]);
             core.setOutput('is_rc',      isRc);
             const outdated = '${{ steps.semver.outputs.comparison-result }}' === '<';
