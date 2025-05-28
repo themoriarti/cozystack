@@ -17,7 +17,7 @@ spec:
   selector:
     {{- include "virtual-machine.selectorLabels" . | nindent 4 }}
   ports:
-    {{- if eq .Values.externalMethod "WholeIP" }}
+    {{- if and (eq .Values.externalMethod "WholeIP") (not .Values.externalPorts) }}
     - port: 65535
     {{- else }}
     {{- range .Values.externalPorts }}
