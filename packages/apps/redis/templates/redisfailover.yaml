@@ -42,6 +42,9 @@ spec:
       persistentVolumeClaim:
         metadata:
           name: redisfailover-persistent-data
+          labels:
+            app.kubernetes.io/component: redis
+            app.kubernetes.io/instance: {{ $.Release.Name }}
         spec:
           accessModes:
             - ReadWriteOnce

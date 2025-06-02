@@ -44,6 +44,8 @@ spec:
   inheritedMetadata:
     labels:
       policy.cozystack.io/allow-to-apiserver: "true"
+      app.kubernetes.io/name: postgres.apps.cozystack.io
+      app.kubernets.io/instance: {{ $.Release.Name }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
@@ -55,6 +57,6 @@ spec:
   kind: postgres
   type: postgres
   selector:
-    cnpg.io/cluster: {{ .Release.Name }}
-    cnpg.io/podRole: instance
+    app.kubernetes.io/name: postgres.apps.cozystack.io
+    app.kubernets.io/instance: {{ $.Release.Name }}
   version: {{ $.Chart.Version }}
