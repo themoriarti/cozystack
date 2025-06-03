@@ -21,5 +21,5 @@ spec:
   kind: virtual-machine
   type: virtual-machine
   selector:
-    vm.kubevirt.io/name: {{ .Release.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
   version: {{ $.Chart.Version }}

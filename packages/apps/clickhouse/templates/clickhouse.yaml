@@ -92,6 +92,9 @@ spec:
   templates:
     volumeClaimTemplates:
       - name: data-volume-template
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
         spec:
           accessModes:
             - ReadWriteOnce
@@ -99,6 +102,9 @@ spec:
             requests:
               storage: {{ .Values.size }}
       - name: log-volume-template
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
         spec:
           accessModes:
             - ReadWriteOnce
@@ -107,6 +113,9 @@ spec:
               storage: {{ .Values.logStorageSize }}
     podTemplates:
       - name: clickhouse-per-host
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
         spec:
           affinity:
             podAntiAffinity:
@@ -133,6 +142,9 @@ spec:
                   mountPath: /var/log/clickhouse-server
     serviceTemplates:
       - name: svc-template
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
         generateName: chendpoint-{chi}
         spec:
           ports:

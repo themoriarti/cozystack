@@ -7,6 +7,8 @@ metadata:
     cdi.kubevirt.io/storage.bind.immediate.requested: ""
     {{- end }}
     vm-disk.cozystack.io/optical: "{{ .Values.optical }}"
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
   name: {{ .Release.Name }}
 spec:
   {{- if $existingDV }}
