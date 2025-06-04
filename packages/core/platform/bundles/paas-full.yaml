@@ -284,9 +284,30 @@ releases:
   privileged: true
   dependsOn: [cilium,kubeovn,cert-manager]
 
-- name: capi-providers
-  releaseName: capi-providers
-  chart: cozy-capi-providers
+- name: capi-providers-bootstrap
+  releaseName: capi-providers-bootstrap
+  chart: cozy-capi-providers-bootstrap
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,capi-operator]
+
+- name: capi-providers-core
+  releaseName: capi-providers-core
+  chart: cozy-capi-providers-core
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,capi-operator]
+
+- name: capi-providers-cpprovider
+  releaseName: capi-providers-cpprovider
+  chart: cozy-capi-providers-cpprovider
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,capi-operator]
+
+- name: capi-providers-infraprovider
+  releaseName: capi-providers-infraprovider
+  chart: cozy-capi-providers-infraprovider
   namespace: cozy-cluster-api
   privileged: true
   dependsOn: [cilium,kubeovn,capi-operator]
