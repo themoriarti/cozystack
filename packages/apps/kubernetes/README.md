@@ -81,12 +81,13 @@ See the reference for components utilized in this service:
 
 ### Common Parameters
 
-| Name                    | Description                                                                                                       | Value        |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------ |
-| `host`                  | Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty. | `""`         |
-| `controlPlane.replicas` | Number of replicas for Kubernetes control-plane components.                                                       | `2`          |
-| `storageClass`          | StorageClass used to store user data.                                                                             | `replicated` |
-| `nodeGroups`            | nodeGroups configuration                                                                                          | `{}`         |
+| Name                                | Description                                                                                                       | Value        |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------ |
+| `host`                              | Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty. | `""`         |
+| `controlPlane.replicas`             | Number of replicas for Kubernetes control-plane components.                                                       | `2`          |
+| `storageClass`                      | StorageClass used to store user data.                                                                             | `replicated` |
+| `useCustomSecretForPatchContainerd` | if true, for patch containerd will be used secret: {{ .Release.Name }}-patch-containerd                           | `false`      |
+| `nodeGroups`                        | nodeGroups configuration                                                                                          | `{}`         |
 
 ### Cluster Addons
 

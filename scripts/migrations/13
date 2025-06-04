@@ -1,0 +1,8 @@
+#!/bin/sh
+# Migration 13 --> 14
+
+# Delete capi-providers
+kubectl delete hr capi-providers -n cozy-cluster-api
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=14 --dry-run=client -o yaml | kubectl apply -f-

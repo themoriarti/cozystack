@@ -127,6 +127,11 @@
       "description": "StorageClass used to store user data.",
       "default": "replicated"
     },
+    "useCustomSecretForPatchContainerd": {
+      "type": "boolean",
+      "description": "if true, for patch containerd will be used secret: {{ .Release.Name }}-patch-containerd",
+      "default": false
+    },
     "addons": {
       "type": "object",
       "properties": {
