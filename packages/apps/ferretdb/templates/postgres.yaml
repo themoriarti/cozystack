@@ -19,9 +19,9 @@ spec:
   minSyncReplicas: {{ .Values.quorum.minSyncReplicas }}
   maxSyncReplicas: {{ .Values.quorum.maxSyncReplicas }}
   {{- if .Values.resources }}
-  resources: {{- toYaml .Values.resources | nindent 4 }}
+  resources: {{- include "cozy-lib.resources.sanitize" (list .Values.resources $) | nindent 4 }}
   {{- else if ne .Values.resourcesPreset "none" }}
-  resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 4 }}
+  resources: {{- include "cozy-lib.resources.preset" (list .Values.resourcesPreset $) | nindent 4 }}
   {{- end }}
   monitoring:
     enablePodMonitor: true

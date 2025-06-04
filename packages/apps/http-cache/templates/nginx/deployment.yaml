@@ -53,9 +53,9 @@ spec:
       containers:
       - name: nginx
         {{- if $.Values.nginx.resources }}
-        resources: {{- toYaml $.Values.nginx.resources | nindent 10 }}
+        resources: {{- include "cozy-lib.resources.sanitize" (list $.Values.nginx.resources $) | nindent 10 }}
         {{- else if ne $.Values.nginx.resourcesPreset "none" }}
-        resources: {{- include "resources.preset" (dict "type" $.Values.nginx.resourcesPreset "Release" $.Release) | nindent 10 }}
+        resources: {{- include "cozy-lib.resources.preset" (list $.Values.nginx.resourcesPreset $) | nindent 10 }}
         {{- end }}
         image: "{{ $.Files.Get "images/nginx-cache.tag" | trim }}"
         readinessProbe:

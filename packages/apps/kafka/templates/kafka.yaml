@@ -9,9 +9,9 @@ spec:
   kafka:
     replicas: {{ .Values.kafka.replicas }}
     {{- if .Values.kafka.resources }}
-    resources: {{- toYaml .Values.kafka.resources | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.sanitize" (list .Values.kafka.resources $) | nindent 6 }}
     {{- else if ne .Values.kafka.resourcesPreset "none" }}
-    resources: {{- include "resources.preset" (dict "type" .Values.kafka.resourcesPreset "Release" .Release) | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.preset" (list .Values.kafka.resourcesPreset $) | nindent 6 }}
     {{- end }}
     listeners:
       - name: plain
@@ -71,9 +71,9 @@ spec:
   zookeeper:
     replicas: {{ .Values.zookeeper.replicas }}
     {{- if .Values.zookeeper.resources }}
-    resources: {{- toYaml .Values.zookeeper.resources | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.sanitize" (list .Values.zookeeper.resources $) | nindent 6 }}
     {{- else if ne .Values.zookeeper.resourcesPreset "none" }}
-    resources: {{- include "resources.preset" (dict "type" .Values.zookeeper.resourcesPreset "Release" .Release) | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.preset" (list .Values.zookeeper.resourcesPreset $) | nindent 6 }}
     {{- end }}
     storage:
       type: persistent-claim

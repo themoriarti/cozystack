@@ -45,9 +45,9 @@ spec:
               - name: nats
                 image: nats:2.10.17-alpine
                 {{- if .Values.resources }}
-                resources: {{- toYaml .Values.resources | nindent 22 }}
+                resources: {{- include "cozy-lib.resources.sanitize" (list .Values.resources $) | nindent 22 }}
                 {{- else if ne .Values.resourcesPreset "none" }}
-                resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 22 }}
+                resources: {{- include "cozy-lib.resources.preset" (list .Values.resourcesPreset $) | nindent 22 }}
                 {{- end }}
       fullnameOverride: {{ .Release.Name }}
       config:
