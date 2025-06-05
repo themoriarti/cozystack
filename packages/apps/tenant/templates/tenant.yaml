@@ -184,6 +184,12 @@ rules:
     verbs:
     - get
     - list
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources:
+      - virtualmachineinstances/portforward
+    verbs:
+      - get
+      - update
   - apiGroups:
     - cozystack.io
     resources:
@@ -253,6 +259,12 @@ rules:
     verbs:
     - get
     - list
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources:
+      - virtualmachineinstances/portforward
+    verbs:
+      - get
+      - update
   - apiGroups: ["apps.cozystack.io"]
     resources:
     - buckets
@@ -349,6 +361,12 @@ rules:
     verbs:
     - get
     - list
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources:
+      - virtualmachineinstances/portforward
+    verbs:
+      - get
+      - update
   - apiGroups: ["apps.cozystack.io"]
     resources:
     - '*'
