@@ -32,6 +32,8 @@ kubeapps:
           memory: 256Mi
   kubeappsapis:
     resourcesPreset: "none"
+    qps: "250.0"
+    burst: "500"
     image:
       registry: ghcr.io/cozystack/cozystack
       repository: kubeapps-apis
