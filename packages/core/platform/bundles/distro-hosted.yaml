@@ -1,4 +1,5 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 
 releases:
 - name: fluxcd-operator
@@ -13,6 +14,11 @@ releases:
   chart: cozy-fluxcd
   namespace: cozy-fluxcd
   dependsOn: [fluxcd-operator]
+  values:
+    flux-instance:
+      instance:
+        cluster:
+          domain: {{ $clusterDomain }}
 
 - name: cert-manager-crds
   releaseName: cert-manager-crds
@@ -83,6 +89,9 @@ releases:
   namespace: cozy-mariadb-operator
   optional: true
   dependsOn: [victoria-metrics-operator]
+  values:
+    mariadb-operator:
+      clusterName: {{ $clusterDomain }}
 
 - name: postgres-operator
   releaseName: postgres-operator
@@ -97,6 +106,9 @@ releases:
   namespace: cozy-kafka-operator
   optional: true
   dependsOn: [victoria-metrics-operator]
+  values:
+    strimzi-kafka-operator:
+      kubernetesServiceDnsDomain: {{ $clusterDomain }}
 
 - name: clickhouse-operator
   releaseName: clickhouse-operator

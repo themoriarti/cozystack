@@ -10,7 +10,7 @@ clickhouse 0.6.1 c62a83a7
 clickhouse 0.6.2 8267072d
 clickhouse 0.7.0 93bdf411
 clickhouse 0.9.0 6130f43d
-clickhouse 0.9.1 HEAD
+clickhouse 0.9.2 HEAD
 ferretdb 0.1.0 e9716091
 ferretdb 0.1.1 91b0499a
 ferretdb 0.2.0 6c5cf5bf
@@ -71,7 +71,7 @@ kubernetes 0.19.0 93bdf411
 kubernetes 0.20.0 609e7ede
 kubernetes 0.20.1 f9f8bb2f
 kubernetes 0.21.0 6130f43d
-kubernetes 0.23.0 HEAD
+kubernetes 0.23.1 HEAD
 mysql 0.1.0 263e47be
 mysql 0.2.0 c24a103f
 mysql 0.3.0 53f2365e
@@ -90,7 +90,8 @@ nats 0.3.1 c62a83a7
 nats 0.4.0 898374b5
 nats 0.4.1 8267072d
 nats 0.5.0 93bdf411
-nats 0.6.0 HEAD
+nats 0.6.0 6130f43d
+nats 0.6.1 HEAD
 postgres 0.1.0 263e47be
 postgres 0.2.0 53f2365e
 postgres 0.2.1 d7cfa53c

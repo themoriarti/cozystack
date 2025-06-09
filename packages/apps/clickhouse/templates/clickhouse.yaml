@@ -1,3 +1,5 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
 {{- $passwords := dict }}
 {{- $users := .Values.users }}
@@ -32,7 +34,7 @@ kind: "ClickHouseInstallation"
 metadata:
   name: "{{ .Release.Name }}"
 spec:
-  namespaceDomainPattern:  "%s.svc.cozy.local"
+  namespaceDomainPattern:  "%s.svc.{{ $clusterDomain }}"
   defaults:
     templates:
       dataVolumeClaimTemplate: data-volume-template
