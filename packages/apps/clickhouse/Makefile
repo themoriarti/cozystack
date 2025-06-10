@@ -1,4 +1,4 @@
-CLICKHOUSE_BACKUP_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
+CLICKHOUSE_BACKUP_TAG = $(shell awk '$$0 ~ /^version:/ {print $$2}' Chart.yaml)
 
 include ../../../scripts/common-envs.mk
 include ../../../scripts/package.mk
