@@ -1,0 +1,168 @@
+diff --git a/mocks/pkg/ovs/interface.go b/mocks/pkg/ovs/interface.go
+index e9c472bee..59076f9ed 100644
+--- a/mocks/pkg/ovs/interface.go
++++ b/mocks/pkg/ovs/interface.go
+@@ -10,6 +10,7 @@
+ package ovs
+ 
+ import (
++	context "context"
+ 	reflect "reflect"
+ 
+ 	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
+@@ -3322,6 +3323,20 @@ func (mr *MockNbClientMockRecorder) DeleteSecurityGroup(sgName any) *gomock.Call
+ 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteSecurityGroup", reflect.TypeOf((*MockNbClient)(nil).DeleteSecurityGroup), sgName)
+ }
+ 
++// Echo mocks base method.
++func (m *MockNbClient) Echo(arg0 context.Context) error {
++	m.ctrl.T.Helper()
++	ret := m.ctrl.Call(m, "Echo", arg0)
++	ret0, _ := ret[0].(error)
++	return ret0
++}
++
++// Echo indicates an expected call of Echo.
++func (mr *MockNbClientMockRecorder) Echo(arg0 any) *gomock.Call {
++	mr.mock.ctrl.T.Helper()
++	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Echo", reflect.TypeOf((*MockNbClient)(nil).Echo), arg0)
++}
++
+ // EnablePortLayer2forward mocks base method.
+ func (m *MockNbClient) EnablePortLayer2forward(lspName string) error {
+ 	m.ctrl.T.Helper()
+@@ -4770,6 +4785,20 @@ func (mr *MockSbClientMockRecorder) GetAllChassisByHost(nodeName any) *gomock.Ca
+ 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllChassisByHost", reflect.TypeOf((*MockSbClient)(nil).GetAllChassisByHost), nodeName)
+ }
+ 
++// Echo mocks base method.
++func (m *MockSbClient) Echo(arg0 context.Context) error {
++	m.ctrl.T.Helper()
++	ret := m.ctrl.Call(m, "Echo", arg0)
++	ret0, _ := ret[0].(error)
++	return ret0
++}
++
++// Echo indicates an expected call of Echo.
++func (mr *MockSbClientMockRecorder) Echo(arg0 any) *gomock.Call {
++	mr.mock.ctrl.T.Helper()
++	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Echo", reflect.TypeOf((*MockSbClient)(nil).Echo), arg0)
++}
++
+ // GetChassis mocks base method.
+ func (m *MockSbClient) GetChassis(chassisName string, ignoreNotFound bool) (*ovnsb.Chassis, error) {
+ 	m.ctrl.T.Helper()
+@@ -4915,6 +4944,20 @@ func (m *MockCommon) EXPECT() *MockCommonMockRecorder {
+ 	return m.recorder
+ }
+ 
++// Echo mocks base method.
++func (m *MockCommon) Echo(arg0 context.Context) error {
++	m.ctrl.T.Helper()
++	ret := m.ctrl.Call(m, "Echo", arg0)
++	ret0, _ := ret[0].(error)
++	return ret0
++}
++
++// Echo indicates an expected call of Echo.
++func (mr *MockCommonMockRecorder) Echo(arg0 any) *gomock.Call {
++	mr.mock.ctrl.T.Helper()
++	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Echo", reflect.TypeOf((*MockCommon)(nil).Echo), arg0)
++}
++
+ // GetEntityInfo mocks base method.
+ func (m *MockCommon) GetEntityInfo(entity any) error {
+ 	m.ctrl.T.Helper()
+diff --git a/pkg/controller/controller.go b/pkg/controller/controller.go
+index cb594a4c8..a2a88eb06 100644
+--- a/pkg/controller/controller.go
++++ b/pkg/controller/controller.go
+@@ -268,6 +268,9 @@ type Controller struct {
+ 	cmInformerFactory      kubeinformers.SharedInformerFactory
+ 	kubeovnInformerFactory kubeovninformer.SharedInformerFactory
+ 	anpInformerFactory     anpinformer.SharedInformerFactory
++
++	// Database health check
++	dbFailureCount int
+ }
+ 
+ func newTypedRateLimitingQueue[T comparable](name string, rateLimiter workqueue.TypedRateLimiter[T]) workqueue.TypedRateLimitingInterface[T] {
+@@ -944,6 +947,48 @@ func (c *Controller) Run(ctx context.Context) {
+ 	klog.Info("Shutting down workers")
+ }
+ 
++func (c *Controller) dbStatus() {
++	const maxFailures = 5
++
++	done := make(chan error, 2)
++	go func() {
++		done <- c.OVNNbClient.Echo(context.Background())
++	}()
++	go func() {
++		done <- c.OVNSbClient.Echo(context.Background())
++	}()
++
++	resultsReceived := 0
++	timeout := time.After(time.Duration(c.config.OvnTimeout) * time.Second)
++
++	for resultsReceived < 2 {
++		select {
++		case err := <-done:
++			resultsReceived++
++			if err != nil {
++				c.dbFailureCount++
++				klog.Errorf("OVN database echo failed (%d/%d): %v", c.dbFailureCount, maxFailures, err)
++				if c.dbFailureCount >= maxFailures {
++					util.LogFatalAndExit(err, "OVN database connection failed after %d attempts", maxFailures)
++				}
++				return
++			}
++		case <-timeout:
++			c.dbFailureCount++
++			klog.Errorf("OVN database echo timeout (%d/%d) after %ds", c.dbFailureCount, maxFailures, c.config.OvnTimeout)
++			if c.dbFailureCount >= maxFailures {
++				util.LogFatalAndExit(nil, "OVN database connection timeout after %d attempts", maxFailures)
++			}
++			return
++		}
++	}
++
++	if c.dbFailureCount > 0 {
++		klog.Infof("OVN database connection recovered after %d failures", c.dbFailureCount)
++		c.dbFailureCount = 0
++	}
++}
++
+ func (c *Controller) shutdown() {
+ 	utilruntime.HandleCrash()
+ 
+@@ -1277,6 +1322,8 @@ func (c *Controller) startWorkers(ctx context.Context) {
+ 	if c.config.EnableLiveMigrationOptimize {
+ 		go wait.Until(runWorker("add/update vmiMigration ", c.addOrUpdateVMIMigrationQueue, c.handleAddOrUpdateVMIMigration), 50*time.Millisecond, ctx.Done())
+ 	}
++
++	go wait.Until(c.dbStatus, 15*time.Second, ctx.Done())
+ }
+ 
+ func (c *Controller) allSubnetReady(subnets ...string) (bool, error) {
+diff --git a/pkg/ovs/interface.go b/pkg/ovs/interface.go
+index df6907c4d..5e70dd6c7 100644
+--- a/pkg/ovs/interface.go
++++ b/pkg/ovs/interface.go
+@@ -1,6 +1,8 @@
+ package ovs
+ 
+ import (
++	"context"
++
+ 	netv1 "k8s.io/api/networking/v1"
+ 
+ 	"github.com/ovn-org/libovsdb/ovsdb"
+@@ -235,6 +237,7 @@ type SbClient interface {
+ }
+ 
+ type Common interface {
++	Echo(context.Context) error
+ 	Transact(method string, operations []ovsdb.Operation) error
+ 	GetEntityInfo(entity interface{}) error
+ }
