@@ -1,3 +1,5 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 {{- $passwords := dict }}
 {{- range $user, $u := .Values.users }}
   {{- if $u.password }}
@@ -51,6 +53,9 @@ spec:
                 {{- end }}
       fullnameOverride: {{ .Release.Name }}
       config:
+        cluster:
+          routeURLs:
+            k8sClusterDomain: {{ $clusterDomain }}
         {{- if or (gt (len $passwords) 0) (gt (len .Values.config.merge) 0) }}
         merge:
           {{- if gt (len $passwords) 0 }}
