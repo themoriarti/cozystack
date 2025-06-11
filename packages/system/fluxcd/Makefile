@@ -4,7 +4,7 @@ NAMESPACE=cozy-$(NAME)
 include ../../../scripts/package.mk
 
 apply-locally:
-	helm upgrade -i -n $(NAMESPACE) $(NAME) .
+	cozypkg apply --plain -n $(NAMESPACE) $(NAME)
 
 update:
 	rm -rf charts
