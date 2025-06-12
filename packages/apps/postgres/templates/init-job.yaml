@@ -50,6 +50,7 @@ spec:
           name: secret
         - mountPath: /scripts
           name: scripts
+        {{- include "postgresjobs.resources" . | nindent 8 }}
       securityContext:
         fsGroup: 26
         runAsGroup: 26
