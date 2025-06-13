@@ -12,10 +12,14 @@
 
 **Cozystack** is a free PaaS platform and framework for building clouds.
 
+Cozystack is a [CNCF Sandbox Level Project](https://www.cncf.io/sandbox-projects/) that was originally built and sponsored by [Ænix](https://aenix.io/).
+
 With Cozystack, you can transform a bunch of servers into an intelligent system with a simple REST API for spawning Kubernetes clusters,
 Database-as-a-Service, virtual machines, load balancers, HTTP caching services, and other services with ease.
 
 Use Cozystack to build your own cloud or provide a cost-effective development environment.  
+
+![Cozystack user interface](https://cozystack.io/img/screenshot.png)
 
 ## Use-Cases
 
@@ -28,9 +32,6 @@ You can use Cozystack as a platform to build a private cloud powered by Infrastr
 * [**Using Cozystack as a Kubernetes distribution**](https://cozystack.io/docs/guides/use-cases/kubernetes-distribution/)  
 You can use Cozystack as a Kubernetes distribution for Bare Metal
 
-## Screenshot
-
-![Cozystack screenshot](https://cozystack.io/img/screenshot.png)
 
 ## Documentation
 
@@ -59,7 +60,10 @@ Commits are used to generate the changelog, and their author will be referenced 
 
 If you have **Feature Requests** please use the [Discussion's Feature Request section](https://github.com/cozystack/cozystack/discussions/categories/feature-requests).
 
-You are welcome to join our weekly community meetings (just add this events to your [Google Calendar](https://calendar.google.com/calendar?cid=ZTQzZDIxZTVjOWI0NWE5NWYyOGM1ZDY0OWMyY2IxZTFmNDMzZTJlNjUzYjU2ZGJiZGE3NGNhMzA2ZjBkMGY2OEBncm91cC5jYWxlbmRhci5nb29nbGUuY29t) or [iCal](https://calendar.google.com/calendar/ical/e43d21e5c9b45a95f28c5d649c2cb1e1f433e2e653b56dbbda74ca306f0d0f68%40group.calendar.google.com/public/basic.ics)) or [Telegram group](https://t.me/cozystack).
+## Community
+
+You are welcome to join our [Telegram group](https://t.me/cozystack) and come to our weekly community meetings.
+Add them to your [Google Calendar](https://calendar.google.com/calendar?cid=ZTQzZDIxZTVjOWI0NWE5NWYyOGM1ZDY0OWMyY2IxZTFmNDMzZTJlNjUzYjU2ZGJiZGE3NGNhMzA2ZjBkMGY2OEBncm91cC5jYWxlbmRhci5nb29nbGUuY29t) or [iCal](https://calendar.google.com/calendar/ical/e43d21e5c9b45a95f28c5d649c2cb1e1f433e2e653b56dbbda74ca306f0d0f68%40group.calendar.google.com/public/basic.ics) for convenience.
 
 ## License
 
