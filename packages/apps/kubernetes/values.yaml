@@ -123,7 +123,7 @@ controlPlane:
     ##     cpu: 100m
     ##     memory: 512Mi
     ##
-    resourcesPreset: "small"
+    resourcesPreset: "medium"
     resources: {}
 
   controllerManager:
