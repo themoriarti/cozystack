@@ -35,12 +35,21 @@ super-admin: 3
 {{-   range $tenants }}
 - {{ . }}
 {{-   end }}
+{{-   if not (eq . "tenant-root") }}
+- tenant-root
+{{-   end }}
 {{- end }}
 
 {{- define "cozy-lib.rbac.groupSubject" -}}
 - kind: Group
   name: {{ . }}
   apiGroup: rbac.authorization.k8s.io
+{{- end }}
+
+{{- define "cozy-lib.rbac.serviceAccountSubject" -}}
+- kind: ServiceAccount
+  name: {{ . }}
+  namespace: {{ . }}
 {{- end }}
 
 {{- /* 
@@ -75,12 +84,23 @@ super-admin: 3
 {{- define "cozy-lib.rbac.subjectsForTenantAndAccessLevel" }}
 {{-   include "cozy-lib.checkInput" . }}
 {{-   $level := index . 0 }}
-{{-   $global := index . 1 }}
+{{-   $tenant := index . 1 }}
 {{-   $levels := include "cozy-lib.rbac.accessLevelsAtOrAbove" $level | fromYamlArray }}
-{{-   $tenants := include "cozy-lib.rbac.allParentTenantsAndThis" $global.Release.Namespace | fromYamlArray }}
-{{-   range $l := $levels }}
-{{-     range $t := $tenants }}
+{{-   $tenants := include "cozy-lib.rbac.allParentTenantsAndThis" $tenant | fromYamlArray }}
+{{-   range $t := $tenants }}
+{{-     include "cozy-lib.rbac.serviceAccountSubject" $t }}{{ printf "\n" }}
+{{-     range $l := $levels }}
 {{-       include "cozy-lib.rbac.groupSubject" (printf "%s-%s" $t $l) }}{{ printf "\n" }}
 {{-     end }}
+{{-   end}}
+{{- end }}
+
+{{- define "cozy-lib.rbac.subjectsForTenant" }}
+{{-   include "cozy-lib.checkInput" . }}
+{{-   $level := index . 0 }}
+{{-   $tenant := index . 1 }}
+{{-   $tenants := include "cozy-lib.rbac.allParentTenantsAndThis" $tenant | fromYamlArray }}
+{{-   range $t := $tenants }}
+{{-     include "cozy-lib.rbac.groupSubject" (printf "%s-%s" $t $level) }}{{ printf "\n" }}
 {{-   end}}
 {{- end }}
