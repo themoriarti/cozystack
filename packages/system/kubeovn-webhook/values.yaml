@@ -1,3 +1,3 @@
 portSecurity: true
 routes: ""
-image: ghcr.io/cozystack/cozystack/kubeovn-webhook:v0.32.0-beta.2@sha256:1ca9ee2675fe4ed52867f1483e9f39255533a86d15a44218f4e80a23bfe5db04
+image: ghcr.io/cozystack/cozystack/kubeovn-webhook:v0.32.0@sha256:7a66fdc3ddad2a0d09b3ae5bed33761d932f7ee3226a68fc3d726b5abb6c6c49
