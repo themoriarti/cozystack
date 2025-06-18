@@ -49,6 +49,10 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
 
+prepare-env:
+	make -C packages/core/testing apply
+	make -C packages/core/testing prepare-cluster
+
 generate:
 	hack/update-codegen.sh
 

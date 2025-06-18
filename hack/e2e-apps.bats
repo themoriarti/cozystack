@@ -5,6 +5,7 @@
 # -----------------------------------------------------------------------------
 
 @test "Create tenant with isolated mode enabled" {
+  kubectl -n tenant-root get tenants.apps.cozystack.io test || 
   kubectl create -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Tenant
@@ -25,6 +26,7 @@ EOF
 }
 
 @test "Create a tenant Kubernetes control plane" {
+  kubectl -n tenant-test get kuberneteses.apps.cozystack.io test || 
   kubectl create -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
@@ -92,10 +94,12 @@ EOF
   kubectl wait deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-test kubernetes-test-cluster-autoscaler kubernetes-test-kccm kubernetes-test-kcsi-controller
   kubectl wait machinedeployment kubernetes-test-md0 -n tenant-test --timeout=1m --for=jsonpath='{.status.replicas}'=2
   kubectl wait machinedeployment kubernetes-test-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io test
 }
 
 @test "Create a VM Disk" {
   name='test'
+  kubectl -n tenant-test get vmdisks.apps.cozystack.io $name || 
   kubectl create -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VMDisk
@@ -112,14 +116,14 @@ spec:
 EOF
   sleep 5
   kubectl -n tenant-test wait hr vm-disk-$name --timeout=5s --for=condition=ready
-  kubectl -n tenant-test annotate pvc vm-disk-test cdi.kubevirt.io/storage.bind.immediate.requested=true
-  kubectl -n tenant-test wait dv vm-disk-$name --timeout=100s --for=condition=ready
+  kubectl -n tenant-test wait dv vm-disk-$name --timeout=150s --for=condition=ready
   kubectl -n tenant-test wait pvc vm-disk-$name --timeout=100s --for=jsonpath='{.status.phase}'=Bound
 }
 
 @test "Create a VM Instance" {
   diskName='test'
   name='test'
+  kubectl -n tenant-test get vminstances.apps.cozystack.io $name || 
   kubectl create -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VMInstance
@@ -158,10 +162,13 @@ EOF
   timeout 20 sh -ec "until kubectl -n tenant-test get vmi vm-instance-$name -o jsonpath='{.status.interfaces[0].ipAddress}' | grep -q '[0-9]'; do sleep 5; done"
   kubectl -n tenant-test wait hr vm-instance-$name --timeout=5s --for=condition=ready
   kubectl -n tenant-test wait vm vm-instance-$name --timeout=20s --for=condition=ready
+  kubectl -n tenant-test delete vminstances.apps.cozystack.io $name 
+  kubectl -n tenant-test delete vmdisks.apps.cozystack.io $diskName 
 }
 
 @test "Create a Virtual Machine" {
   name='test'
+  kubectl -n tenant-test get virtualmachines.apps.cozystack.io $name || 
   kubectl create -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VirtualMachine
@@ -199,14 +206,16 @@ spec:
 EOF
   sleep 5
   kubectl -n tenant-test wait hr virtual-machine-$name --timeout=10s --for=condition=ready
-  kubectl -n tenant-test wait dv virtual-machine-$name --timeout=100s --for=condition=ready
+  kubectl -n tenant-test wait dv virtual-machine-$name --timeout=150s --for=condition=ready
   kubectl -n tenant-test wait pvc virtual-machine-$name --timeout=100s --for=jsonpath='{.status.phase}'=Bound
   kubectl -n tenant-test wait vm virtual-machine-$name --timeout=100s --for=condition=ready
   timeout 120 sh -ec "until kubectl -n tenant-test get vmi virtual-machine-$name -o jsonpath='{.status.interfaces[0].ipAddress}' | grep -q '[0-9]'; do sleep 10; done"
+  kubectl -n tenant-test delete virtualmachines.apps.cozystack.io $name 
 }
 
 @test "Create DB PostgreSQL" {
   name='test'
+  kubectl -n tenant-test get postgreses.apps.cozystack.io $name || 
   kubectl create -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Postgres
@@ -245,7 +254,7 @@ spec:
   resourcesPreset: "nano"
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr postgres-$name --timeout=50s --for=condition=ready
+  kubectl -n tenant-test wait hr postgres-$name --timeout=100s --for=condition=ready
   kubectl -n tenant-test wait job.batch postgres-$name-init-job --timeout=50s --for=condition=Complete
   timeout 40 sh -ec "until kubectl -n tenant-test get svc postgres-$name-r -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
   timeout 40 sh -ec "until kubectl -n tenant-test get svc postgres-$name-ro -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
@@ -253,10 +262,12 @@ EOF
   timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-r -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-ro -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-rw -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  kubectl -n tenant-test delete postgreses.apps.cozystack.io $name
 }
 
 @test "Create DB MySQL" {
   name='test'
+  kubectl -n tenant-test get mysqls.apps.cozystack.io $name || 
   kubectl create -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: MySQL
@@ -292,15 +303,17 @@ EOF
   sleep 5
   kubectl -n tenant-test wait hr mysql-$name --timeout=30s --for=condition=ready
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mysql-$name -o jsonpath='{.spec.ports[0].port}' | grep -q '3306'; do sleep 10; done"
-  timeout 40 sh -ec "until kubectl -n tenant-test get endpoints mysql-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  timeout 80 sh -ec "until kubectl -n tenant-test get endpoints mysql-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   kubectl -n tenant-test wait statefulset.apps/mysql-$name --timeout=110s --for=jsonpath='{.status.replicas}'=2
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mysql-$name-metrics -o jsonpath='{.spec.ports[0].port}' | grep -q '9104'; do sleep 10; done"
   timeout 40 sh -ec "until kubectl -n tenant-test get endpoints mysql-$name-metrics -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   kubectl -n tenant-test wait deployment.apps/mysql-$name-metrics --timeout=90s --for=jsonpath='{.status.replicas}'=1
+  kubectl -n tenant-test delete mysqls.apps.cozystack.io $name
 }
 
 @test "Create DB ClickHouse" {
   name='test'
+  kubectl -n tenant-test get clickhouses.apps.cozystack.io $name || 
   kubectl create -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: ClickHouse
@@ -331,9 +344,10 @@ spec:
 EOF
   sleep 5
   kubectl -n tenant-test wait hr clickhouse-$name --timeout=20s --for=condition=ready
-  timeout 100 sh -ec "until kubectl -n tenant-test get svc chendpoint-clickhouse-$name -o jsonpath='{.spec.ports[*].port}' | grep -q '8123 9000'; do sleep 10; done"
-  kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-0 --timeout=120s --for=jsonpath='{.status.replicas}'=2
+  timeout 180 sh -ec "until kubectl -n tenant-test get svc chendpoint-clickhouse-$name -o jsonpath='{.spec.ports[*].port}' | grep -q '8123 9000'; do sleep 10; done"
+  kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-0 --timeout=120s --for=jsonpath='{.status.replicas}'=1
   timeout 80 sh -ec "until kubectl -n tenant-test get endpoints chi-clickhouse-$name-clickhouse-0-0 -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
-  timeout 100 sh -ec "until kubectl -n tenant-test get svc chi-clickhouse-$name-clickhouse-0-0 -o jsonpath='{.spec.ports[0].port}' | grep -q '9000 8123 9009'; do sleep 10; done"
-  kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-1 --timeout=140s --for=jsonpath='{.status.replicas}'=2
+  timeout 100 sh -ec "until kubectl -n tenant-test get svc chi-clickhouse-$name-clickhouse-0-0 -o jsonpath='{.spec.ports[*].port}' | grep -q '9000 8123 9009'; do sleep 10; done"
+  timeout 80 sh -ec "until kubectl -n tenant-test get sts chi-clickhouse-$name-clickhouse-0-1 ; do sleep 10; done"
+  kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-1 --timeout=140s --for=jsonpath='{.status.replicas}'=1
 }

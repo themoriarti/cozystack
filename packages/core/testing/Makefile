@@ -32,6 +32,14 @@ image-e2e-sandbox:
 
 test: test-cluster test-apps ## Run the end-to-end tests in existing sandbox
 
+prepare-cluster:
+	docker cp ../../../_out/assets/cozystack-installer.yaml "${SANDBOX_NAME}":/workspace/_out/assets/cozystack-installer.yaml
+	docker cp ../../../_out/assets/nocloud-amd64.raw.xz "${SANDBOX_NAME}":/workspace/_out/assets/nocloud-amd64.raw.xz
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster.bats'
+
+install-cozystack:
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
+
 test-cluster: ## Run the end-to-end for creating a cluster
 	docker cp ../../../_out/assets/cozystack-installer.yaml "${SANDBOX_NAME}":/workspace/_out/assets/cozystack-installer.yaml
 	docker cp ../../../_out/assets/nocloud-amd64.raw.xz "${SANDBOX_NAME}":/workspace/_out/assets/nocloud-amd64.raw.xz

@@ -56,8 +56,8 @@ jobs:
           name: talos-image
           path: _out/assets/nocloud-amd64.raw.xz
  
-  test:
-    name: Test
+  prepare_env:
+    name: Prepare environment
     runs-on: [self-hosted]
     needs: build
 
@@ -66,6 +66,12 @@ jobs:
       !contains(github.event.pull_request.labels.*.name, 'release')
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
       - name: Download installer
         uses: actions/download-artifact@v4
         with:
@@ -78,5 +84,74 @@ jobs:
           name: talos-image
           path: _out/assets/
 
-      - name: Test
-        run: make test
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      - name: Prepare environment
+        run: make SANDBOX_NAME=$SANDBOX_NAME prepare-env
+
+  install_cozystack:
+    name: Install Cozystack
+    runs-on: [self-hosted]
+    needs: prepare_env
+
+    # Never run when the PR carries the "release" label.
+    if: |
+      !contains(github.event.pull_request.labels.*.name, 'release')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      - name: Install Cozystack
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
+
+  test_apps:
+    name: Test applications
+    runs-on: [self-hosted]
+    needs: install_cozystack
+
+    # Never run when the PR carries the "release" label.
+    if: |
+      !contains(github.event.pull_request.labels.*.name, 'release')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      - name: E2E Apps
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps
+
+  cleanup:
+    name: Tear down environment
+    runs-on: [self-hosted]
+    needs: test_apps
+
+    # Never run when the PR carries the "release" label.
+    if: |
+      !contains(github.event.pull_request.labels.*.name, 'release')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      - name: E2E Apps
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete
