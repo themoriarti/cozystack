@@ -91,17 +91,24 @@ jobs:
         run: |
           cd ..
           rm -rf /tmp/$SANDBOX_NAME
-          mv cozystack /tmp/$SANDBOX_NAME
-          sudo systemd-run
-            --on-calendar="$(date -d 'now + 24 hours' '+%Y-%m-%d %H:%M:%S')"
-            --unit=rm-workspace-$SANDBOX_NAME
+          cp -r cozystack /tmp/$SANDBOX_NAME
+          sudo systemctl stop "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl reset-failed "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl daemon-reexec
+          sudo systemd-run \
+            --on-calendar="$(date -d 'now + 24 hours' '+%Y-%m-%d %H:%M:%S')" \
+            --unit=rm-workspace-$SANDBOX_NAME \
             rm -rf /tmp/$SANDBOX_NAME
             
       - name: Delete sandbox in 24h
-        run: sudo systemd-run
-          --on-calendar="$(date -d 'now + 24 hours' '+%Y-%m-%d %H:%M:%S')"
-          --unit=teardown-$SANDBOX_NAME
-          /usr/bin/docker rm -f $SANDBOX_NAME
+        run: |
+          sudo systemctl stop "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl reset-failed "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl daemon-reexec
+          sudo systemd-run \
+            --on-calendar="$(date -d 'now + 24 hours' '+%Y-%m-%d %H:%M:%S')" \
+            --unit=teardown-$SANDBOX_NAME \
+            /usr/bin/docker rm -f $SANDBOX_NAME
 
       - name: Prepare environment
         run: |
@@ -187,3 +194,14 @@ jobs:
 
       - name: Tear down sandbox
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete
+
+      - name: Remove workspace
+        run: rm -rf /tmp/$SANDBOX_NAME
+
+      - name: Tear down timers
+        run: |
+          sudo systemctl stop "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl reset-failed "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl stop "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl reset-failed "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl daemon-reexec
