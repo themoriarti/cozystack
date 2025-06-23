@@ -96,6 +96,12 @@ jobs:
             --on-calendar="$(date -d 'now + 24 hours' '+%Y-%m-%d %H:%M:%S')"
             --unit=rm-workspace-$SANDBOX_NAME
             rm -rf /tmp/$SANDBOX_NAME
+            
+      - name: Delete sandbox in 24h
+        run: sudo systemd-run
+          --on-calendar="$(date -d 'now + 24 hours' '+%Y-%m-%d %H:%M:%S')"
+          --unit=teardown-$SANDBOX_NAME
+          /usr/bin/docker rm -f $SANDBOX_NAME
 
       - name: Prepare environment
         run: |
