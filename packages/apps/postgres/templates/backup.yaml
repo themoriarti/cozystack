@@ -5,7 +5,7 @@ kind: ScheduledBackup
 metadata:
   name: {{ .Release.Name }}
 spec:
-  schedule: {{ .Values.backup.schedule }}
+  schedule: {{ .Values.backup.schedule | quote }}
   backupOwnerReference: self
   cluster:
     name: {{ .Release.Name }}
