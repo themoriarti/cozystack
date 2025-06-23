@@ -48,6 +48,9 @@ test-cluster: ## Run the end-to-end for creating a cluster
 test-apps: ## Run the end-to-end tests for apps
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps.bats'
 
+test-apps-%:
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps/$*.bats'
+
 delete: ## Remove sandbox from existing Kubernetes cluster.
 	docker rm -f "${SANDBOX_NAME}" || true
 
