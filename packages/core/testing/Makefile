@@ -69,7 +69,7 @@ apply: delete
 		-e TALOSCONFIG=/workspace/talosconfig \
 		-e KUBECONFIG=/workspace/kubeconfig \
 		-e SANDBOX_NAME=${SANDBOX_NAME} \
-		-v /tmp/${SANDBOX_NAME}:/workspace/hosttmp \
+		-v /tmp:/workspace/hosttmp \
 		"$$(yq .e2e.image values.yaml)" \
 		--timeout 30m
 	docker cp "${ROOT_DIR}" "${SANDBOX_NAME}":/workspace
