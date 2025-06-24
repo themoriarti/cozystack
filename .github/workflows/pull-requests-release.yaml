@@ -9,8 +9,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Test Release
+  prepare_env:
+    name: Prepare environment
     runs-on: [self-hosted]
     permissions:
       contents: read
@@ -92,8 +92,136 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
 
-      - name: Run tests
-        run: make test
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      - name: Prepare workspace
+        run: |
+          cd ..
+          rm -rf /tmp/$SANDBOX_NAME
+          cp -r cozystack /tmp/$SANDBOX_NAME
+          sudo systemctl stop "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl reset-failed "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl daemon-reexec
+          sudo systemd-run \
+            --on-calendar="$(date -d 'now + 24 hours' '+%Y-%m-%d %H:%M:%S')" \
+            --unit=rm-workspace-$SANDBOX_NAME \
+            rm -rf /tmp/$SANDBOX_NAME
+
+      - name: Delete sandbox in 24h
+        run: |
+          sudo systemctl stop "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl reset-failed "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl daemon-reexec
+          sudo systemd-run \
+            --on-calendar="$(date -d 'now + 24 hours' '+%Y-%m-%d %H:%M:%S')" \
+            --unit=teardown-$SANDBOX_NAME \
+            /usr/bin/docker rm -f $SANDBOX_NAME
+
+      - name: Prepare environment
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make SANDBOX_NAME=$SANDBOX_NAME prepare-env
+
+  install_cozystack:
+    name: Install Cozystack
+    runs-on: [self-hosted]
+    needs: prepare_env
+    permissions:
+      contents: read
+      packages: write
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'release') &&
+      github.event.action != 'closed'
+
+    steps:
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      - name: Install Cozystack
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
+
+  setup_tenant:
+    name: Setup tenant-test
+    runs-on: [self-hosted]
+    needs: install_cozystack
+    permissions:
+      contents: read
+      packages: write
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'release') &&
+      github.event.action != 'closed'
+
+    steps:
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+
+      - name: E2E Apps
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-tenant
+
+  test_apps:
+    strategy:
+      matrix:
+        app: [clickhouse,kubernetes,mysql,postgres,virtualmachine,vminstance]
+    name: Test ${{ matrix.app }}
+    runs-on: [self-hosted]
+    needs: setup_tenant
+    permissions:
+      contents: read
+      packages: write
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'release') &&
+      github.event.action != 'closed'
+
+    steps:
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      - name: E2E Apps
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-${{ matrix.app }}
+
+  cleanup:
+    name: Tear down environment
+    runs-on: [self-hosted]
+    needs: test_apps
+    permissions:
+      contents: read
+      packages: write
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'release') &&
+      github.event.action != 'closed'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+
+      - name: Tear down sandbox
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete
+
+      - name: Remove workspace
+        run: rm -rf /tmp/$SANDBOX_NAME
+
+      - name: Tear down timers
+        run: |
+          sudo systemctl stop "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl reset-failed "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl stop "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl reset-failed "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
+          sudo systemctl daemon-reexec
 
   finalize:
     name: Finalize Release
