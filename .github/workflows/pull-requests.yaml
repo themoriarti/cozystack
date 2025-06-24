@@ -4,8 +4,9 @@ on:
   pull_request:
     types: [labeled, opened, synchronize, reopened]
 
+# Cancel in‑flight runs for the same PR when a new push arrives.
 concurrency:
-  group: pull-requests-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
@@ -55,35 +56,96 @@ jobs:
         with:
           name: talos-image
           path: _out/assets/nocloud-amd64.raw.xz
- 
-  prepare_env:
-    name: Prepare environment
-    runs-on: [self-hosted]
-    needs: build
 
-    # Never run when the PR carries the "release" label.
-    if: |
-      !contains(github.event.pull_request.labels.*.name, 'release')
+  resolve_assets:
+    name: "Resolve assets"
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'release')
+    outputs:
+     installer_id: ${{ steps.fetch_assets.outputs.installer_id }}
+     disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
     steps:
       - name: Checkout code
+        if: contains(github.event.pull_request.labels.*.name, 'release')
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Download installer
-        uses: actions/download-artifact@v4
+      - name: Extract tag from PR branch (release PR)
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        id: get_tag
+        uses: actions/github-script@v7
         with:
-          name: cozystack-installer
-          path: _out/assets/
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+            const m = branch.match(/^release-(\d+\.\d+\.\d+(?:[-\w\.]+)?)$/);
+            if (!m) {
+              core.setFailed(`❌ Branch '${branch}' does not match 'release-X.Y.Z[-suffix]'`);
+              return;
+            }
+            core.setOutput('tag', `v${m[1]}`);
 
-      - name: Download Talos image
+      - name: Find draft release & asset IDs (release PR)
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        id: fetch_assets
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            const tag = '${{ steps.get_tag.outputs.tag }}';
+            const releases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              per_page: 100
+            });
+            const draft = releases.data.find(r => r.tag_name === tag && r.draft);
+            if (!draft) {
+              core.setFailed(`Draft release '${tag}' not found`);
+              return;
+            }
+            const find = (n) => draft.assets.find(a => a.name === n)?.id;
+            const installerId = find('cozystack-installer.yaml');
+            const diskId      = find('nocloud-amd64.raw.xz');
+            if (!installerId || !diskId) {
+              core.setFailed('Required assets missing in draft release');
+              return;
+            }
+            core.setOutput('installer_id', installerId);
+            core.setOutput('disk_id',      diskId);
+
+
+  prepare_env:
+    name: "Prepare environment"
+    runs-on: [self-hosted]
+    permissions:
+      contents: read
+      packages: read
+    needs: ["build", "resolve_assets"]
+    if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
+
+    steps:
+      # ▸ Regular PR path – download artefacts produced by the *build* job
+      - name: "Download Talos image (regular PR)"
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
         uses: actions/download-artifact@v4
         with:
           name: talos-image
-          path: _out/assets/
+          path: _out/assets
 
+
+      # ▸ Release PR path – fetch artefacts from the corresponding draft release
+      - name: Download assets from draft release (release PR)
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        run: |
+          curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
+            -o _out/assets/nocloud-amd64.raw.xz \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.disk_id }}"
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+
+      # ▸ Start actual job steps
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
 
@@ -100,69 +162,72 @@ jobs:
             --unit=rm-workspace-$SANDBOX_NAME \
             rm -rf /tmp/$SANDBOX_NAME
             
-      - name: Delete sandbox in 24h
-        run: |
-          sudo systemctl stop "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
-          sudo systemctl reset-failed "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
-          sudo systemctl daemon-reexec
-          sudo systemd-run \
-            --on-calendar="$(date -d 'now + 24 hours' '+%Y-%m-%d %H:%M:%S')" \
-            --unit=teardown-$SANDBOX_NAME \
-            /usr/bin/docker rm -f $SANDBOX_NAME
-
       - name: Prepare environment
         run: |
           cd /tmp/$SANDBOX_NAME
           make SANDBOX_NAME=$SANDBOX_NAME prepare-env
 
   install_cozystack:
-    name: Install Cozystack
+    name: "Install Cozystack"
     runs-on: [self-hosted]
-    needs: prepare_env
-
-    # Never run when the PR carries the "release" label.
-    if: |
-      !contains(github.event.pull_request.labels.*.name, 'release')
+    permissions:
+      contents: read
+      packages: read
+    needs: ["prepare_env", "resolve_assets"]
+    if: ${{ always() && needs.prepare_env.result == 'success' }}
 
     steps:
+      - name: Prepare _out/assets directory
+        run: mkdir -p _out/assets
+
+      # ▸ Regular PR path – download artefacts produced by the *build* job
+      - name: "Download installer (regular PR)"
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        uses: actions/download-artifact@v4
+        with:
+          name: cozystack-installer
+          path: _out/assets
+
+      # ▸ Release PR path – fetch artefacts from the corresponding draft release
+      - name: Download assets from draft release (release PR)
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        run: |
+          curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
+            -o _out/assets/cozystack-installer.yaml \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.installer_id }}"
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+ 
+      # ▸ Start actual job steps
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
 
-      - name: Install Cozystack
+      - name: Install Cozystack into sandbox
         run: |
           cd /tmp/$SANDBOX_NAME
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
 
-  setup_tenant:
-    name: Setup tenant-test
-    runs-on: [self-hosted]
-    needs: install_cozystack
-
-    # Never run when the PR carries the "release" label.
-    if: |
-      !contains(github.event.pull_request.labels.*.name, 'release')
+  detect_test_matrix:
+    name: "Detect e2e test matrix"
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
 
     steps:
-      - name: Set sandbox ID
-        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
-
-      - name: E2E Apps
+      - uses: actions/checkout@v4
+      - id: set
         run: |
-          cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-tenant
-
+          apps=$(find hack/e2e-apps -maxdepth 1 -mindepth 1 -name '*.bats' | \
+            awk -F/ '{sub(/\..+/, "", $NF); print $NF}' | jq -R . | jq -cs .)
+          echo "matrix={\"app\":$apps}" >> "$GITHUB_OUTPUT"
 
   test_apps:
     strategy:
-      matrix:
-        app: [clickhouse,kafka,kubernetes,mysql,postgres,redis,virtualmachine,vminstance]
+      matrix: ${{ fromJson(needs.detect_test_matrix.outputs.matrix) }}
     name: Test ${{ matrix.app }}
     runs-on: [self-hosted]
-    needs: setup_tenant
-
-    # Never run when the PR carries the "release" label.
-    if: |
-      !contains(github.event.pull_request.labels.*.name, 'release')
+    needs: [install_cozystack,detect_test_matrix]
+    if: ${{ always() && (needs.install_cozystack.result == 'success' && needs.detect_test_matrix.result == 'success') }}
 
     steps:
       - name: Set sandbox ID
@@ -177,10 +242,7 @@ jobs:
     name: Tear down environment
     runs-on: [self-hosted]
     needs: test_apps
-
-    # Never run when the PR carries the "release" label.
-    if: |
-      !contains(github.event.pull_request.labels.*.name, 'release')
+    if: ${{ always() && needs.test_apps.result == 'success' }}
 
     steps:
       - name: Checkout code
