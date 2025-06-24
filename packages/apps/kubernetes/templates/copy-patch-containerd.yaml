@@ -1,4 +1,3 @@
-{{- if not .Values.useCustomSecretForPatchContainerd }}
 {{- $sourceSecret := lookup "v1" "Secret" "cozy-system" "patch-containerd" }}
 {{- if $sourceSecret }}
 apiVersion: v1
@@ -10,6 +9,5 @@ type: {{ $sourceSecret.type }}
 data:
 {{- range $key, $value := $sourceSecret.data }}
   {{ printf "%s: %s" $key ($value | quote) | indent 2 }}
-{{- end }}
 {{- end }}
 {{- end }}
