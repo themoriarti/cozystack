@@ -13,6 +13,15 @@ spec:
     certManager:
       name: linstor-api-ca
       kind: Issuer
+  properties:
+  - name: DrbdOptions/Net/connect-int
+    value: "15"
+  - name: DrbdOptions/Net/ping-int
+    value: "15"
+  - name: DrbdOptions/Net/ping-timeout
+    value: "20"
+  - name: DrbdOptions/Net/timeout
+    value: "100"
   controller:
     enabled: true
     podTemplate:
