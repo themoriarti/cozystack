@@ -58,4 +58,4 @@ resources: {}
  #     memory: 512Mi
 
 ## @param resourcesPreset Use a common resources preset when `resources` is not set explicitly.
-resourcesPreset: "nano"
+resourcesPreset: "small"
