@@ -70,10 +70,10 @@ more details:
 
 ### Bootstrap parameters
 
-| Name                     | Description                                                                                                                                                                                                       | Value   |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `bootstrap.enabled`      | Restore cluster from backup                                                                                                                                                                                       | `false` |
-| `bootstrap.recoveryTime` | Time stamp up to which recovery will proceed, expressed in RFC 3339 format, if empty, will restore latest                                                                                                         | `""`    |
-| `bootstrap.oldName`      | Name of cluster before deleting                                                                                                                                                                                   | `""`    |
-| `resources`              | Resources                                                                                                                                                                                                         | `{}`    |
-| `resourcesPreset`        | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `micro` |
+| Name                     | Description                                                                                                                                      | Value   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `bootstrap.enabled`      | Restore cluster from backup                                                                                                                      | `false` |
+| `bootstrap.recoveryTime` | Time stamp up to which recovery will proceed, expressed in RFC 3339 format, if empty, will restore latest                                        | `""`    |
+| `bootstrap.oldName`      | Name of cluster before deleting                                                                                                                  | `""`    |
+| `resources`              | Resources                                                                                                                                        | `{}`    |
+| `resourcesPreset`        | Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge) | `micro` |
