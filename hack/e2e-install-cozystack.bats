@@ -20,9 +20,9 @@
   kubectl wait deployment/cozystack -n cozy-system --timeout=1m --for=condition=Available
 
   # Wait until HelmReleases appear & reconcile them
-  timeout 60 sh -ec 'until kubectl get hr -A | grep -q cozys; do sleep 1; done'
+  timeout 60 sh -ec 'until kubectl get hr -A -l cozystack.io/system-app=true | grep -q cozys; do sleep 1; done'
   sleep 5
-  kubectl get hr -A | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
+  kubectl get hr -A -l cozystack.io/system-app=true | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
 
   # Fail the test if any HelmRelease is not Ready
   if kubectl get hr -A | grep -v " True " | grep -v NAME; then
@@ -42,7 +42,11 @@
   kubectl wait deployment/linstor-controller -n cozy-linstor --timeout=5m --for=condition=available
   timeout 60 sh -ec 'until [ $(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor node list | grep -c Online) -eq 3 ]; do sleep 1; done'
 
+  created_pools=$(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor sp l -s data --pastable | awk '$2 == "data" {printf " " $4} END{printf " "}')
   for node in srv1 srv2 srv3; do
+    case $created_pools in
+      *" $node "*) echo "Storage pool 'data' already exists on node $node"; continue;;
+    esac
     kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor ps cdp zfs ${node} /dev/vdc --pool-name data --storage-pool data
   done
 
@@ -154,4 +158,25 @@ EOF
 
   timeout 120 sh -ec 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator >/dev/null 2>&1; do sleep 1; done'
   kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=10m --for=condition=ready
+}
+
+@test "Create tenant with isolated mode enabled" {
+  kubectl -n tenant-root get tenants.apps.cozystack.io test || 
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: test
+  namespace: tenant-root
+spec:
+  etcd: false
+  host: ""
+  ingress: false
+  isolated: true
+  monitoring: false
+  resourceQuotas: {}
+  seaweedfs: false
+EOF
+  kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
+  kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
 }
