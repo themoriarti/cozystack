@@ -113,34 +113,30 @@ controlPlane:
 
   apiServer:
     ## @param controlPlane.apiServer.resources Explicit CPU/memory resource requests and limits for the API server.
-    ## @param controlPlane.apiServer.resourcesPreset Use a common resources preset when `resources` is not set explicitly.
+    ## @param controlPlane.apiServer.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
     ## e.g:
     ## resources:
-    ##   limits:
-    ##     cpu: 4000m
-    ##     memory: 4Gi
-    ##   requests:
-    ##     cpu: 100m
-    ##     memory: 512Mi
+    ##   cpu: 4000m
+    ##   memory: 4Gi
     ##
     resourcesPreset: "medium"
     resources: {}
 
   controllerManager:
     ## @param controlPlane.controllerManager.resources Explicit CPU/memory resource requests and limits for the controller manager.
-    ## @param controlPlane.controllerManager.resourcesPreset Use a common resources preset when `resources` is not set explicitly.
+    ## @param controlPlane.controllerManager.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
     resourcesPreset: "micro"
     resources: {}
 
   scheduler:
     ## @param controlPlane.scheduler.resources Explicit CPU/memory resource requests and limits for the scheduler.
-    ## @param controlPlane.scheduler.resourcesPreset Use a common resources preset when `resources` is not set explicitly.
+    ## @param controlPlane.scheduler.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
     resourcesPreset: "micro"
     resources: {}
 
   konnectivity:
     server:
       ## @param controlPlane.konnectivity.server.resources Explicit CPU/memory resource requests and limits for the Konnectivity.
-      ## @param controlPlane.konnectivity.server.resourcesPreset Use a common resources preset when `resources` is not set explicitly.
+      ## @param controlPlane.konnectivity.server.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
       resourcesPreset: "micro"
       resources: {}

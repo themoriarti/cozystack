@@ -50,12 +50,8 @@ backup:
 ## @param resources Explicit CPU/memory resource requests and limits for the Clickhouse service
 resources: {}
  # resources:
- #   limits:
- #     cpu: 4000m
- #     memory: 4Gi
- #   requests:
- #     cpu: 100m
- #     memory: 512Mi
+ #   cpu: 4000m
+ #   memory: 4Gi
 
 ## @param resourcesPreset Use a common resources preset when `resources` is not set explicitly.
 resourcesPreset: "small"
