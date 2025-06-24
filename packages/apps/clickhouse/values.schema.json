@@ -85,7 +85,7 @@
         "resourcesPreset": {
             "type": "string",
             "description": "Use a common resources preset when `resources` is not set explicitly.",
-            "default": "nano"
+            "default": "small"
         }
     }
 }
