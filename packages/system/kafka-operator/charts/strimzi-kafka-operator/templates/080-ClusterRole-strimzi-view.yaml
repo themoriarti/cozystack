@@ -18,6 +18,7 @@ rules:
       - kafkas
       - kafkanodepools
       - kafkaconnects
+      - kafkamirrormakers
       - kafkausers
       - kafkatopics
       - kafkabridges
