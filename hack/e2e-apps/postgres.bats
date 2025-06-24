@@ -50,4 +50,5 @@ EOF
   timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-ro -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-rw -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   kubectl -n tenant-test delete postgreses.apps.cozystack.io $name
+  kubectl -n tenant-test delete job.batch/postgres-$name-init-job
 }

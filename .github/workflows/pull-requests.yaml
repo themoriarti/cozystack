@@ -155,7 +155,7 @@ jobs:
   test_apps:
     strategy:
       matrix:
-        app: [clickhouse,kubernetes,mysql,postgres,virtualmachine,vminstance]
+        app: [clickhouse,kafka,kubernetes,mysql,postgres,redis,virtualmachine,vminstance]
     name: Test ${{ matrix.app }}
     runs-on: [self-hosted]
     needs: setup_tenant
