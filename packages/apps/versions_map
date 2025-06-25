@@ -63,7 +63,8 @@ mysql 0.6.0 93bdf411
 mysql 0.7.0 6130f43d
 mysql 0.7.1 632224a3
 mysql 0.8.0 62cb694d
-mysql 0.8.1 HEAD
+mysql 0.8.1 4369b031
+mysql 0.8.2 HEAD
 nats 0.1.0 e9716091
 nats 0.2.0 6c5cf5bf
 nats 0.3.0 78366f19
