@@ -141,7 +141,25 @@ machine:
     mirrors:
       docker.io:
         endpoints:
-        - https://mirror.gcr.io
+        - https://dockerio.nexus.lllamnyp.su
+      cr.fluentbit.io:
+        endpoints:
+        - https://fluentbit.nexus.lllamnyp.su
+      docker-registry3.mariadb.com:
+        endpoints:
+        - https://mariadb.nexus.lllamnyp.su
+      gcr.io:
+        endpoints:
+        - https://gcr.nexus.lllamnyp.su
+      ghcr.io:
+        endpoints:
+        - https://ghcr.nexus.lllamnyp.su
+      quay.io:
+        endpoints:
+        - https://quay.nexus.lllamnyp.su
+      registry.k8s.io:
+        endpoints:
+        - https://k8s.nexus.lllamnyp.su
   files:
   - content: |
       [plugins]
