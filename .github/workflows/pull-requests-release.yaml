@@ -3,6 +3,8 @@ name: "Releasing PR"
 on:
   pull_request:
     types: [closed]
+    paths-ignore:
+      - 'docs/**/*'
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
 concurrency:
