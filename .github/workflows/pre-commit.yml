@@ -2,7 +2,7 @@ name: Pre-Commit Checks
 
 on:
   pull_request:
-    types: [labeled, opened, synchronize, reopened]
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: pre-commit-${{ github.workflow }}-${{ github.event.pull_request.number }}
