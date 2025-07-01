@@ -1,5 +1,12 @@
 #!/usr/bin/env bats
 
+@test "Required installer assets exist" {
+  if [ ! -f _out/assets/cozystack-installer.yaml ]; then
+    echo "Missing: _out/assets/cozystack-installer.yaml" >&2
+    exit 1
+  fi
+}
+
 @test "Install Cozystack" {
   # Create namespace & configmap required by installer
   kubectl create namespace cozy-system --dry-run=client -o yaml | kubectl apply -f -

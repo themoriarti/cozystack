@@ -15,7 +15,7 @@ help: ## Show this help.
 image: image-e2e-sandbox
 
 image-e2e-sandbox:
-	docker buildx build -f images/e2e-sandbox/Dockerfile ../../.. \
+	docker buildx build -f images/e2e-sandbox/Dockerfile images/e2e-sandbox \
 		--provenance false \
 		--builder=$(BUILDER) \
 		--platform=$(PLATFORM) \
@@ -62,5 +62,5 @@ apply: delete
 		-e TALOSCONFIG=/workspace/talosconfig \
 		-e KUBECONFIG=/workspace/kubeconfig \
 		"$$(yq .e2e.image values.yaml)" \
-		sleep infinity
+		--timeout 30m
 	docker cp "${ROOT_DIR}" "${SANDBOX_NAME}":/workspace

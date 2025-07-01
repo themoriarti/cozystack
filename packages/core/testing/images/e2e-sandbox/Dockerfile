@@ -19,3 +19,6 @@ RUN curl -sSL "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_${TA
  && chmod +x /usr/local/bin/yq
 RUN curl -sSL "https://fluxcd.io/install.sh" | bash
 RUN curl -sSL "https://github.com/cozystack/cozypkg/raw/refs/heads/main/hack/install.sh" | sh -s -- -v "${COZYPKG_VERSION}"
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

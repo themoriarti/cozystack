@@ -4,11 +4,6 @@
 # -----------------------------------------------------------------------------
 
 @test "Required installer assets exist" {
-  if [ ! -f _out/assets/cozystack-installer.yaml ]; then
-    echo "Missing: _out/assets/cozystack-installer.yaml" >&2
-    exit 1
-  fi
-
   if [ ! -f _out/assets/nocloud-amd64.raw.xz ]; then
     echo "Missing: _out/assets/nocloud-amd64.raw.xz" >&2
     exit 1
