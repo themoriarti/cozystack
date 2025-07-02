@@ -282,7 +282,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cozyreport
-          path: /tmp/$SANDBOX_NAME/_out/cozyreport.tgz
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
 
   cleanup:
     name: Tear down environment
