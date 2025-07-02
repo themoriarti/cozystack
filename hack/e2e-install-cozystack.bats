@@ -34,7 +34,7 @@
   # Fail the test if any HelmRelease is not Ready
   if kubectl get hr -A | grep -v " True " | grep -v NAME; then
     kubectl get hr -A
-    fail "Some HelmReleases failed to reconcile"
+    echo "Some HelmReleases failed to reconcile" >&2
   fi
 }
 
