@@ -50,6 +50,11 @@ test-cluster: copy-nocloud-image copy-installer-manifest ## Run the end-to-end f
 test-apps-%:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps/$*.bats'
 
+collect-report: ## Collect the test report from the sandbox.
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'
+	mkdir -p ../../../_out
+	docker cp "${SANDBOX_NAME}:/workspace/cozyreport.tgz" ../../../_out/cozyreport.tgz
+
 delete: ## Remove sandbox from existing Kubernetes cluster.
 	docker rm -f "${SANDBOX_NAME}" || true
 
