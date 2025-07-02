@@ -17,36 +17,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-ALL_PROCS=$(ps -eo pid=,ppid=,comm=)
-
-get_descendants() {
-  PARENT="$1"
-  echo "$PARENT"
-  echo "$ALL_PROCS" | while read -r PID PPID CMD; do
-    PID=$(echo "$PID" | tr -d ' ')
-    PPID=$(echo "$PPID" | tr -d ' ')
-    if [ "$PPID" = "$PARENT" ]; then
-      echo "$PID"
-      get_descendants "$PID"
-    fi
-  done
-}
-
-is_own_tree() {
-  PID="$1"
-  echo "$DESCENDANTS" | grep -q -x "$PID"
-}
-
 check_once() {
-  DESCENDANTS="$(get_descendants "$SELF_PID" | sort -u)"
+  OWN_PIDS=$(pstree -p $$ | grep -o '[0-9]\+' | sort -u)
+  ALL_PROCS=$(ps -eo pid=,comm=)
+
   EXTERNAL_PIDS=$(
-    echo "$ALL_PROCS" | while read -r PID PPID CMD; do
+    echo "$ALL_PROCS" | while read -r PID CMD; do
       PID=$(echo "$PID" | tr -d ' ')
       CMD=$(echo "$CMD" | tr -d ' ')
 
-      if is_own_tree "$PID"; then
-        continue
-      fi
+      echo "$OWN_PIDS" | grep -q -x "$PID" && continue
 
       case "$CMD" in
         *qemu*) continue ;;
