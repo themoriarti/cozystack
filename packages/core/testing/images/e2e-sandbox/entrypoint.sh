@@ -18,8 +18,8 @@ while [ $# -gt 0 ]; do
 done
 
 check_once() {
-  OWN_PIDS=$(pstree -p $$ | grep -o '[0-9]\+' | sort -u)
   ALL_PROCS=$(ps -eo pid=,comm=)
+  OWN_PIDS=$(pstree -p $$ | grep -o '[0-9]\+' | sort -u)
 
   EXTERNAL_PIDS=$(
     echo "$ALL_PROCS" | while read -r PID CMD; do
@@ -29,7 +29,7 @@ check_once() {
       echo "$OWN_PIDS" | grep -q -x "$PID" && continue
 
       case "$CMD" in
-        *qemu*) continue ;;
+        *qemu*|ps) continue ;;
       esac
 
       echo "PID=$PID CMD=$CMD"
