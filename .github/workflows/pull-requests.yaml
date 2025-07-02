@@ -261,10 +261,33 @@ jobs:
           cd /tmp/$SANDBOX_NAME
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-${{ matrix.app }}
 
+  collect_report:
+    name: Collect report
+    runs-on: [self-hosted]
+    needs: [test_apps]
+    if: ${{ always() }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      - name: Collect report
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report
+
+      - name: Upload cozyreport.tgz
+        uses: actions/upload-artifact@v4
+        with:
+          name: cozyreport
+          path: /tmp/$SANDBOX_NAME/_out/cozyreport.tgz
+
   cleanup:
     name: Tear down environment
     runs-on: [self-hosted]
-    needs: test_apps
+    needs: [collect_report]
     if: ${{ always() && needs.test_apps.result == 'success' }}
 
     steps:
@@ -282,3 +305,5 @@ jobs:
 
       - name: Remove workspace
         run: rm -rf /tmp/$SANDBOX_NAME
+
+
