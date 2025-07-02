@@ -399,3 +399,11 @@ releases:
   releaseName: reloader
   chart: cozy-reloader
   namespace: cozy-reloader
+
+- name: velero
+  releaseName: velero
+  chart: cozy-velero
+  namespace: cozy-velero
+  privileged: true
+  optional: true
+  dependsOn: [monitoring-agents]

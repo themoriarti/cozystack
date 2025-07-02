@@ -1,0 +1,15 @@
+velero:
+  initContainers:
+    - name: velero-plugin-for-aws
+      image: velero/velero-plugin-for-aws:v1.12.1
+      imagePullPolicy: IfNotPresent
+      volumeMounts:
+        - mountPath: /target
+          name: plugins
+  # deployNodeAgent: true
+  configuration:
+    # defaultVolumesToFsBackup: true
+    backupStorageLocation: null
+    volumeSnapshotLocation: null
+    namespace: cozy-velero
+    features: EnableCSI

@@ -107,6 +107,24 @@ See the reference for components utilized in this service:
 | `addons.monitoringAgents.enabled`             | Enable monitoring agents (Fluent Bit and VMAgents) to send logs and metrics. If tenant monitoring is enabled, data is sent to tenant storage; otherwise, it goes to root storage. | `false`   |
 | `addons.monitoringAgents.valuesOverride`      | Custom values to override                                                                                                                                                         | `{}`      |
 | `addons.verticalPodAutoscaler.valuesOverride` | Custom values to override                                                                                                                                                         | `{}`      |
+| Name                                          | Description                                                                                                                                                                       | Value   |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `addons.certManager.enabled`                  | Enable cert-manager, which automatically creates and manages SSL/TLS certificates.                                                                                                | `false` |
+| `addons.certManager.valuesOverride`           | Custom values to override                                                                                                                                                         | `{}`    |
+| `addons.cilium.valuesOverride`                | Custom values to override                                                                                                                                                         | `{}`    |
+| `addons.gatewayAPI.enabled`                   | Enable the Gateway API                                                                                                                                                            | `false` |
+| `addons.ingressNginx.enabled`                 | Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).                                                                                       | `false` |
+| `addons.ingressNginx.valuesOverride`          | Custom values to override                                                                                                                                                         | `{}`    |
+| `addons.ingressNginx.hosts`                   | List of domain names that the parent cluster should route to this tenant cluster.                                                                                                 | `[]`    |
+| `addons.gpuOperator.enabled`                  | Enable the GPU-operator                                                                                                                                                           | `false` |
+| `addons.gpuOperator.valuesOverride`           | Custom values to override                                                                                                                                                         | `{}`    |
+| `addons.fluxcd.enabled`                       | Enable FluxCD                                                                                                                                                                     | `false` |
+| `addons.fluxcd.valuesOverride`                | Custom values to override                                                                                                                                                         | `{}`    |
+| `addons.monitoringAgents.enabled`             | Enable monitoring agents (Fluent Bit and VMAgents) to send logs and metrics. If tenant monitoring is enabled, data is sent to tenant storage; otherwise, it goes to root storage. | `false` |
+| `addons.monitoringAgents.valuesOverride`      | Custom values to override                                                                                                                                                         | `{}`    |
+| `addons.verticalPodAutoscaler.valuesOverride` | Custom values to override                                                                                                                                                         | `{}`    |
+| `addons.velero.enabled`                       | Enable velero for backup and restore k8s cluster.                                                                                                                                 | `false` |
+| `addons.velero.valuesOverride`                | Custom values to override                                                                                                                                                         | `{}`    |
 
 ### Kubernetes Control Plane Configuration
 
@@ -301,4 +319,3 @@ Specific characteristics of this series are:
   workload.
 - *vCPU-To-Memory Ratio (1:4)* - A vCPU-to-Memory ratio of 1:4 starting from
   the medium size.
-

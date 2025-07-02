@@ -249,6 +249,21 @@
               "default": {}
             }
           }
+        },
+        "velero": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable velero for backup and restore k8s cluster.",
+              "default": false
+            },
+            "valuesOverride": {
+              "type": "object",
+              "description": "Custom values to override",
+              "default": {}
+            }
+          }
         }
       }
     }
