@@ -44,6 +44,17 @@ jobs:
 
       - name: Build Talos image
         run: make -C packages/core/installer talos-nocloud
+
+      - name: Save git diff as patch
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        run: git diff HEAD > _out/assets/pr.patch
+
+      - name: Upload git diff patch
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-patch
+          path: _out/assets/pr.patch
      
       - name: Upload installer
         uses: actions/upload-artifact@v4
@@ -126,6 +137,10 @@ jobs:
     if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
 
     steps:
+      # ▸ Checkout and prepare the codebase
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       # ▸ Regular PR path – download artefacts produced by the *build* job
       - name: "Download Talos image (regular PR)"
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
@@ -134,6 +149,17 @@ jobs:
           name: talos-image
           path: _out/assets
 
+      - name: Download PR patch
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-patch
+          path: _out/assets
+
+      - name: Apply patch
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        run: |
+          git apply _out/assets/pr.patch
 
       # ▸ Release PR path – fetch artefacts from the corresponding draft release
       - name: Download assets from draft release (release PR)
@@ -145,23 +171,15 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
 
-      # ▸ Start actual job steps
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
 
+      # ▸ Start actual job steps
       - name: Prepare workspace
         run: |
-          cd ..
           rm -rf /tmp/$SANDBOX_NAME
-          cp -r cozystack /tmp/$SANDBOX_NAME
-          sudo systemctl stop "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
-          sudo systemctl reset-failed "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
-          sudo systemctl daemon-reexec
-          sudo systemd-run \
-            --on-calendar="$(date -d 'now + 24 hours' '+%Y-%m-%d %H:%M:%S')" \
-            --unit=rm-workspace-$SANDBOX_NAME \
-            rm -rf /tmp/$SANDBOX_NAME
-            
+          cp -r ${{ github.workspace }} /tmp/$SANDBOX_NAME
+
       - name: Prepare environment
         run: |
           cd /tmp/$SANDBOX_NAME
@@ -201,6 +219,11 @@ jobs:
       # ▸ Start actual job steps
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      - name: Sync _out/assets directory
+        run: |
+          mkdir -p /tmp/$SANDBOX_NAME/_out/assets
+          mv _out/assets/* /tmp/$SANDBOX_NAME/_out/assets/
 
       - name: Install Cozystack into sandbox
         run: |
@@ -259,11 +282,3 @@ jobs:
 
       - name: Remove workspace
         run: rm -rf /tmp/$SANDBOX_NAME
-
-      - name: Tear down timers
-        run: |
-          sudo systemctl stop "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
-          sudo systemctl reset-failed "rm-workspace-$SANDBOX_NAME.timer" "rm-workspace-$SANDBOX_NAME.service" 2>/dev/null || true
-          sudo systemctl stop "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
-          sudo systemctl reset-failed "teardown-$SANDBOX_NAME.timer" "teardown-$SANDBOX_NAME.service" 2>/dev/null || true
-          sudo systemctl daemon-reexec
