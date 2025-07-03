@@ -195,6 +195,14 @@ releases:
   privileged: true
   dependsOn: [piraeus-operator,cilium,cert-manager,snapshot-controller]
 
+- name: nfs-driver
+  releaseName: nfs-driver
+  chart: cozy-nfs-driver
+  namespace: cozy-nfs-driver
+  privileged: true
+  dependsOn: [cilium]
+  optional: true
+
 - name: telepresence
   releaseName: traffic-manager
   chart: cozy-telepresence

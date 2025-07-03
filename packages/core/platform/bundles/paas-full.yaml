@@ -249,6 +249,14 @@ releases:
   privileged: true
   dependsOn: [piraeus-operator,cilium,kubeovn,cert-manager,snapshot-controller]
 
+- name: nfs-driver
+  releaseName: nfs-driver
+  chart: cozy-nfs-driver
+  namespace: cozy-nfs-driver
+  privileged: true
+  dependsOn: [cilium,kubeovn]
+  optional: true
+
 - name: snapshot-controller
   releaseName: snapshot-controller
   chart: cozy-snapshot-controller
