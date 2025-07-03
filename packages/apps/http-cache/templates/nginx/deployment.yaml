@@ -52,11 +52,7 @@ spec:
       shareProcessNamespace: true
       containers:
       - name: nginx
-        {{- if $.Values.nginx.resources }}
-        resources: {{- include "cozy-lib.resources.sanitize" (list $.Values.nginx.resources $) | nindent 10 }}
-        {{- else if ne $.Values.nginx.resourcesPreset "none" }}
-        resources: {{- include "cozy-lib.resources.preset" (list $.Values.nginx.resourcesPreset $) | nindent 10 }}
-        {{- end }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $.Values.nginx.resourcesPreset $.Values.nginx.resources $) | nindent 10 }}
         image: "{{ $.Files.Get "images/nginx-cache.tag" | trim }}"
         readinessProbe:
           httpGet:

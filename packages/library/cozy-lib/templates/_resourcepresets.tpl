@@ -1,13 +1,6 @@
 {{/* vim: set filetype=mustache: */}}
 
-{{/*
-Return a resource request/limit object based on a given preset.
-{{ include "cozy-lib.resources.preset" "nano" -}}
-*/}}
-{{- define "cozy-lib.resources.preset" -}}
-{{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
-{{-   $args := index . 0 }}
-{{-   $global := index . 1 }}
+{{- define "cozy-lib.resources.unsanitizedPreset" }}
 
 {{-   $baseCPU := dict
         "nano"    (dict "cpu" "250m" )
@@ -37,11 +30,21 @@ Return a resource request/limit object based on a given preset.
         "2xlarge" (dict "ephemeral-storage" "2Gi" )
 }}
 
-{{- $presets := merge $baseCPU $baseMemory $baseEphemeralStorage }}
-{{- if hasKey $presets $args -}}
-{{- $flatDict := index $presets $args }}
-{{- include "cozy-lib.resources.sanitize" (list $flatDict $global) }}
-{{- else -}}
-{{- printf "ERROR: Preset key '%s' invalid. Allowed values are %s" . (join "," (keys $presets)) | fail -}}
-{{- end -}}
+{{-   $presets := merge $baseCPU $baseMemory $baseEphemeralStorage }}
+{{-   if not (hasKey $presets .) -}}
+{{-     printf "ERROR: Preset key '%s' invalid. Allowed values are %s" . (join "," (keys $presets)) | fail -}}
+{{-   end }}
+{{-   index $presets . | toYaml }}
+{{- end }}
+
+{{/*
+  Return a resource request/limit object based on a given preset.
+  {{- include "cozy-lib.resources.preset" list ("nano" $) }}
+*/}}
+{{- define "cozy-lib.resources.preset" -}}
+{{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
+{{-   $args := index . 0 }}
+{{-   $global := index . 1 }}
+{{-   $unsanitizedPreset := include "cozy-lib.resources.unsanitizedPreset" list ($args $global) | fromYaml }}
+{{-   include "cozy-lib.resources.sanitize" (list $unsanitizedPreset $global) }}
 {{- end -}}
