@@ -167,6 +167,7 @@ jobs:
       - name: Download assets from draft release (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
         run: |
+          mkdir -p _out/assets
           curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
             -o _out/assets/nocloud-amd64.raw.xz \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.disk_id }}"
@@ -221,6 +222,7 @@ jobs:
       - name: Download assets from draft release (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
         run: |
+          mkdir -p _out/assets
           curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
             -o _out/assets/cozystack-installer.yaml \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.installer_id }}"
