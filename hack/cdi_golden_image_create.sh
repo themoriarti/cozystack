@@ -16,7 +16,7 @@ kubectl create -f - <<EOF
 apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
 metadata:
-  name: "goldenimage-$name"
+  name: "vm-image-$name"
   namespace: cozy-public
   annotations:
     cdi.kubevirt.io/storage.bind.immediate.requested: "true"

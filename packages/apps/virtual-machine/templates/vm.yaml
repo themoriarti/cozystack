@@ -39,11 +39,10 @@ spec:
         storageClassName: {{ . }}
         {{- end }}
       source:
-        {{- $goldenImageName := .Values.systemDisk.image }}
-        {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" (printf "goldenimage-%s" $goldenImageName) }}
+        {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" (printf "vm-image-%s" .Values.systemDisk.image) }}
         {{- if $dv }}
         pvc:
-          name: goldenimage-{{ $goldenImageName }}
+          name: vm-image-{{ .Values.systemDisk.image }}
           namespace: cozy-public
         {{- else }}
         http:
