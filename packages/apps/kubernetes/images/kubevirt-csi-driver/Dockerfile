@@ -3,7 +3,7 @@ ARG builder_image=docker.io/library/golang:1.22.5
 FROM ${builder_image} AS builder
 RUN git clone https://github.com/kubevirt/csi-driver /src/kubevirt-csi-driver \
  && cd /src/kubevirt-csi-driver \
- && git checkout 35836e0c8b68d9916d29a838ea60cdd3fc6199cf
+ && git checkout a8d6605bc9997bcfda3fb9f1f82ba6445b4984cc
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -11,6 +11,7 @@ ENV GOOS=$TARGETOS
 ENV GOARCH=$TARGETARCH
 
 WORKDIR /src/kubevirt-csi-driver
+
 RUN make build
 
 FROM quay.io/centos/centos:stream9
