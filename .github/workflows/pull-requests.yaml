@@ -290,8 +290,8 @@ jobs:
           done
           echo "✅ The task completed successfully after $attempt attempts"
 
-  collect_report:
-    name: Collect report
+  collect_debug_information:
+    name: Collect debug information
     runs-on: [self-hosted]
     needs: [test_apps]
     if: ${{ always() }}
@@ -313,10 +313,21 @@ jobs:
           name: cozyreport
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
 
+      - name: Collect images list
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-images
+
+      - name: Upload image list
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-list
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
+
   cleanup:
     name: Tear down environment
     runs-on: [self-hosted]
-    needs: [collect_report]
+    needs: [collect_debug_information]
     if: ${{ always() && needs.test_apps.result == 'success' }}
 
     steps:
@@ -329,15 +340,6 @@ jobs:
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
 
-      - name: List images used
-        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME list-images
-
-      - name: Upload image list
-        uses: actions/upload-artifact@v4
-        with:
-          name: image-list
-          path: images.txt
- 
       - name: Tear down sandbox
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete
 

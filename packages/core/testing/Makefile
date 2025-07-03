@@ -55,6 +55,11 @@ collect-report: ## Collect the test report from the sandbox.
 	mkdir -p ../../../_out
 	docker cp "${SANDBOX_NAME}:/workspace/cozyreport.tgz" ../../../_out/cozyreport.tgz
 
+collect-images: ## Collect the list of images used in the sandbox.
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/collect-images.sh'
+	mkdir -p ../../../_out
+	docker cp "${SANDBOX_NAME}":/workspace/images.txt ../../../_out/images.txt
+
 delete: ## Remove sandbox from existing Kubernetes cluster.
 	docker rm -f "${SANDBOX_NAME}" || true
 
@@ -72,7 +77,3 @@ apply: delete
 		"$$(yq .e2e.image values.yaml)" \
 		--timeout 30m
 	docker cp "${ROOT_DIR}/." "${SANDBOX_NAME}":/workspace
-
-list-images:
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/list-images.sh'
-	docker cp "${SANDBOX_NAME}":/workspace/images.txt ../../../images.txt
