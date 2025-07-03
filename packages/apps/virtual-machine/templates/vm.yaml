@@ -39,6 +39,12 @@ spec:
         storageClassName: {{ . }}
         {{- end }}
       source:
+        {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" (printf "vm-image-%s" .Values.systemDisk.image) }}
+        {{- if $dv }}
+        pvc:
+          name: vm-image-{{ .Values.systemDisk.image }}
+          namespace: cozy-public
+        {{- else }}
         http:
           {{- if eq .Values.systemDisk.image "cirros" }}
           url: https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img
@@ -51,6 +57,7 @@ spec:
           {{- else if eq .Values.systemDisk.image "talos" }}
           url: https://github.com/siderolabs/talos/releases/download/v1.7.6/nocloud-amd64.raw.xz
           {{- end }}
+        {{- end }}
 
   template:
     metadata:

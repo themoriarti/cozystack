@@ -148,7 +148,8 @@ virtual-machine 0.12.0 HEAD
 vm-disk 0.1.0 d971f2ff
 vm-disk 0.1.1 6130f43d
 vm-disk 0.1.2 632224a3
-vm-disk 0.2.0 HEAD
+vm-disk 0.2.0 4369b031
+vm-disk 0.3.0 HEAD
 vm-instance 0.1.0 1ec10165
 vm-instance 0.2.0 84f3ccc0
 vm-instance 0.3.0 4e68e65c
