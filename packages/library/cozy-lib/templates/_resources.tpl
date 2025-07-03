@@ -116,3 +116,44 @@
 {{-   end }}
 {{-   $output | toYaml }}
 {{- end  }}
+
+{{- /*
+  The defaultingSanitize helper takes a 3-element list as its argument:
+  {{- include "cozy-lib.resources.defaultingSanitize" list (
+      .Values.resourcesPreset
+      .Values.resources
+      $
+  ) }}
+  and returns the same result as
+  {{- include "cozy-lib.resources.sanitize" list (
+      .Values.resources
+      $
+  ) }}, however if cpu, memory, or ephemeral storage is not specified in
+  .Values.resources, it is filled from the resource presets.
+
+  Example input (cpuAllocationRatio = 10):
+  ========================================
+  resources:
+    cpu: "1"
+  resourcesPreset: "nano"
+
+  Example output:
+  ===============
+  resources:
+    limits:
+      cpu: "1" # == user input
+      ephemeral-storage: 2Gi # == default ephemeral storage limit
+      memory: 128Mi # from "nano"
+    requests:
+      cpu: 100m # == 1 / 10
+      ephemeral-storage: 50Mi # == default ephemeral storage request
+      memory: 128Mi # memory request == limit
+*/}}
+{{- define "cozy-lib.resources.defaultingSanitize" }}
+{{-   $preset := index . 0 }}
+{{-   $resources := index . 1 }}
+{{-   $global := index . 2 }}
+{{-   $presetMap := include "cozy-lib.resources.unsanitizedPreset" $preset | fromYaml }}
+{{-   $mergedMap := deepCopy $resources | mergeOverwrite $presetMap }}
+{{-   include "cozy-lib.resources.sanitize" (list $mergedMap $global) }}
+{{- end }}
