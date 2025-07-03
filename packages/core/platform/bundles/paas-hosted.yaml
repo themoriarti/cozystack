@@ -230,3 +230,11 @@ releases:
   namespace: cozy-vertical-pod-autoscaler
   privileged: true
   dependsOn: []
+
+- name: velero
+  releaseName: velero
+  chart: cozy-velero
+  namespace: cozy-velero
+  privileged: true
+  optional: true
+  dependsOn: [monitoring-agents]

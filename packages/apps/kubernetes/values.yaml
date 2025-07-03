@@ -105,6 +105,15 @@ addons:
     ##
     valuesOverride: {}
 
+  ## Velero
+  ##
+  velero:
+    ## @param addons.velero.enabled Enable velero for backup and restore k8s cluster.
+    ## @param addons.velero.valuesOverride Custom values to override
+    ##
+    enabled: false
+    valuesOverride: {}
+
 ## @section Kubernetes Control Plane Configuration
 ##
 
