@@ -98,17 +98,17 @@
 {{-       $vcpuRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
 {{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
 {{-       $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
-{{-       $_ := set $output.limits $k $v }}
+{{-       $_ := set $output.limits $k ($v | toString) }}
 {{-     else if eq $k "memory" }}
 {{-       $vMemoryRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
 {{-       $memoryRequestF64 := divf $vMemoryRequestF64 $memoryAllocationRatio }}
-{{-       $_ := set $output.requests $k ($memoryRequestF64 | int) }}
-{{-       $_ := set $output.limits $k $v }}
+{{-       $_ := set $output.requests $k ($memoryRequestF64 | int | toString ) }}
+{{-       $_ := set $output.limits $k ($v | toString) }}
 {{-     else if eq $k "ephemeral-storage" }}
 {{-       $vEphemeralStorageRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
 {{-       $ephemeralStorageRequestF64 := divf $vEphemeralStorageRequestF64 $ephemeralStorageAllocationRatio }}
-{{-       $_ := set $output.requests $k ($ephemeralStorageRequestF64 | int) }}
-{{-       $_ := set $output.limits $k $v }}
+{{-       $_ := set $output.requests $k ($ephemeralStorageRequestF64 | int | toString) }}
+{{-       $_ := set $output.limits $k ($v | toString) }}
 {{-     else }}
 {{-       $_ := set $output.requests $k $v }}
 {{-       $_ := set $output.limits $k $v }}
@@ -156,4 +156,19 @@
 {{-   $presetMap := include "cozy-lib.resources.unsanitizedPreset" $preset | fromYaml }}
 {{-   $mergedMap := deepCopy $resources | mergeOverwrite $presetMap }}
 {{-   include "cozy-lib.resources.sanitize" (list $mergedMap $global) }}
+{{- end }}
+
+{{- /*
+    javaHeap takes a .Values.resources and returns Java heap settings based on
+    memory requests and limits. -Xmx is set to 75% of memory limits, -Xms is
+    set to the lesser of requests or 25% of limits. Accepts only sanitized
+    resource maps.
+*/}}
+{{- define "cozy-lib.resources.javaHeap" }}
+{{-   $memoryRequestInt := include "cozy-lib.resources.toFloat" .requests.memory | float64 | int64 }}
+{{-   $memoryLimitInt := include "cozy-lib.resources.toFloat" .limits.memory | float64 | int64 }}
+{{- /* 4194304 is 4Mi */}}
+{{-   $xmxMi := div (mul $memoryLimitInt 3) 4194304 }}
+{{-   $xmsMi := min (div $memoryLimitInt 4194304) (div $memoryRequestInt 1048576) }}
+{{-   printf `-Xms%dm -Xmx%dm` $xmsMi $xmxMi }}
 {{- end }}
