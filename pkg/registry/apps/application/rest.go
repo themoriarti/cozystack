@@ -76,6 +76,7 @@ type REST struct {
 	gvr           schema.GroupVersionResource
 	gvk           schema.GroupVersionKind
 	kindName      string
+	singularName  string
 	releaseConfig config.ReleaseConfig
 }
 
@@ -93,6 +94,7 @@ func NewREST(dynamicClient dynamic.Interface, config *config.Resource) *REST {
 			Version: "v1alpha1",
 		}.WithKind(config.Application.Kind),
 		kindName:      config.Application.Kind,
+		singularName:  config.Application.Singular,
 		releaseConfig: config.Release,
 	}
 }
@@ -104,7 +106,7 @@ func (r *REST) NamespaceScoped() bool {
 
 // GetSingularName returns the singular name of the resource
 func (r *REST) GetSingularName() string {
-	return r.gvr.Resource
+	return r.singularName
 }
 
 // Create handles the creation of a new Application by converting it to a HelmRelease
