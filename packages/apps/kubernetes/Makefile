@@ -64,6 +64,8 @@ image-kubevirt-csi-driver:
 		--load=$(LOAD)
 	echo "$(REGISTRY)/kubevirt-csi-driver:$(call settag,$(KUBERNETES_PKG_TAG))@$$(yq e '."containerimage.digest"' images/kubevirt-csi-driver.json -o json -r)" \
 		> images/kubevirt-csi-driver.tag
+	IMAGE=$$(cat images/kubevirt-csi-driver.tag) \
+		yq -i '.csiDriver.image = strenv(IMAGE)' ../../system/kubevirt-csi-node/values.yaml
 	rm -f images/kubevirt-csi-driver.json
 
 
