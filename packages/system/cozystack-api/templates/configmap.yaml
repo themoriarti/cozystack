@@ -10,6 +10,7 @@ data:
         kind: Bucket
         singular: bucket
         plural: buckets
+        openAPISchema: {{ .Files.Get "openapi-schemas/bucket.json" | fromJson | toJson | quote }}
       release:
         prefix: bucket-
         labels:
@@ -24,6 +25,7 @@ data:
         kind: ClickHouse
         singular: clickhouse
         plural: clickhouses
+        openAPISchema: {{ .Files.Get "openapi-schemas/clickhouse.json" | fromJson | toJson | quote }}
       release:
         prefix: clickhouse-
         labels:
@@ -38,6 +40,7 @@ data:
         kind: HTTPCache
         singular: httpcache
         plural: httpcaches
+        openAPISchema: {{ .Files.Get "openapi-schemas/http-cache.json" | fromJson | toJson | quote }}
       release:
         prefix: http-cache-
         labels:
@@ -52,6 +55,7 @@ data:
         kind: NATS
         singular: nats
         plural: natses
+        openAPISchema: {{ .Files.Get "openapi-schemas/nats.json" | fromJson | toJson | quote }}
       release:
         prefix: nats-
         labels:
@@ -66,6 +70,7 @@ data:
         kind: TCPBalancer
         singular: tcpbalancer
         plural: tcpbalancers
+        openAPISchema: {{ .Files.Get "openapi-schemas/tcp-balancer.json" | fromJson | toJson | quote }}
       release:
         prefix: tcp-balancer-
         labels:
@@ -80,6 +85,7 @@ data:
         kind: VirtualMachine
         singular: virtualmachine
         plural: virtualmachines
+        openAPISchema: {{ .Files.Get "openapi-schemas/virtual-machine.json" | fromJson | toJson | quote }}
       release:
         prefix: virtual-machine-
         labels:
@@ -94,6 +100,7 @@ data:
         kind: VPN
         singular: vpn
         plural: vpns
+        openAPISchema: {{ .Files.Get "openapi-schemas/vpn.json" | fromJson | toJson | quote }}
       release:
         prefix: vpn-
         labels:
@@ -108,6 +115,7 @@ data:
         kind: MySQL
         singular: mysql
         plural: mysqls
+        openAPISchema: {{ .Files.Get "openapi-schemas/mysql.json" | fromJson | toJson | quote }}
       release:
         prefix: mysql-
         labels:
@@ -122,6 +130,7 @@ data:
         kind: Tenant
         singular: tenant
         plural: tenants
+        openAPISchema: {{ .Files.Get "openapi-schemas/tenant.json" | fromJson | toJson | quote }}
       release:
         prefix: tenant-
         labels:
@@ -136,6 +145,7 @@ data:
         kind: Kubernetes
         singular: kubernetes
         plural: kuberneteses
+        openAPISchema: {{ .Files.Get "openapi-schemas/kubernetes.json" | fromJson | toJson | quote }}
       release:
         prefix: kubernetes-
         labels:
@@ -150,6 +160,7 @@ data:
         kind: Redis
         singular: redis
         plural: redises
+        openAPISchema: {{ .Files.Get "openapi-schemas/redis.json" | fromJson | toJson | quote }}
       release:
         prefix: redis-
         labels:
@@ -164,6 +175,7 @@ data:
         kind: RabbitMQ
         singular: rabbitmq
         plural: rabbitmqs
+        openAPISchema: {{ .Files.Get "openapi-schemas/rabbitmq.json" | fromJson | toJson | quote }}
       release:
         prefix: rabbitmq-
         labels:
@@ -178,6 +190,7 @@ data:
         kind: Postgres
         singular: postgres
         plural: postgreses
+        openAPISchema: {{ .Files.Get "openapi-schemas/postgres.json" | fromJson | toJson | quote }}
       release:
         prefix: postgres-
         labels:
@@ -192,6 +205,7 @@ data:
         kind: FerretDB
         singular: ferretdb
         plural: ferretdb
+        openAPISchema: {{ .Files.Get "openapi-schemas/ferretdb.json" | fromJson | toJson | quote }}
       release:
         prefix: ferretdb-
         labels:
@@ -206,6 +220,7 @@ data:
         kind: Kafka
         singular: kafka
         plural: kafkas
+        openAPISchema: {{ .Files.Get "openapi-schemas/kafka.json" | fromJson | toJson | quote }}
       release:
         prefix: kafka-
         labels:
@@ -220,6 +235,7 @@ data:
         kind: VMDisk
         plural: vmdisks
         singular: vmdisk
+        openAPISchema: {{ .Files.Get "openapi-schemas/vm-disk.json" | fromJson | toJson | quote }}
       release:
         prefix: vm-disk-
         labels:
@@ -234,6 +250,7 @@ data:
         kind: VMInstance
         plural: vminstances
         singular: vminstance
+        openAPISchema: {{ .Files.Get "openapi-schemas/vm-instance.json" | fromJson | toJson | quote }}
       release:
         prefix: vm-instance-
         labels:
@@ -248,6 +265,7 @@ data:
         kind: Monitoring
         plural: monitorings
         singular: monitoring
+        openAPISchema: {{ .Files.Get "openapi-schemas/monitoring.json" | fromJson | toJson | quote }}
       release:
         prefix: ""
         labels:
@@ -262,6 +280,7 @@ data:
         kind: Etcd
         plural: etcds
         singular: etcd
+        openAPISchema: {{ .Files.Get "openapi-schemas/etcd.json" | fromJson | toJson | quote }}
       release:
         prefix: ""
         labels:
@@ -276,6 +295,7 @@ data:
         kind: Ingress
         plural: ingresses
         singular: ingress
+        openAPISchema: {{ .Files.Get "openapi-schemas/ingress.json" | fromJson | toJson | quote }}
       release:
         prefix: ""
         labels:
@@ -290,6 +310,7 @@ data:
         kind: SeaweedFS
         plural: seaweedfses
         singular: seaweedfs
+        openAPISchema: {{ .Files.Get "openapi-schemas/seaweedfs.json" | fromJson | toJson | quote }}
       release:
         prefix: ""
         labels:
@@ -304,6 +325,7 @@ data:
         kind: BootBox
         plural: bootboxes
         singular: bootbox
+        openAPISchema: {{ .Files.Get "openapi-schemas/bootbox.json" | fromJson | toJson | quote }}
       release:
         prefix: ""
         labels:
@@ -318,6 +340,7 @@ data:
         kind: Info
         plural: infos
         singular: info
+        openAPISchema: {{ .Files.Get "openapi-schemas/info.json" | fromJson | toJson | quote }}
       release:
         prefix: ""
         labels:
