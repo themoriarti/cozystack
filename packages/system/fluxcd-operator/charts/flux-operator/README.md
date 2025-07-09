@@ -1,6 +1,6 @@
 # flux-operator
 
-![Version: 0.23.0](https://img.shields.io/badge/Version-0.23.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.23.0](https://img.shields.io/badge/AppVersion-v0.23.0-informational?style=flat-square)
+![Version: 0.24.0](https://img.shields.io/badge/Version-0.24.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.24.0](https://img.shields.io/badge/AppVersion-v0.24.0-informational?style=flat-square)
 
 The [Flux Operator](https://github.com/controlplaneio-fluxcd/flux-operator) provides a
 declarative API for the installation and upgrade of CNCF [Flux](https://fluxcd.io) and the
@@ -38,6 +38,8 @@ see the Flux Operator [documentation](https://fluxcd.control-plane.io/operator/)
 | commonLabels | object | `{}` | Common labels to add to all deployed objects including pods. |
 | extraArgs | list | `[]` | Container extra arguments. |
 | extraEnvs | list | `[]` | Container extra environment variables. |
+| extraVolumeMounts | list | `[]` | Container extra volume mounts. |
+| extraVolumes | list | `[]` | Pod extra volumes. |
 | fullnameOverride | string | `""` |  |
 | hostNetwork | bool | `false` | If `true`, the container ports (`8080` and `8081`) are exposed on the host network. |
 | image | object | `{"imagePullPolicy":"IfNotPresent","pullSecrets":[],"repository":"ghcr.io/controlplaneio-fluxcd/flux-operator","tag":""}` | Container image settings. The image tag defaults to the chart appVersion. |
