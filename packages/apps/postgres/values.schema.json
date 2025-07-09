@@ -62,7 +62,7 @@
             "properties": {
                 "enabled": {
                     "type": "boolean",
-                    "description": "Enable pereiodic backups",
+                    "description": "Enable regular backups",
                     "default": false
                 },
                 "schedule": {
@@ -72,27 +72,27 @@
                 },
                 "retentionPolicy": {
                     "type": "string",
-                    "description": "The retention policy",
+                    "description": "Retention policy",
                     "default": "30d"
                 },
                 "destinationPath": {
                     "type": "string",
-                    "description": "The path where to store the backup (i.e. s3://bucket/path/to/folder)",
-                    "default": "s3://BUCKET_NAME/"
+                    "description": "Path to store the backup (i.e. s3://bucket/path/to/folder)",
+                    "default": "s3://bucket/path/to/folder/"
                 },
                 "endpointURL": {
                     "type": "string",
-                    "description": "Endpoint to be used to upload data to the cloud",
+                    "description": "S3 Endpoint used to upload data to the cloud",
                     "default": "http://minio-gateway-service:9000"
                 },
                 "s3AccessKey": {
                     "type": "string",
-                    "description": "The access key for S3, used for authentication",
+                    "description": "Access key for S3, used for authentication",
                     "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu"
                 },
                 "s3SecretKey": {
                     "type": "string",
-                    "description": "The secret key for S3, used for authentication",
+                    "description": "Secret key for S3, used for authentication",
                     "default": "ju3eum4dekeich9ahM1te8waeGai0oog"
                 }
             }
@@ -102,17 +102,17 @@
             "properties": {
                 "enabled": {
                     "type": "boolean",
-                    "description": "Restore cluster from backup",
+                    "description": "Restore database cluster from a backup",
                     "default": false
                 },
                 "recoveryTime": {
                     "type": "string",
-                    "description": "Time stamp up to which recovery will proceed, expressed in RFC 3339 format, if empty, will restore latest",
+                    "description": "Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest",
                     "default": ""
                 },
                 "oldName": {
                     "type": "string",
-                    "description": "Name of cluster before deleting",
+                    "description": "Name of database cluster before deleting",
                     "default": ""
                 }
             }

@@ -59,17 +59,17 @@ databases: {}
 
 ## @section Backup parameters
 
-## @param backup.enabled Enable pereiodic backups
+## @param backup.enabled Enable regular backups
 ## @param backup.schedule Cron schedule for automated backups
-## @param backup.retentionPolicy The retention policy
-## @param backup.destinationPath The path where to store the backup (i.e. s3://bucket/path/to/folder)
-## @param backup.endpointURL Endpoint to be used to upload data to the cloud
-## @param backup.s3AccessKey The access key for S3, used for authentication
-## @param backup.s3SecretKey The secret key for S3, used for authentication
+## @param backup.retentionPolicy Retention policy
+## @param backup.destinationPath Path to store the backup (i.e. s3://bucket/path/to/folder)
+## @param backup.endpointURL S3 Endpoint used to upload data to the cloud
+## @param backup.s3AccessKey Access key for S3, used for authentication
+## @param backup.s3SecretKey Secret key for S3, used for authentication
 backup:
   enabled: false
   retentionPolicy: 30d
-  destinationPath: s3://BUCKET_NAME/
+  destinationPath: s3://bucket/path/to/folder/
   endpointURL: http://minio-gateway-service:9000
   schedule: "0 2 * * * *"
   s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
@@ -77,9 +77,9 @@ backup:
 
 ## @section Bootstrap parameters
 
-## @param bootstrap.enabled Restore cluster from backup
-## @param bootstrap.recoveryTime Time stamp up to which recovery will proceed, expressed in RFC 3339 format, if empty, will restore latest
-## @param bootstrap.oldName Name of cluster before deleting
+## @param bootstrap.enabled Restore database cluster from a backup
+## @param bootstrap.recoveryTime Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest
+## @param bootstrap.oldName Name of database cluster before deleting
 ##
 bootstrap:
   enabled: false
