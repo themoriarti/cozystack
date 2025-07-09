@@ -16,6 +16,7 @@ import (
 const (
 	baseRef     = "com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1.Application"
 	baseListRef = baseRef + "List"
+	smp         = "application/strategic-merge-patch+json"
 )
 
 func deepCopySchema(in *spec.Schema) *spec.Schema {
@@ -101,21 +102,20 @@ func patchSpec(target *spec.Schema, raw string) error {
 func buildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*spec3.OpenAPI, error) {
 
 	return func(doc *spec3.OpenAPI) (*spec3.OpenAPI, error) {
+
+		// Replace the basic "Application" schema with the user-supplied kinds.
 		if doc.Components == nil {
 			doc.Components = &spec3.Components{}
 		}
 		if doc.Components.Schemas == nil {
 			doc.Components.Schemas = map[string]*spec.Schema{}
 		}
-
 		base, ok := doc.Components.Schemas[baseRef]
 		if !ok {
 			return doc, fmt.Errorf("base schema %q not found", baseRef)
 		}
-
 		for kind, raw := range kindSchemas {
 			ref := fmt.Sprintf("%s.%s", "com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1", kind)
-
 			s := doc.Components.Schemas[ref]
 			if s == nil { // first time – clone "Application"
 				s = deepCopySchema(base)
@@ -128,7 +128,6 @@ func buildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*sp
 				}
 				doc.Components.Schemas[ref] = s
 			}
-
 			container := findSpecContainer(s)
 			if container == nil { // fallback: use the root
 				container = s
@@ -137,9 +136,19 @@ func buildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*sp
 				return nil, fmt.Errorf("kind %s: %w", kind, err)
 			}
 		}
-
 		delete(doc.Components.Schemas, baseRef)
 		delete(doc.Components.Schemas, baseListRef)
+
+		// Disable strategic-merge-patch+json support in all PATCH operations
+		for p, pi := range doc.Paths.Paths {
+			if pi == nil || pi.Patch == nil || pi.Patch.RequestBody == nil {
+				continue
+			}
+			delete(pi.Patch.RequestBody.Content, smp)
+
+			doc.Paths.Paths[p] = pi
+		}
+
 		return doc, nil
 	}
 }
@@ -150,15 +159,15 @@ func buildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*sp
 func buildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spec.Swagger, error) {
 
 	return func(sw *spec.Swagger) (*spec.Swagger, error) {
+
+		// Replace the basic "Application" schema with the user-supplied kinds.
 		defs := sw.Definitions
 		base, ok := defs[baseRef]
 		if !ok {
 			return sw, fmt.Errorf("base schema %q not found", baseRef)
 		}
-
 		for kind, raw := range kindSchemas {
 			ref := fmt.Sprintf("%s.%s", "com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1", kind)
-
 			s := deepCopySchema(&base)
 			s.Extensions = map[string]interface{}{
 				"x-kubernetes-group-version-kind": []interface{}{
@@ -167,13 +176,10 @@ func buildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spe
 					},
 				},
 			}
-
 			if err := patchSpec(s, raw); err != nil {
 				return nil, fmt.Errorf("kind %s: %w", kind, err)
 			}
-
 			defs[ref] = *s
-
 			// clone the List variant
 			listName := ref + "List"
 			listSrc := defs[baseListRef]
@@ -193,9 +199,23 @@ func buildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spe
 			}
 			defs[listName] = *listCopy
 		}
-
 		delete(defs, baseRef)
 		delete(defs, baseListRef)
+
+		// Disable strategic-merge-patch+json support in all PATCH operations
+		for p, op := range sw.Paths.Paths {
+			if op.Patch != nil && len(op.Patch.Consumes) > 0 {
+				var out []string
+				for _, c := range op.Patch.Consumes {
+					if c != smp {
+						out = append(out, c)
+					}
+				}
+				op.Patch.Consumes = out
+				sw.Paths.Paths[p] = op
+			}
+		}
+
 		return sw, nil
 	}
 }
