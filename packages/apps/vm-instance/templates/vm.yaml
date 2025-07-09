@@ -54,24 +54,24 @@ spec:
           disks:
           {{- range $i, $disk := .Values.disks }}
           - name: disk-{{ $disk.name }}
-            {{- $disk := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace (printf "vm-disk-%s" $disk.name) }}
-            {{- if $disk }}
-            {{- if and (hasKey $disk.metadata.annotations "vm-disk.cozystack.io/optical") (eq (index $disk.metadata.annotations "vm-disk.cozystack.io/optical") "true") }}
-            cdrom: {}
+            {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace (printf "vm-disk-%s" $disk.name) }}
+            {{- if $dv }}
+            {{- if and (hasKey $dv.metadata.annotations "vm-disk.cozystack.io/optical") (eq (index $dv.metadata.annotations "vm-disk.cozystack.io/optical") "true") }}
+            cdrom:
             {{- else }}
-            disk: {}
+            disk:
             {{- end }}
-            {{- if eq $i 0 }}
-            bootOrder: 1
-            {{- end }}
+              {{- with $disk.bus }}
+              bus: {{ . }}
+              {{- end }}
+            bootOrder: {{ add $i 1 }}
             {{- else }}
             {{-   fail (printf "Specified disk not exists in cluster: %s" .name) }}
             {{- end }}
           {{- end }}
           {{- if or .Values.sshKeys .Values.cloudInit }}
           - name: cloudinitdisk
-            disk:
-              bus: virtio
+            disk: {}
           {{- end }}
           interfaces:
           - name: default
