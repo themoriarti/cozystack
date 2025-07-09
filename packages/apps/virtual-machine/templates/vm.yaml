@@ -92,7 +92,7 @@ spec:
           - disk:
               bus: scsi
             name: systemdisk
-          {{- if .Values.sshKeys }}
+          {{- if or .Values.cloudInit .Values.sshKeys }}
           - disk:
               bus: virtio
             name: cloudinitdisk
@@ -122,28 +122,11 @@ spec:
         - name: systemdisk
           dataVolume:
             name: {{ include "virtual-machine.fullname" . }}
-
-        {{- if and .Values.sshKeys .Values.cloudInit }}
+        {{- if or .Values.cloudInit .Values.sshKeys }}
         - name: cloudinitdisk
           cloudInitNoCloud:
             secretRef:
               name: {{ include "virtual-machine.fullname" . }}-cloud-init
-        {{- else if .Values.sshKeys }}
-        - name: cloudinitdisk
-          cloudInitNoCloud:
-            userData: |
-              {{ printf "%s" "#cloud-config" }}
-              ssh_authorized_keys:
-                {{- range .Values.sshKeys }}
-                - {{ . }}
-                {{- end }}
-              chpasswd:
-                expire: false
-        {{- else }}
-        - name: cloudinitdisk
-          cloudInitNoCloud:
-            userData: |
-              {{ printf "%s" "#cloud-config" }}
         {{- end }}
 
       networks:
