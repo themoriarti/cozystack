@@ -5,6 +5,7 @@ metadata:
   name: {{ .Release.Name }}-vpn
   labels:
     app: {{ .Release.Name }}-vpn
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   {{- if .Values.externalIPs }}
   externalIPs:

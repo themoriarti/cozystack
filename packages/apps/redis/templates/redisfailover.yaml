@@ -25,23 +25,18 @@ metadata:
 spec:
   sentinel:
     replicas: 3
-    {{- if .Values.resources }}
-    resources: {{- toYaml .Values.resources | nindent 6 }}
-    {{- else if ne .Values.resourcesPreset "none" }}
-    resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 6 }}
-    {{- end }}
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
   redis:
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
     replicas: {{ .Values.replicas }}
-    {{- if .Values.resources }}
-    resources: {{- toYaml .Values.resources | nindent 6 }}
-    {{- else if ne .Values.resourcesPreset "none" }}
-    resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 6 }}
-    {{- end }}
     {{- with .Values.size }}
     storage:
       persistentVolumeClaim:
         metadata:
           name: redisfailover-persistent-data
+          labels:
+            app.kubernetes.io/component: redis
+            app.kubernetes.io/instance: {{ $.Release.Name }}
         spec:
           accessModes:
             - ReadWriteOnce

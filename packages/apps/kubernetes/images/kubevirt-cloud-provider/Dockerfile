@@ -8,7 +8,7 @@ ENV GOARCH=$TARGETARCH
 
 RUN git clone https://github.com/kubevirt/cloud-provider-kubevirt /go/src/kubevirt.io/cloud-provider-kubevirt \
  && cd /go/src/kubevirt.io/cloud-provider-kubevirt \
- && git checkout 443a1fe
+ && git checkout a0acf33
 
 WORKDIR /go/src/kubevirt.io/cloud-provider-kubevirt
 

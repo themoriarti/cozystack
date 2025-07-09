@@ -4,22 +4,22 @@
     "properties": {
         "size": {
             "type": "string",
-            "description": "Persistent Volume size",
+            "description": "Size of Persistent Volume for data",
             "default": "10Gi"
         },
         "logStorageSize": {
             "type": "string",
-            "description": "Persistent Volume for logs size",
+            "description": "Size of Persistent Volume for logs",
             "default": "2Gi"
         },
         "shards": {
             "type": "number",
-            "description": "Number of Clickhouse replicas",
+            "description": "Number of Clickhouse shards",
             "default": 1
         },
         "replicas": {
             "type": "number",
-            "description": "Number of Clickhouse shards",
+            "description": "Number of Clickhouse replicas",
             "default": 2
         },
         "storageClass": {
@@ -29,7 +29,7 @@
         },
         "logTTL": {
             "type": "number",
-            "description": "for query_log and query_thread_log",
+            "description": "TTL (expiration time) for query_log and query_thread_log",
             "default": 15
         },
         "backup": {
@@ -37,17 +37,17 @@
             "properties": {
                 "enabled": {
                     "type": "boolean",
-                    "description": "Enable pereiodic backups",
+                    "description": "Enable periodic backups",
                     "default": false
                 },
                 "s3Region": {
                     "type": "string",
-                    "description": "The AWS S3 region where backups are stored",
+                    "description": "AWS S3 region where backups are stored",
                     "default": "us-east-1"
                 },
                 "s3Bucket": {
                     "type": "string",
-                    "description": "The S3 bucket used for storing backups",
+                    "description": "S3 bucket used for storing backups",
                     "default": "s3.example.org/clickhouse-backups"
                 },
                 "schedule": {
@@ -57,35 +57,45 @@
                 },
                 "cleanupStrategy": {
                     "type": "string",
-                    "description": "The strategy for cleaning up old backups",
+                    "description": "Retention strategy for cleaning up old backups",
                     "default": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
                 },
                 "s3AccessKey": {
                     "type": "string",
-                    "description": "The access key for S3, used for authentication",
+                    "description": "Access key for S3, used for authentication",
                     "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu"
                 },
                 "s3SecretKey": {
                     "type": "string",
-                    "description": "The secret key for S3, used for authentication",
+                    "description": "Secret key for S3, used for authentication",
                     "default": "ju3eum4dekeich9ahM1te8waeGai0oog"
                 },
                 "resticPassword": {
                     "type": "string",
-                    "description": "The password for Restic backup encryption",
+                    "description": "Password for Restic backup encryption",
                     "default": "ChaXoveekoh6eigh4siesheeda2quai0"
                 }
             }
         },
         "resources": {
             "type": "object",
-            "description": "Resources",
+            "description": "Explicit CPU and memory configuration for each ClickHouse replica. When left empty, the preset defined in `resourcesPreset` is applied.",
             "default": {}
         },
         "resourcesPreset": {
             "type": "string",
-            "description": "Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).",
-            "default": "nano"
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "default": "small",
+            "enum": [
+                "none",
+                "nano",
+                "micro",
+                "small",
+                "medium",
+                "large",
+                "xlarge",
+                "2xlarge"
+            ]
         }
     }
 }

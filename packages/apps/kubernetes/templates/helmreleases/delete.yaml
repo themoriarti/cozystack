@@ -40,6 +40,7 @@ spec:
                 {{ .Release.Name }}-fluxcd-operator
                 {{ .Release.Name }}-fluxcd
                 {{ .Release.Name }}-gpu-operator
+                {{ .Release.Name }}-velero
                 -p '{"spec": {"suspend": true}}'
                 --type=merge --field-manager=flux-client-side-apply || true
 ---
@@ -79,6 +80,8 @@ rules:
       - {{ .Release.Name }}-fluxcd-operator
       - {{ .Release.Name }}-fluxcd
       - {{ .Release.Name }}-gpu-operator
+      - {{ .Release.Name }}-velero
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

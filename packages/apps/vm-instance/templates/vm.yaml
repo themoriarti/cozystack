@@ -31,9 +31,10 @@ spec:
         {{- include "virtual-machine.labels" . | nindent 8 }}
     spec:
       domain:
-        {{- if and .Values.resources .Values.resources.cpu }}
+        {{- if and .Values.resources .Values.resources.cpu .Values.resources.sockets }}
         cpu:
           cores: {{ .Values.resources.cpu }}
+          sockets: {{ .Values.resources.sockets }}
         {{- end }}
         {{- if and .Values.resources .Values.resources.memory }}
         resources:
@@ -53,24 +54,24 @@ spec:
           disks:
           {{- range $i, $disk := .Values.disks }}
           - name: disk-{{ $disk.name }}
-            {{- $disk := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace (printf "vm-disk-%s" $disk.name) }}
-            {{- if $disk }}
-            {{- if and (hasKey $disk.metadata.annotations "vm-disk.cozystack.io/optical") (eq (index $disk.metadata.annotations "vm-disk.cozystack.io/optical") "true") }}
-            cdrom: {}
+            {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace (printf "vm-disk-%s" $disk.name) }}
+            {{- if $dv }}
+            {{- if and (hasKey $dv.metadata.annotations "vm-disk.cozystack.io/optical") (eq (index $dv.metadata.annotations "vm-disk.cozystack.io/optical") "true") }}
+            cdrom:
             {{- else }}
-            disk: {}
+            disk:
             {{- end }}
-            {{- if eq $i 0 }}
-            bootOrder: 1
-            {{- end }}
+              {{- with $disk.bus }}
+              bus: {{ . }}
+              {{- end }}
+            bootOrder: {{ add $i 1 }}
             {{- else }}
             {{-   fail (printf "Specified disk not exists in cluster: %s" .name) }}
             {{- end }}
           {{- end }}
-          {{- if or .Values.sshKeys .Values.cloudInit }}
+          {{- if or .Values.cloudInit .Values.sshKeys }}
           - name: cloudinitdisk
-            disk:
-              bus: virtio
+            disk: {}
           {{- end }}
           interfaces:
           - name: default
@@ -94,17 +95,11 @@ spec:
         dataVolume:
           name: vm-disk-{{ .name }}
       {{- end }}
-      {{- if or .Values.sshKeys .Values.cloudInit }}
+      {{- if or .Values.cloudInit .Values.sshKeys }}
       - name: cloudinitdisk
         cloudInitNoCloud:
-        {{- if .Values.cloudInit }}
           secretRef:
             name: {{ include "virtual-machine.fullname" . }}-cloud-init
-        {{- else }}
-          userData: |
-            #cloud-config
-            final_message: Cloud-init user-data was left blank intentionally.
-        {{- end }}
       {{- end }}
       networks:
       - name: default

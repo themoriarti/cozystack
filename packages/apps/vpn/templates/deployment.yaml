@@ -14,6 +14,7 @@ spec:
       labels:
         app: {{ .Release.Name }}-vpn
         name: {{ .Release.Name }}-vpn
+        app.kubernetes.io/instance: {{ .Release.Name }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
     spec:
@@ -42,11 +43,7 @@ spec:
       containers:
         - name: outline-vpn
           image: quay.io/outline/shadowbox:stable
-          {{- if .Values.resources }}
-          resources: {{- toYaml .Values.resources | nindent 10 }}
-          {{- else if ne .Values.resourcesPreset "none" }}
-          resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 10 }}
-          {{- end }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 12 }}
           ports:
             - containerPort: 40000
               protocol: TCP

@@ -99,18 +99,26 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
           registry: ghcr.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
       # Build project artifacts
       - name: Build
         if: steps.check_release.outputs.skip == 'false'
         run: make build
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
       # Commit built artifacts
       - name: Commit release artifacts
         if: steps.check_release.outputs.skip == 'false'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          git config user.name  "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.name  "cozystack-bot"
+          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
+          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          git config --unset-all http.https://github.com/.extraheader || true
           git add .
           git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" -s || echo "No changes to commit"
           git push origin HEAD || true
@@ -185,7 +193,12 @@ jobs:
       # Create release-X.Y.Z branch and push (force-update)
       - name: Create release branch
         if: steps.check_release.outputs.skip == 'false'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
+          git config user.name  "cozystack-bot"
+          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
+          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
           BRANCH="release-${GITHUB_REF#refs/tags/v}"
           git branch -f "$BRANCH"
           git push -f origin "$BRANCH"
@@ -195,6 +208,7 @@ jobs:
         if: steps.check_release.outputs.skip == 'false'
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GH_PAT }}
           script: |
             const version = context.ref.replace('refs/tags/v', '');
             const base    = '${{ steps.get_base.outputs.branch }}';

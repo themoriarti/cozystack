@@ -37,7 +37,7 @@ index 74166b5d9..4e744f8de 100644
  	klog.Infof("Initializing kubevirtEPSController")
  
 diff --git a/pkg/controller/kubevirteps/kubevirteps_controller.go b/pkg/controller/kubevirteps/kubevirteps_controller.go
-index 6f6e3d322..b56882c12 100644
+index 53388eb8e..b56882c12 100644
 --- a/pkg/controller/kubevirteps/kubevirteps_controller.go
 +++ b/pkg/controller/kubevirteps/kubevirteps_controller.go
 @@ -54,10 +54,10 @@ type Controller struct {
@@ -286,22 +286,6 @@ index 6f6e3d322..b56882c12 100644
  	for _, eps := range slicesToDelete {
  		err := c.infraClient.DiscoveryV1().EndpointSlices(eps.Namespace).Delete(context.TODO(), eps.Name, metav1.DeleteOptions{})
  		if err != nil {
-@@ -474,11 +538,11 @@ func (c *Controller) reconcileByAddressType(service *v1.Service, tenantSlices []
- 	// Create the desired port configuration
- 	var desiredPorts []discovery.EndpointPort
- 
--	for _, port := range service.Spec.Ports {
-+	for i := range service.Spec.Ports {
- 		desiredPorts = append(desiredPorts, discovery.EndpointPort{
--			Port:     &port.TargetPort.IntVal,
--			Protocol: &port.Protocol,
--			Name:     &port.Name,
-+			Port:     &service.Spec.Ports[i].TargetPort.IntVal,
-+			Protocol: &service.Spec.Ports[i].Protocol,
-+			Name:     &service.Spec.Ports[i].Name,
- 		})
- 	}
- 
 @@ -588,55 +652,114 @@ func ownedBy(endpointSlice *discovery.EndpointSlice, svc *v1.Service) bool {
  	return false
  }
@@ -437,18 +421,10 @@ index 6f6e3d322..b56882c12 100644
  
  	return nil
 diff --git a/pkg/controller/kubevirteps/kubevirteps_controller_test.go b/pkg/controller/kubevirteps/kubevirteps_controller_test.go
-index 1fb86e25f..14d92d340 100644
+index 1c97035b4..14d92d340 100644
 --- a/pkg/controller/kubevirteps/kubevirteps_controller_test.go
 +++ b/pkg/controller/kubevirteps/kubevirteps_controller_test.go
-@@ -13,6 +13,7 @@ import (
- 	"k8s.io/apimachinery/pkg/runtime"
- 	"k8s.io/apimachinery/pkg/runtime/schema"
- 	"k8s.io/apimachinery/pkg/util/intstr"
-+	"k8s.io/apimachinery/pkg/util/sets"
- 	dfake "k8s.io/client-go/dynamic/fake"
- 	"k8s.io/client-go/kubernetes/fake"
- 	"k8s.io/client-go/testing"
-@@ -189,7 +190,7 @@ func setupTestKubevirtEPSController() *testKubevirtEPSController {
+@@ -190,7 +190,7 @@ func setupTestKubevirtEPSController() *testKubevirtEPSController {
  		}: "VirtualMachineInstanceList",
  	})
  
@@ -457,83 +433,87 @@ index 1fb86e25f..14d92d340 100644
  
  	err := controller.Init()
  	if err != nil {
-@@ -686,5 +687,229 @@ var _ = g.Describe("KubevirtEPSController", g.Ordered, func() {
- 				return false, err
- 			}).Should(BeTrue(), "EndpointSlice in infra cluster should be recreated by the controller after deletion")
- 		})
-+
-+		g.It("Should correctly handle multiple unique ports in EndpointSlice", func() {
-+			// Create a VMI in the infra cluster
-+			createAndAssertVMI("worker-0-test", "ip-10-32-5-13", "123.45.67.89")
-+
-+			// Create an EndpointSlice in the tenant cluster
-+			createAndAssertTenantSlice("test-epslice", "tenant-service-name", discoveryv1.AddressTypeIPv4,
-+				*createPort("http", 80, v1.ProtocolTCP),
-+				[]discoveryv1.Endpoint{*createEndpoint("123.45.67.89", "worker-0-test", true, true, false)})
-+
+@@ -697,51 +697,43 @@ var _ = g.Describe("KubevirtEPSController", g.Ordered, func() {
+ 				*createPort("http", 80, v1.ProtocolTCP),
+ 				[]discoveryv1.Endpoint{*createEndpoint("123.45.67.89", "worker-0-test", true, true, false)})
+ 
+-			// Define several unique ports for the Service
 +			// Define multiple ports for the Service
-+			servicePorts := []v1.ServicePort{
-+				{
+ 			servicePorts := []v1.ServicePort{
+ 				{
+-					Name:        "client",
+-					Protocol:    v1.ProtocolTCP,
+-					Port:        10001,
+-					TargetPort:  intstr.FromInt(30396),
+-					NodePort:    30396,
+-					AppProtocol: nil,
 +					Name:       "client",
 +					Protocol:   v1.ProtocolTCP,
 +					Port:       10001,
 +					TargetPort: intstr.FromInt(30396),
 +					NodePort:   30396,
-+				},
-+				{
+ 				},
+ 				{
+-					Name:        "dashboard",
+-					Protocol:    v1.ProtocolTCP,
+-					Port:        8265,
+-					TargetPort:  intstr.FromInt(31003),
+-					NodePort:    31003,
+-					AppProtocol: nil,
 +					Name:       "dashboard",
 +					Protocol:   v1.ProtocolTCP,
 +					Port:       8265,
 +					TargetPort: intstr.FromInt(31003),
 +					NodePort:   31003,
-+				},
-+				{
+ 				},
+ 				{
+-					Name:        "metrics",
+-					Protocol:    v1.ProtocolTCP,
+-					Port:        8080,
+-					TargetPort:  intstr.FromInt(30452),
+-					NodePort:    30452,
+-					AppProtocol: nil,
 +					Name:       "metrics",
 +					Protocol:   v1.ProtocolTCP,
 +					Port:       8080,
 +					TargetPort: intstr.FromInt(30452),
 +					NodePort:   30452,
-+				},
-+			}
-+
-+			createAndAssertInfraServiceLB("infra-multiport-service", "tenant-service-name", "test-cluster",
+ 				},
+ 			}
+ 
+-			// Create a Service with the first port
+ 			createAndAssertInfraServiceLB("infra-multiport-service", "tenant-service-name", "test-cluster",
+-				servicePorts[0],
+-				v1.ServiceExternalTrafficPolicyLocal)
 +				servicePorts[0], v1.ServiceExternalTrafficPolicyLocal)
-+
-+			svc, err := testVals.infraClient.CoreV1().Services(infraNamespace).Get(context.TODO(), "infra-multiport-service", metav1.GetOptions{})
-+			Expect(err).To(BeNil())
-+
-+			svc.Spec.Ports = servicePorts
-+			_, err = testVals.infraClient.CoreV1().Services(infraNamespace).Update(context.TODO(), svc, metav1.UpdateOptions{})
-+			Expect(err).To(BeNil())
-+
-+			var epsListMultiPort *discoveryv1.EndpointSliceList
-+
-+			Eventually(func() (bool, error) {
-+				epsListMultiPort, err = testVals.infraClient.DiscoveryV1().EndpointSlices(infraNamespace).List(context.TODO(), metav1.ListOptions{})
-+				if len(epsListMultiPort.Items) != 1 {
-+					return false, err
-+				}
-+
-+				createdSlice := epsListMultiPort.Items[0]
-+				expectedPortNames := []string{"client", "dashboard", "metrics"}
-+				foundPortNames := []string{}
-+
-+				for _, port := range createdSlice.Ports {
-+					if port.Name != nil {
-+						foundPortNames = append(foundPortNames, *port.Name)
-+					}
-+				}
-+
-+				if len(foundPortNames) != len(expectedPortNames) {
-+					return false, err
-+				}
-+
-+				portSet := sets.NewString(foundPortNames...)
-+				expectedPortSet := sets.NewString(expectedPortNames...)
-+				return portSet.Equal(expectedPortSet), err
-+			}).Should(BeTrue(), "EndpointSlice should contain all unique ports from the Service without duplicates")
-+		})
-+
+ 
+-			// Update the Service by adding the remaining ports
+ 			svc, err := testVals.infraClient.CoreV1().Services(infraNamespace).Get(context.TODO(), "infra-multiport-service", metav1.GetOptions{})
+ 			Expect(err).To(BeNil())
+ 
+ 			svc.Spec.Ports = servicePorts
+-
+ 			_, err = testVals.infraClient.CoreV1().Services(infraNamespace).Update(context.TODO(), svc, metav1.UpdateOptions{})
+ 			Expect(err).To(BeNil())
+ 
+ 			var epsListMultiPort *discoveryv1.EndpointSliceList
+ 
+-			// Verify that the EndpointSlice is created with correct unique ports
+ 			Eventually(func() (bool, error) {
+ 				epsListMultiPort, err = testVals.infraClient.DiscoveryV1().EndpointSlices(infraNamespace).List(context.TODO(), metav1.ListOptions{})
+ 				if len(epsListMultiPort.Items) != 1 {
+@@ -758,7 +750,6 @@ var _ = g.Describe("KubevirtEPSController", g.Ordered, func() {
+ 					}
+ 				}
+ 
+-				// Verify that all expected ports are present and without duplicates
+ 				if len(foundPortNames) != len(expectedPortNames) {
+ 					return false, err
+ 				}
+@@ -769,5 +760,156 @@ var _ = g.Describe("KubevirtEPSController", g.Ordered, func() {
+ 			}).Should(BeTrue(), "EndpointSlice should contain all unique ports from the Service without duplicates")
+ 		})
+ 
 +		g.It("Should not panic when Service changes to have a non-nil selector, causing EndpointSlice deletion with no new slices to create", func() {
 +			createAndAssertVMI("worker-0-test", "ip-10-32-5-13", "123.45.67.89")
 +			createAndAssertTenantSlice("test-epslice", "tenant-service-name", discoveryv1.AddressTypeIPv4,

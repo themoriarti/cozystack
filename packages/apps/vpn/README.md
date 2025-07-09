@@ -1,12 +1,16 @@
 # Managed VPN Service
 
-A Virtual Private Network (VPN) is a critical tool for ensuring secure and private communication over the internet. Managed VPN Service simplifies the deployment and management of VPN server, enabling you to establish secure connections with ease.
+A Virtual Private Network (VPN) is a critical tool for ensuring secure and private communication over the internet.
+Managed VPN Service simplifies the deployment and management of VPN server, enabling you to establish secure connections with ease.
 
-- Clients: https://shadowsocks5.github.io/en/download/clients.html
+- VPN client applications: https://shadowsocks5.github.io/en/download/clients.html
 
 ## Deployment Details
 
-The VPN Service is powered by the Outline Server, an advanced and user-friendly VPN solution. Internally known as "Shadowbox", which simplifies the process of setting up and sharing Shadowsocks servers. It operates by launching Shadowsocks instances on demand. Furthermore, Shadowbox is compatible with standard Shadowsocks clients, providing flexibility and ease of use for your VPN requirements.
+The VPN Service is powered by the Outline Server, an advanced and user-friendly VPN solution.
+Internally known as "Shadowbox", which simplifies the process of setting up and sharing Shadowsocks servers.
+It operates by launching Shadowsocks instances on demand.
+Furthermore, Shadowbox is compatible with standard Shadowsocks clients, providing flexibility and ease of use for your VPN requirements.
 
 - Docs: https://shadowsocks.org/
 - Docs: https://github.com/Jigsaw-Code/outline-server/tree/master/src/shadowbox
@@ -18,14 +22,60 @@ The VPN Service is powered by the Outline Server, an advanced and user-friendly 
 | Name       | Description                                     | Value   |
 | ---------- | ----------------------------------------------- | ------- |
 | `external` | Enable external access from outside the cluster | `false` |
-| `replicas` | Number of VPN-server replicas                   | `2`     |
+| `replicas` | Number of VPN server replicas                   | `2`     |
 
 ### Configuration parameters
 
-| Name              | Description                                                                                                                                                                                                       | Value  |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| `host`            | Host used to substitute into generated URLs                                                                                                                                                                       | `""`   |
-| `users`           | Users configuration                                                                                                                                                                                               | `{}`   |
-| `externalIPs`     | List of externalIPs for service.                                                                                                                                                                                  | `[]`   |
-| `resources`       | Resources                                                                                                                                                                                                         | `{}`   |
-| `resourcesPreset` | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `nano` |
+| Name              | Description                                                                                                                             | Value  |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `host`            | Host used to substitute into generated URLs                                                                                             | `""`   |
+| `users`           | Users configuration                                                                                                                     | `{}`   |
+| `externalIPs`     | List of externalIPs for service. Optional. If not specified will use LoadBalancer service by default.                                   | `[]`   |
+| `resources`       | Explicit CPU and memory configuration for each VPN server replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`   |
+| `resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.       | `nano` |
+
+## Parameter examples and reference
+
+### resources and resourcesPreset
+
+`resources` sets explicit CPU and memory configurations for each replica.
+When left empty, the preset defined in `resourcesPreset` is applied.
+
+```yaml
+resources:
+  cpu: 4000m
+  memory: 4Gi
+```
+
+`resourcesPreset` sets named CPU and memory configurations for each replica.
+This setting is ignored if the corresponding `resources` value is set.
+
+| Preset name | CPU    | memory  |
+|-------------|--------|---------|
+| `nano`      | `250m` | `128Mi` |
+| `micro`     | `500m` | `256Mi` |
+| `small`     | `1`    | `512Mi` |
+| `medium`    | `1`    | `1Gi`   |
+| `large`     | `2`    | `2Gi`   |
+| `xlarge`    | `4`    | `4Gi`   |
+| `2xlarge`   | `8`    | `8Gi`   |
+
+
+### users
+
+```yaml
+users:                              
+  user1:                            
+    password: hackme                
+  user2: {} # autogenerated password
+```
+
+
+### externalIPs
+
+```yaml
+externalIPs:       
+  - "11.22.33.44"
+  - "11.22.33.45"
+  - "11.22.33.46"
+```

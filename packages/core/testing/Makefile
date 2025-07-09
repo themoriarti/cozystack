@@ -15,7 +15,7 @@ help: ## Show this help.
 image: image-e2e-sandbox
 
 image-e2e-sandbox:
-	docker buildx build -f images/e2e-sandbox/Dockerfile ../../.. \
+	docker buildx build -f images/e2e-sandbox/Dockerfile images/e2e-sandbox \
 		--provenance false \
 		--builder=$(BUILDER) \
 		--platform=$(PLATFORM) \
@@ -32,11 +32,33 @@ image-e2e-sandbox:
 
 test: test-cluster test-apps ## Run the end-to-end tests in existing sandbox
 
-test-cluster: ## Run the end-to-end for creating a cluster
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && export COZYSTACK_INSTALLER_YAML=$$(helm template -n cozy-system installer ./packages/core/installer) && hack/cozytest.sh hack/e2e-cluster.bats'
+copy-nocloud-image:
+	docker cp ../../../_out/assets/nocloud-amd64.raw.xz "${SANDBOX_NAME}":/workspace/_out/assets/nocloud-amd64.raw.xz
 
-test-apps: ## Run the end-to-end tests for apps
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps.bats'
+copy-installer-manifest:
+	docker cp ../../../_out/assets/cozystack-installer.yaml "${SANDBOX_NAME}":/workspace/_out/assets/cozystack-installer.yaml
+
+prepare-cluster: copy-nocloud-image
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster.bats'
+
+install-cozystack: copy-installer-manifest
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
+
+test-cluster: copy-nocloud-image copy-installer-manifest ## Run the end-to-end for creating a cluster
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-cluster.bats'
+
+test-apps-%:
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps/$*.bats'
+
+collect-report: ## Collect the test report from the sandbox.
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'
+	mkdir -p ../../../_out
+	docker cp "${SANDBOX_NAME}:/workspace/cozyreport.tgz" ../../../_out/cozyreport.tgz
+
+collect-images: ## Collect the list of images used in the sandbox.
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/collect-images.sh'
+	mkdir -p ../../../_out
+	docker cp "${SANDBOX_NAME}":/workspace/images.txt ../../../_out/images.txt
 
 delete: ## Remove sandbox from existing Kubernetes cluster.
 	docker rm -f "${SANDBOX_NAME}" || true
@@ -45,10 +67,13 @@ exec:  ## Opens an interactive shell in the sandbox container.
 	docker exec -ti "${SANDBOX_NAME}" bash
 
 apply: delete
+	mkdir -p /tmp/${SANDBOX_NAME}
+	chmod 777 /tmp/${SANDBOX_NAME}
 	docker run \
 		-d --rm --name "${SANDBOX_NAME}" --privileged \
 		-e TALOSCONFIG=/workspace/talosconfig \
 		-e KUBECONFIG=/workspace/kubeconfig \
+		-e SANDBOX_NAME=${SANDBOX_NAME} \
 		"$$(yq .e2e.image values.yaml)" \
-		sleep infinity
-	docker cp "${ROOT_DIR}" "${SANDBOX_NAME}":/workspace
+		--timeout 30m
+	docker cp "${ROOT_DIR}/." "${SANDBOX_NAME}":/workspace

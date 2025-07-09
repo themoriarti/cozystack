@@ -1,3 +1,5 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
 {{- $passwords := dict }}
 {{- $users := .Values.users }}
@@ -32,7 +34,7 @@ kind: "ClickHouseInstallation"
 metadata:
   name: "{{ .Release.Name }}"
 spec:
-  namespaceDomainPattern:  "%s.svc.cozy.local"
+  namespaceDomainPattern:  "%s.svc.{{ $clusterDomain }}"
   defaults:
     templates:
       dataVolumeClaimTemplate: data-volume-template
@@ -92,6 +94,9 @@ spec:
   templates:
     volumeClaimTemplates:
       - name: data-volume-template
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
         spec:
           accessModes:
             - ReadWriteOnce
@@ -99,6 +104,9 @@ spec:
             requests:
               storage: {{ .Values.size }}
       - name: log-volume-template
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
         spec:
           accessModes:
             - ReadWriteOnce
@@ -107,6 +115,9 @@ spec:
               storage: {{ .Values.logStorageSize }}
     podTemplates:
       - name: clickhouse-per-host
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
         spec:
           affinity:
             podAntiAffinity:
@@ -121,11 +132,7 @@ spec:
           containers:
             - name: clickhouse
               image: clickhouse/clickhouse-server:24.9.2.42
-              {{- if .Values.resources }}
-              resources: {{- include "cozy-lib.resources.sanitize" .Values.resources | nindent 16 }}
-              {{- else if ne .Values.resourcesPreset "none" }}
-              resources: {{- include "cozy-lib.resources.preset" .Values.resourcesPreset | nindent 16 }}
-              {{- end }}
+              resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 16 }}
               volumeMounts:
                 - name: data-volume-template
                   mountPath: /var/lib/clickhouse
@@ -133,6 +140,9 @@ spec:
                   mountPath: /var/log/clickhouse-server
     serviceTemplates:
       - name: svc-template
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
         generateName: chendpoint-{chi}
         spec:
           ports:

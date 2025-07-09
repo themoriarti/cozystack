@@ -1,4 +1,5 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 {{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
 {{- $host := index $cozyConfig.data "root-host" }}
 {{- if not $host }}
@@ -22,6 +23,11 @@ releases:
   chart: cozy-fluxcd
   namespace: cozy-fluxcd
   dependsOn: [fluxcd-operator,cilium,kubeovn]
+  values:
+    flux-instance:
+      instance:
+        cluster:
+          domain: {{ $clusterDomain }}
 
 - name: cilium
   releaseName: cilium
@@ -193,6 +199,9 @@ releases:
   chart: cozy-mariadb-operator
   namespace: cozy-mariadb-operator
   dependsOn: [cilium,kubeovn,cert-manager,victoria-metrics-operator]
+  values:
+    mariadb-operator:
+      clusterName: {{ $clusterDomain }}
 
 - name: postgres-operator
   releaseName: postgres-operator
@@ -205,6 +214,9 @@ releases:
   chart: cozy-kafka-operator
   namespace: cozy-kafka-operator
   dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+  values:
+    strimzi-kafka-operator:
+      kubernetesServiceDnsDomain: {{ $clusterDomain }}
 
 - name: clickhouse-operator
   releaseName: clickhouse-operator
@@ -236,6 +248,14 @@ releases:
   namespace: cozy-linstor
   privileged: true
   dependsOn: [piraeus-operator,cilium,kubeovn,cert-manager,snapshot-controller]
+
+- name: nfs-driver
+  releaseName: nfs-driver
+  chart: cozy-nfs-driver
+  namespace: cozy-nfs-driver
+  privileged: true
+  dependsOn: [cilium,kubeovn]
+  optional: true
 
 - name: snapshot-controller
   releaseName: snapshot-controller
@@ -284,9 +304,30 @@ releases:
   privileged: true
   dependsOn: [cilium,kubeovn,cert-manager]
 
-- name: capi-providers
-  releaseName: capi-providers
-  chart: cozy-capi-providers
+- name: capi-providers-bootstrap
+  releaseName: capi-providers-bootstrap
+  chart: cozy-capi-providers-bootstrap
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,capi-operator]
+
+- name: capi-providers-core
+  releaseName: capi-providers-core
+  chart: cozy-capi-providers-core
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,capi-operator]
+
+- name: capi-providers-cpprovider
+  releaseName: capi-providers-cpprovider
+  chart: cozy-capi-providers-cpprovider
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,capi-operator]
+
+- name: capi-providers-infraprovider
+  releaseName: capi-providers-infraprovider
+  chart: cozy-capi-providers-infraprovider
   namespace: cozy-cluster-api
   privileged: true
   dependsOn: [cilium,kubeovn,capi-operator]
@@ -349,6 +390,11 @@ releases:
   namespace: cozy-vertical-pod-autoscaler
   privileged: true
   dependsOn: [monitoring-agents]
+  values:
+    vertical-pod-autoscaler:
+      recommender:
+        extraArgs:
+          prometheus-address: http://vmselect-shortterm.tenant-root.svc.{{ $clusterDomain }}:8481/select/0/prometheus/
 
 - name: vertical-pod-autoscaler-crds
   releaseName: vertical-pod-autoscaler-crds
@@ -361,3 +407,11 @@ releases:
   releaseName: reloader
   chart: cozy-reloader
   namespace: cozy-reloader
+
+- name: velero
+  releaseName: velero
+  chart: cozy-velero
+  namespace: cozy-velero
+  privileged: true
+  optional: true
+  dependsOn: [monitoring-agents]

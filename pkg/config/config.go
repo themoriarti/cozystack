@@ -36,10 +36,11 @@ type Resource struct {
 
 // ApplicationConfig contains the application settings.
 type ApplicationConfig struct {
-	Kind       string   `yaml:"kind"`
-	Singular   string   `yaml:"singular"`
-	Plural     string   `yaml:"plural"`
-	ShortNames []string `yaml:"shortNames"`
+	Kind          string   `yaml:"kind"`
+	Singular      string   `yaml:"singular"`
+	Plural        string   `yaml:"plural"`
+	ShortNames    []string `yaml:"shortNames"`
+	OpenAPISchema string   `yaml:"openAPISchema"`
 }
 
 // ReleaseConfig contains the release settings.

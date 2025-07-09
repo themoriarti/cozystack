@@ -1,10 +1,11 @@
-CLICKHOUSE_BACKUP_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
+CLICKHOUSE_BACKUP_TAG = $(shell awk '$$0 ~ /^version:/ {print $$2}' Chart.yaml)
 
 include ../../../scripts/common-envs.mk
 include ../../../scripts/package.mk
 
 generate:
 	readme-generator -v values.yaml -s values.schema.json -r README.md
+	yq -i -o json --indent 4 '.properties.resourcesPreset.enum = ["none", "nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"]' values.schema.json
 
 image:
 	docker buildx build images/clickhouse-backup \

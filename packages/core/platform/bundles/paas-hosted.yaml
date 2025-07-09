@@ -1,4 +1,5 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 {{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
 {{- $host := index $cozyConfig.data "root-host" }}
 {{- if not $host }}
@@ -22,6 +23,11 @@ releases:
   chart: cozy-fluxcd
   namespace: cozy-fluxcd
   dependsOn: [fluxcd-operator]
+  values:
+    flux-instance:
+      instance:
+        cluster:
+          domain: {{ $clusterDomain }}
 
 - name: cert-manager-crds
   releaseName: cert-manager-crds
@@ -92,6 +98,9 @@ releases:
   chart: cozy-mariadb-operator
   namespace: cozy-mariadb-operator
   dependsOn: [cert-manager,victoria-metrics-operator]
+  values:
+    mariadb-operator:
+      clusterName: {{ $clusterDomain }}
 
 - name: postgres-operator
   releaseName: postgres-operator
@@ -104,6 +113,9 @@ releases:
   chart: cozy-kafka-operator
   namespace: cozy-kafka-operator
   dependsOn: [victoria-metrics-operator]
+  values:
+    strimzi-kafka-operator:
+      kubernetesServiceDnsDomain: {{ $clusterDomain }}
 
 - name: clickhouse-operator
   releaseName: clickhouse-operator
@@ -129,6 +141,12 @@ releases:
   namespace: cozy-linstor
   dependsOn: [cert-manager]
 
+- name: objectstorage-controller
+  releaseName: objectstorage-controller
+  chart: cozy-objectstorage-controller
+  namespace: cozy-objectstorage-controller
+  dependsOn: []
+
 - name: telepresence
   releaseName: traffic-manager
   chart: cozy-telepresence
@@ -141,7 +159,7 @@ releases:
   chart: cozy-external-dns
   namespace: cozy-external-dns
   optional: true
-  dependsOn: [cilium,kubeovn]
+  dependsOn: []
 
 - name: external-secrets-operator
   releaseName: external-secrets-operator
@@ -200,10 +218,23 @@ releases:
   namespace: cozy-vertical-pod-autoscaler
   privileged: true
   dependsOn: [monitoring-agents]
+  values:
+    vertical-pod-autoscaler:
+      recommender:
+        extraArgs:
+          prometheus-address: http://vmselect-shortterm.tenant-root.svc.{{ $clusterDomain }}:8481/select/0/prometheus/
 
 - name: vertical-pod-autoscaler-crds
   releaseName: vertical-pod-autoscaler-crds
   chart: cozy-vertical-pod-autoscaler-crds
   namespace: cozy-vertical-pod-autoscaler
   privileged: true
-  dependsOn: [cilium, kubeovn]
+  dependsOn: []
+
+- name: velero
+  releaseName: velero
+  chart: cozy-velero
+  namespace: cozy-velero
+  privileged: true
+  optional: true
+  dependsOn: [monitoring-agents]

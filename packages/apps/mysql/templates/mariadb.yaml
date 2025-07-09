@@ -57,6 +57,13 @@ spec:
     name: {{ .Release.Name }}-my-cnf
     key: config
 
+  service:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+    {{- if and .Values.external (eq (int .Values.replicas) 1) }}
+    type: LoadBalancer
+    {{- end }}
   storage:
     size: {{ .Values.size }}
     resizeInUseVolumes: true
@@ -65,7 +72,7 @@ spec:
     storageClassName: {{ . }}
     {{- end }}
 
-  {{- if .Values.external }}
+  {{- if and .Values.external (gt (int .Values.replicas) 1) }}
   primaryService:
     type: LoadBalancer
   {{- end }}
@@ -73,8 +80,4 @@ spec:
   #secondaryService:
   #  type: LoadBalancer
 
-  {{- if .Values.resources }}
-  resources: {{- toYaml .Values.resources | nindent 4 }}
-  {{- else if ne .Values.resourcesPreset "none" }}
-  resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 4 }}
-  {{- end }}
+  resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}

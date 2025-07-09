@@ -1,4 +1,4 @@
-FROM golang:alpine3.21 as k8s-await-election-builder
+FROM golang:1.24-alpine as k8s-await-election-builder
 
 ARG K8S_AWAIT_ELECTION_GITREPO=https://github.com/LINBIT/k8s-await-election
 ARG K8S_AWAIT_ELECTION_VERSION=0.4.1
@@ -13,7 +13,10 @@ RUN git clone ${K8S_AWAIT_ELECTION_GITREPO} /usr/local/go/k8s-await-election/ \
  && make \
  && mv ./out/k8s-await-election-${TARGETARCH} /k8s-await-election
 
-FROM golang:alpine3.21 as builder
+FROM golang:1.24-alpine as builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache make git
 RUN apk add helm --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community
@@ -21,26 +24,26 @@ RUN apk add helm --repository=https://dl-cdn.alpinelinux.org/alpine/edge/communi
 COPY . /src/
 WORKDIR /src
 
+RUN go mod download
+
 RUN go build -o /cozystack-assets-server -ldflags '-extldflags "-static" -w -s' ./cmd/cozystack-assets-server
 
-# Check that versions_map is not changed
 RUN make repos
 
-FROM alpine:3.21
+FROM alpine:3.22
 
-RUN apk add --no-cache make
-RUN apk add helm kubectl --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community
-RUN apk add yq
-RUN apk add coreutils
+RUN wget -O- https://github.com/cozystack/cozypkg/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.1.0
 
-COPY scripts /cozystack/scripts
+RUN apk add --no-cache make kubectl coreutils
+
+COPY --from=builder /src/scripts /cozystack/scripts
 COPY --from=builder /src/packages/core /cozystack/packages/core
 COPY --from=builder /src/packages/system /cozystack/packages/system
 COPY --from=builder /src/_out/repos /cozystack/assets/repos
 COPY --from=builder /src/_out/logos /cozystack/assets/logos
 COPY --from=builder /cozystack-assets-server /usr/bin/cozystack-assets-server
 COPY --from=k8s-await-election-builder /k8s-await-election /usr/bin/k8s-await-election
-COPY dashboards /cozystack/assets/dashboards
+COPY --from=builder /src/dashboards /cozystack/assets/dashboards
 
 WORKDIR /cozystack
 ENTRYPOINT ["/usr/bin/k8s-await-election", "/cozystack/scripts/installer.sh" ]

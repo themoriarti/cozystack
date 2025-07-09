@@ -59,33 +59,39 @@ databases: {}
 
 ## @section Backup parameters
 
-## @param backup.enabled Enable pereiodic backups
-## @param backup.s3Region The AWS S3 region where backups are stored
-## @param backup.s3Bucket The S3 bucket used for storing backups
+## @param backup.enabled Enable regular backups
 ## @param backup.schedule Cron schedule for automated backups
-## @param backup.cleanupStrategy The strategy for cleaning up old backups
-## @param backup.s3AccessKey The access key for S3, used for authentication
-## @param backup.s3SecretKey The secret key for S3, used for authentication
-## @param backup.resticPassword The password for Restic backup encryption
+## @param backup.retentionPolicy Retention policy
+## @param backup.destinationPath Path to store the backup (i.e. s3://bucket/path/to/folder)
+## @param backup.endpointURL S3 Endpoint used to upload data to the cloud
+## @param backup.s3AccessKey Access key for S3, used for authentication
+## @param backup.s3SecretKey Secret key for S3, used for authentication
 backup:
   enabled: false
-  s3Region: us-east-1
-  s3Bucket: s3.example.org/postgres-backups
-  schedule: "0 2 * * *"
-  cleanupStrategy: "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
+  retentionPolicy: 30d
+  destinationPath: s3://bucket/path/to/folder/
+  endpointURL: http://minio-gateway-service:9000
+  schedule: "0 2 * * * *"
   s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
   s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
-  resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
 
-## @param resources Resources
+## @section Bootstrap parameters
+
+## @param bootstrap.enabled Restore database cluster from a backup
+## @param bootstrap.recoveryTime Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest
+## @param bootstrap.oldName Name of database cluster before deleting
+##
+bootstrap:
+  enabled: false
+  # example: 2020-11-26 15:22:00.00000+00
+  recoveryTime: ""
+  oldName: ""
+
+## @param resources Explicit CPU and memory configuration for each PostgreSQL replica. When left empty, the preset defined in `resourcesPreset` is applied.
 resources: {}
  # resources:
- #   limits:
- #     cpu: 4000m
- #     memory: 4Gi
- #   requests:
- #     cpu: 100m
- #     memory: 512Mi
+ #   cpu: 4000m
+ #   memory: 4Gi
  
-## @param resourcesPreset Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).
-resourcesPreset: "nano"
+## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
+resourcesPreset: "micro"

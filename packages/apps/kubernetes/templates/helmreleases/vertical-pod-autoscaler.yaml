@@ -1,4 +1,6 @@
 {{- define "cozystack.defaultVPAValues" -}}
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 {{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- $targetTenant := index $myNS.metadata.annotations "namespace.cozystack.io/monitoring" }}
 vertical-pod-autoscaler:
@@ -13,7 +15,7 @@ vertical-pod-autoscaler:
       metric-for-pod-labels: kube_pod_labels{job="kube-state-metrics", tenant="{{ .Release.Namespace }}", cluster="{{ .Release.Name }}"}[8d]
       pod-name-label: pod
       pod-namespace-label: namespace
-      prometheus-address: http://vmselect-shortterm.{{ $targetTenant }}.svc.cozy.local:8481/select/0/prometheus/
+      prometheus-address: http://vmselect-shortterm.{{ $targetTenant }}.svc.{{ $clusterDomain }}:8481/select/0/prometheus/
       prometheus-cadvisor-job-name: cadvisor
     resources:
       limits:

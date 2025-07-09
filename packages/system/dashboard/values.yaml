@@ -19,24 +19,26 @@ kubeapps:
     image:
       registry: ghcr.io/cozystack/cozystack
       repository: dashboard
-      tag: v0.31.0-rc.3
-      digest: "sha256:a83fe4654f547469cfa469a02bda1273c54bca103a41eb007fdb2e18a7a91e93"
+      tag: v0.33.2
+      digest: "sha256:ac2b5348d85fe37ad70a4cc159881c4eaded9175a4b586cfa09a52b0fbe5e1e5"
   redis:
     master:
       resourcesPreset: "none"
       resources:
         requests:
-          cpu: 200m
-          memory: 256Mi
+          cpu: 20m
+          memory: 128Mi
         limits:
-          memory: 256Mi
+          memory: 128Mi
   kubeappsapis:
     resourcesPreset: "none"
+    qps: "250.0"
+    burst: "500"
     image:
       registry: ghcr.io/cozystack/cozystack
       repository: kubeapps-apis
-      tag: v0.31.0-rc.3
-      digest: "sha256:1447c10fcc9a8de426ec381bce565aa56267d0c9f3bab8fe26ac502d433283c5"
+      tag: v0.33.2
+      digest: "sha256:65325a916974e63e813fca1a89dc40ae58b5bfc2a8ffc4581916106136d19563"
     pluginConfig:
       flux:
         packages:

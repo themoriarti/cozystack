@@ -69,4 +69,10 @@ kubeapps:
       .appview-first-row section[aria-labelledby="access-urls-title"] {
         width: 100%;
       }
+      .header-version {
+        display: none;
+      }
+      .label.label-info-secondary {
+        display: none;
+      }
 {{- end }}

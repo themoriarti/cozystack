@@ -1,5 +1,6 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
 {{- $host := index $cozyConfig.data "root-host" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 
 {{- $existingPassword := lookup "v1" "Secret" "cozy-keycloak" (printf "%s-credentials" .Release.Name) }}
 {{- $password := randAlphaNum 16 -}}
@@ -67,6 +68,12 @@ spec:
           args:
             - start
           env:
+            {{- with (fromYaml (include "cozy-lib.resources.defaultingSanitize" (list "small" (default dict .Values.resources.limits) $))) }}
+            {{- with (mergeOverwrite . $.Values.resources ) }}
+            - name: JAVA_OPTS_KC_HEAP
+              value: {{ include "cozy-lib.resources.javaHeap" . }}
+            {{- end }}
+            {{- end }}
             - name: KC_METRICS_ENABLED
               value: "true"
             - name: KC_LOG_LEVEL
@@ -113,7 +120,7 @@ spec:
             - name: KC_HOSTNAME
               value: https://keycloak.{{ $host }}
             - name: JAVA_OPTS_APPEND
-              value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.cozy.local"
+              value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.{{ $clusterDomain }}"
           ports:
             - name: http
               containerPort: 8080

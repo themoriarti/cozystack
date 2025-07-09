@@ -120,23 +120,11 @@ metadata:
     kamaji.clastix.io/kubeconfig-secret-key: "super-admin.svc"
 spec:
   apiServer:
-    {{- if .Values.controlPlane.apiServer.resources }}
-    resources: {{- toYaml .Values.controlPlane.apiServer.resources | nindent 6 }}
-    {{- else if ne .Values.controlPlane.apiServer.resourcesPreset "none" }}
-    resources: {{- include "resources.preset" (dict "type" .Values.controlPlane.apiServer.resourcesPreset "Release" .Release) | nindent 6 }}
-    {{- end }}
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.apiServer.resourcesPreset .Values.controlPlane.apiServer.resources $) | nindent 6 }}
   controllerManager:
-    {{- if .Values.controlPlane.controllerManager.resources }}
-    resources: {{- toYaml .Values.controlPlane.controllerManager.resources | nindent 6 }}
-    {{- else if ne .Values.controlPlane.controllerManager.resourcesPreset "none" }}
-    resources: {{- include "resources.preset" (dict "type" .Values.controlPlane.controllerManager.resourcesPreset "Release" .Release) | nindent 6 }}
-    {{- end }}
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.controllerManager.resourcesPreset .Values.controlPlane.controllerManager.resources $) | nindent 6 }}
   scheduler:
-    {{- if .Values.controlPlane.scheduler.resources }}
-    resources: {{- toYaml .Values.controlPlane.scheduler.resources | nindent 6 }}
-    {{- else if ne .Values.controlPlane.scheduler.resourcesPreset "none" }}
-    resources: {{- include "resources.preset" (dict "type" .Values.controlPlane.scheduler.resourcesPreset "Release" .Release) | nindent 6 }}
-    {{- end }}
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.scheduler.resourcesPreset .Values.controlPlane.scheduler.resources $) | nindent 6 }}
   dataStoreName: "{{ $etcd }}"
   addons:
     coreDNS:
@@ -145,11 +133,7 @@ spec:
     konnectivity:
       server:
         port: 8132
-        {{- if .Values.controlPlane.konnectivity.server.resources }}
-        resources: {{- toYaml .Values.controlPlane.konnectivity.server.resources | nindent 10 }}
-        {{- else if ne .Values.controlPlane.konnectivity.server.resourcesPreset "none" }}
-        resources: {{- include "resources.preset" (dict "type" .Values.controlPlane.konnectivity.server.resourcesPreset "Release" .Release) | nindent 10 }}
-        {{- end }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.konnectivity.server.resourcesPreset .Values.controlPlane.konnectivity.server.resources $) | nindent 10 }}
   kubelet:
     cgroupfs: systemd
     preferredAddressTypes:
@@ -211,12 +195,25 @@ spec:
       - ["LABEL=ephemeral", "/ephemeral"]
       - ["/ephemeral/kubelet", "/var/lib/kubelet", "none", "bind,nofail"]
       - ["/ephemeral/containerd", "/var/lib/containerd", "none", "bind,nofail"]
+      {{- $sec := lookup "v1" "Secret" $.Release.Namespace (printf "%s-patch-containerd" $.Release.Name) }}
+      {{- if $sec }}
+      files:
+        {{- range $key, $_ := $sec.data }}
+        - path: /etc/containerd/certs.d/{{ trimSuffix ".toml" $key }}/hosts.toml
+          contentFrom:
+            secret:
+              name: {{ $.Release.Name }}-patch-containerd
+              key: {{ $key }}
+          permissions: "0400"
+        {{- end }}
+      {{- end }}
       preKubeadmCommands:
       - sed -i 's|root:x:|root::|' /etc/passwd
       - systemctl stop containerd.service
       - mkdir -p /ephemeral/kubelet /ephemeral/containerd
       - mount -o bind /ephemeral/kubelet /var/lib/kubelet
       - mount -o bind /ephemeral/containerd /var/lib/containerd
+      - sudo sed -i '/\[plugins."io.containerd.grpc.v1.cri".registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
       - systemctl start containerd.service
       joinConfiguration:
         nodeRegistration:

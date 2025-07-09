@@ -9,7 +9,6 @@ build-deps:
 
 build: build-deps
 	make -C packages/apps/http-cache image
-	make -C packages/apps/postgres image
 	make -C packages/apps/mysql image
 	make -C packages/apps/clickhouse image
 	make -C packages/apps/kubernetes image
@@ -43,11 +42,15 @@ manifests:
 	(cd packages/core/installer/; helm template -n cozy-installer installer .) > _out/assets/cozystack-installer.yaml
 
 assets:
-	make -C packages/core/installer/ assets
+	make -C packages/core/installer assets
 
 test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
+
+prepare-env:
+	make -C packages/core/testing apply
+	make -C packages/core/testing prepare-cluster
 
 generate:
 	hack/update-codegen.sh

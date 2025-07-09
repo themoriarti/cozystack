@@ -248,15 +248,24 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("pod-%s", pod.Name),
 			Namespace: pod.Namespace,
+			Labels:    map[string]string{},
 		},
 	}
 
+	metaLabels := r.getWorkloadMetadata(&pod)
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
 		updateOwnerReferences(workload.GetObjectMeta(), monitor)
 
 		// Copy labels from the Pod if needed
-		workload.Labels = pod.Labels
+		for k, v := range pod.Labels {
+			workload.Labels[k] = v
+		}
+
+		// Add workload meta to labels
+		for k, v := range metaLabels {
+			workload.Labels[k] = v
+		}
 
 		// Fill Workload status fields:
 		workload.Status.Kind = monitor.Spec.Kind
@@ -432,4 +441,13 @@ func mapObjectToMonitor[T client.Object](_ T, c client.Client) func(ctx context.
 		}
 		return requests
 	}
+}
+
+func (r *WorkloadMonitorReconciler) getWorkloadMetadata(obj client.Object) map[string]string {
+	labels := make(map[string]string)
+	annotations := obj.GetAnnotations()
+	if instanceType, ok := annotations["kubevirt.io/cluster-instancetype-name"]; ok {
+		labels["workloads.cozystack.io/kubevirt-vmi-instance-type"] = instanceType
+	}
+	return labels
 }

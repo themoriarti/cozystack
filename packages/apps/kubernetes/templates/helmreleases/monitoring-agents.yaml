@@ -24,8 +24,8 @@ spec:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig
       key: super-admin.svc
-  targetNamespace: cozy-monitoring-agents
-  storageNamespace: cozy-monitoring-agents
+  targetNamespace: cozy-monitoring
+  storageNamespace: cozy-monitoring
   install:
     createNamespace: true
     timeout: "300s"

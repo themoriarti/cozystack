@@ -9,13 +9,13 @@ pre-checks:
 	../../../hack/pre-checks.sh
 
 show:
-	helm template -n $(NAMESPACE) $(NAME) .
+	cozypkg show -n $(NAMESPACE) $(NAME) --plain
 
 apply:
-	helm template -n $(NAMESPACE) $(NAME) . | kubectl apply -f -
+	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl apply -f-
 
 diff:
-	helm template -n $(NAMESPACE) $(NAME) . | kubectl diff -f -
+	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl diff -f -
 
 update:
 	hack/gen-profiles.sh
@@ -23,7 +23,6 @@ update:
 image: pre-checks image-matchbox image-cozystack image-talos
 
 image-cozystack:
-	make -C ../../.. repos
 	docker buildx build -f images/cozystack/Dockerfile ../../.. \
 		--provenance false \
 		--tag $(REGISTRY)/installer:$(call settag,$(TAG)) \

@@ -1,3 +1,5 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 {{- $passwords := dict }}
 {{- range $user, $u := .Values.users }}
   {{- if $u.password }}
@@ -44,13 +46,12 @@ spec:
             containers:
               - name: nats
                 image: nats:2.10.17-alpine
-                {{- if .Values.resources }}
-                resources: {{- toYaml .Values.resources | nindent 22 }}
-                {{- else if ne .Values.resourcesPreset "none" }}
-                resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 22 }}
-                {{- end }}
+                resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 22 }}
       fullnameOverride: {{ .Release.Name }}
       config:
+        cluster:
+          routeURLs:
+            k8sClusterDomain: {{ $clusterDomain }}
         {{- if or (gt (len $passwords) 0) (gt (len .Values.config.merge) 0) }}
         merge:
           {{- if gt (len $passwords) 0 }}

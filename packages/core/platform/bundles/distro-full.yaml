@@ -1,4 +1,5 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 
 releases:
 - name: fluxcd-operator
@@ -13,6 +14,11 @@ releases:
   chart: cozy-fluxcd
   namespace: cozy-fluxcd
   dependsOn: [fluxcd-operator,cilium]
+  values:
+    flux-instance:
+      instance:
+        cluster:
+          domain: {{ $clusterDomain }}
 
 - name: cilium
   releaseName: cilium
@@ -121,6 +127,9 @@ releases:
   namespace: cozy-mariadb-operator
   optional: true
   dependsOn: [cilium,cert-manager,victoria-metrics-operator]
+  values:
+    mariadb-operator:
+      clusterName: {{ $clusterDomain }}
 
 - name: postgres-operator
   releaseName: postgres-operator
@@ -135,6 +144,9 @@ releases:
   namespace: cozy-kafka-operator
   optional: true
   dependsOn: [cilium,victoria-metrics-operator]
+  values:
+    strimzi-kafka-operator:
+      kubernetesServiceDnsDomain: {{ $clusterDomain }}
 
 - name: clickhouse-operator
   releaseName: clickhouse-operator
@@ -167,7 +179,7 @@ releases:
   releaseName: snapshot-controller
   chart: cozy-snapshot-controller
   namespace: cozy-snapshot-controller
-  dependsOn: [cilium,cert-manager-issuers]
+  dependsOn: [cilium]
 
 - name: objectstorage-controller
   releaseName: objectstorage-controller
@@ -182,6 +194,14 @@ releases:
   namespace: cozy-linstor
   privileged: true
   dependsOn: [piraeus-operator,cilium,cert-manager,snapshot-controller]
+
+- name: nfs-driver
+  releaseName: nfs-driver
+  chart: cozy-nfs-driver
+  namespace: cozy-nfs-driver
+  privileged: true
+  dependsOn: [cilium]
+  optional: true
 
 - name: telepresence
   releaseName: traffic-manager
@@ -230,3 +250,11 @@ releases:
   releaseName: reloader
   chart: cozy-reloader
   namespace: cozy-reloader
+
+- name: velero
+  releaseName: velero
+  chart: cozy-velero
+  namespace: cozy-velero
+  privileged: true
+  optional: true
+  dependsOn: [cilium]

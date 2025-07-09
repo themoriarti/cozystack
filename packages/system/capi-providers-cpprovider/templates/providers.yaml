@@ -1,0 +1,21 @@
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: ControlPlaneProvider
+metadata:
+  name: kamaji
+spec:
+  # https://github.com/clastix/cluster-api-control-plane-provider-kamaji
+  version: v0.15.1-cp
+  fetchConfig:
+    selector:
+      matchLabels:
+        cp-components: cozy
+  deployment:
+    containers:
+    - name: manager
+      resources:
+        limits:
+          cpu: "1"
+          memory: 1024Mi
+        requests:
+          cpu: "10m"
+          memory: 128Mi

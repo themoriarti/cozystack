@@ -163,7 +163,7 @@ spec:
             privileged: true
             allowPrivilegeEscalation: true
           imagePullPolicy: Always
-          image: ghcr.io/kvaps/test:kubevirt-csi-driver
+          image: {{ .Values.csiDriver.image }}
           args:
             - "--endpoint=unix:/csi/csi.sock"
             - "--node-name=$(KUBE_NODE_NAME)"

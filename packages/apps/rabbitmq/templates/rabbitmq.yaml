@@ -11,11 +11,7 @@ spec:
   service:
     type: LoadBalancer
   {{- end }}
-  {{- if .Values.resources }}
-  resources: {{- toYaml .Values.resources | nindent 4 }}
-  {{- else if ne .Values.resourcesPreset "none" }}
-  resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 4 }}
-  {{- end }}
+  resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
   override:
     statefulSet:
       spec:

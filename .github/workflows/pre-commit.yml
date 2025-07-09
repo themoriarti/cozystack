@@ -2,7 +2,7 @@ name: Pre-Commit Checks
 
 on:
   pull_request:
-    types: [labeled, opened, synchronize, reopened]
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: pre-commit-${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -30,12 +30,13 @@ jobs:
         run: |
           sudo apt update
           sudo apt install curl -y
-          curl -fsSL https://deb.nodesource.com/setup_16.x | sudo -E bash -
           sudo apt install nodejs -y
-          git clone https://github.com/bitnami/readme-generator-for-helm
+          sudo apt install npm -y
+
+          git clone --branch 2.7.0 --depth 1 https://github.com/bitnami/readme-generator-for-helm.git
           cd ./readme-generator-for-helm
           npm install
-          npm install -g pkg
+          npm install -g @yao-pkg/pkg
           pkg . -o /usr/local/bin/readme-generator
 
       - name: Run pre-commit hooks
