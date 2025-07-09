@@ -236,6 +236,15 @@ func (o *AppsServerOptions) Config() (*apiserver.Config, error) {
 				},
 			}
 
+			// make `.spec` schemaless so any keys are accepted
+			if specProp, ok := newDef.Properties["spec"]; ok {
+				specProp.AdditionalProperties = &spec.SchemaOrBool{
+					Allows: true,
+					Schema: &spec.Schema{},
+				}
+				newDef.Properties["spec"] = specProp
+			}
+
 			// 3. Save the new resource definition under the correct name
 			defs[resourceName] = *newDef
 			klog.V(6).Infof("PostProcessSpec: Added OpenAPI definition for %s\n", resourceName)
