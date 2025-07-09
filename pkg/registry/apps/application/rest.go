@@ -425,6 +425,15 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
+	// Ensure ResourceVersion
+	if helmRelease.ResourceVersion == "" {
+		cur, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(helmRelease.Namespace).Get(ctx, helmRelease.Name, metav1.GetOptions{})
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
+		}
+		helmRelease.SetResourceVersion(cur.GetResourceVersion())
+	}
+
 	// Merge system labels (from config) directly
 	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
 	// Merge user labels with prefix
