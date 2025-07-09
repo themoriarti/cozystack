@@ -118,6 +118,7 @@ jobs:
           git config user.name  "cozystack-bot"
           git config user.email "217169706+cozystack-bot@users.noreply.github.com"
           git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          git config --unset-all http.https://github.com/.extraheader || true
           git add .
           git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" -s || echo "No changes to commit"
           git push origin HEAD || true
