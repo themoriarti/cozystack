@@ -8,13 +8,13 @@ include ../../../scripts/package.mk
 
 update:
 	rm -rf charts && mkdir -p charts/kube-ovn
-	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/kubeovn/kube-ovn | awk -F'[/^]' 'END{print $$3}') && \
+	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/kubeovn/kube-ovn | awk -F'[/^]' '{print $$3}' | grep '^v1\.13\.' | tail -n1 ) && \
 	curl -sSL https://github.com/kubeovn/kube-ovn/archive/refs/tags/$${tag}.tar.gz | \
 	tar xzvf - --strip 1 kube-ovn-$${tag#*v}/charts
 	patch --no-backup-if-mismatch -p4 < patches/cozyconfig.diff
 	patch --no-backup-if-mismatch -p4 < patches/mtu.diff
 	version=$$(awk '$$1 == "version:" {print $$2}' charts/kube-ovn/Chart.yaml) && \
-	sed -i "s/ARG VERSION=.*/ARG VERSION=$${version}/" images/kubeovn/Dockerfile
+	sed -i "s/ARG VERSION=.*/ARG VERSION=$${version}/" images/kubeovn/Dockerfile && \
 	sed -i "s/ARG TAG=.*/ARG TAG=$${version}/" images/kubeovn/Dockerfile
 
 image:
