@@ -68,7 +68,7 @@ spec:
             {{-   fail (printf "Specified disk not exists in cluster: %s" .name) }}
             {{- end }}
           {{- end }}
-          {{- if or .Values.sshKeys .Values.cloudInit }}
+          {{- if or .Values.cloudInit .Values.sshKeys }}
           - name: cloudinitdisk
             disk:
               bus: virtio
@@ -95,27 +95,11 @@ spec:
         dataVolume:
           name: vm-disk-{{ .name }}
       {{- end }}
-      {{- if and .Values.sshKeys .Values.cloudInit }}
+      {{- if or .Values.cloudInit .Values.sshKeys }}
       - name: cloudinitdisk
         cloudInitNoCloud:
           secretRef:
             name: {{ include "virtual-machine.fullname" . }}-cloud-init
-      {{- else if .Values.sshKeys }}
-      - name: cloudinitdisk
-        cloudInitNoCloud:
-          userData: |
-            {{ printf "%s" "#cloud-config" }}
-            ssh_authorized_keys:
-              {{- range .Values.sshKeys }}
-              - {{ . }}
-              {{- end }}
-            chpasswd:
-              expire: false
-      {{- else }}
-      - name: cloudinitdisk
-        cloudInitNoCloud:
-          userData: |
-            {{ printf "%s" "#cloud-config" }}
       {{- end }}
       networks:
       - name: default
