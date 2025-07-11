@@ -1,6 +1,6 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
 {{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
-{{- if $oidcEnabled }}
+{{- if eq $oidcEnabled "true" }}
 apiVersion: v1.edp.epam.com/v1
 kind: KeycloakRealmGroup
 metadata:
