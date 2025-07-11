@@ -4,6 +4,7 @@
 {{- $dependencyNamespaces := dict }}
 {{- $disabledComponents := splitList "," ((index $cozyConfig.data "bundle-disable") | default "") }}
 {{- $enabledComponents := splitList "," ((index $cozyConfig.data "bundle-enable") | default "") }}
+{{- $oidcEnabled := (index (default dict $cozyConfig.data) "oidc-enabled") | default "false" | eq "true" }}
 
 {{/* collect dependency namespaces from releases */}}
 {{- range $x := $bundle.releases }}
@@ -14,7 +15,18 @@
 
 {{- $shouldInstall := true }}
 {{- $shouldDelete := false }}
-{{- if or (has $x.name $disabledComponents) (and ($x.optional) (not (has $x.name $enabledComponents))) }}
+{{- $notEnabledOptionalComponent := and ($x.optional) (not (has $x.name $enabledComponents)) }}
+{{- $disabledComponent := has $x.name $disabledComponents }}
+{{- $isKeycloakComponent := or (eq $x.name "keycloak") (eq $x.name "keycloak-operator") (eq $x.name "keycloak-configure") }}
+
+{{- if and $isKeycloakComponent (not $oidcEnabled) }}
+{{-   $shouldInstall = false }}
+{{-   if $.Capabilities.APIVersions.Has "helm.toolkit.fluxcd.io/v2" }}
+{{-     if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" $x.namespace $x.name }}
+{{-       $shouldDelete = true }}
+{{-     end }}
+{{-   end }}
+{{- else if or $disabledComponent $notEnabledOptionalComponent }}
 {{-   $shouldInstall = false }}
 {{-   if $.Capabilities.APIVersions.Has "helm.toolkit.fluxcd.io/v2" }}
 {{-     if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" $x.namespace $x.name }}
