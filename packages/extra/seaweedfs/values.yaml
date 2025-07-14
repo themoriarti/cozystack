@@ -1,12 +1,33 @@
 ## @section Common parameters
 
-## @param host The hostname used to access the grafana externally (defaults to 'grafana' subdomain for the tenant host).
+## @param host The hostname used to access the SeaweedFS externally (defaults to 's3' subdomain for the tenant host).
 host: ""
 
-## @param replicas Persistent Volume size for NATS
+## @param topology The topology of the SeaweedFS cluster. (allowed values: Simple, MultiZone)
+##
+topology: Simple
+
+## @param replicationFactor The number of replicas for each volume in the SeaweedFS cluster.
+replicationFactor: 2
+
+## @param replicas Persistent Volume size for SeaweedFS
 ## @param size Persistent Volume size
 ## @param storageClass StorageClass used to store the data
 ##
 replicas: 2
 size: 10Gi
 storageClass: ""
+
+## @param zones A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
+## Example:
+## zones:
+##   dc1:
+##     replicas: 2
+##     size: 10Gi
+##   dc2:
+##     replicas: 2
+##     size: 10Gi
+##   dc3:
+##     replicas: 2
+##     size: 10Gi
+zones: {}
