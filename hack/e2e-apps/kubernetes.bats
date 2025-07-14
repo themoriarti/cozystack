@@ -95,7 +95,7 @@ EOF
   bash -c 'timeout 40s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
 
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
-  timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig version 2>/dev/null | grep -q "Server Version: ${k8s_version}"; do sleep 5; done'
+  timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 5; done'
 
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
@@ -106,12 +106,8 @@ EOF
 }
 
 @test "Create a tenant Kubernetes control plane with latest version" {
-  echo "#################_TESTING_OF_LATEST_VERSION_###################"
   run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991'
-  echo "#############################_END_#############################"
 }
 @test "Create a tenant Kubernetes control plane with previous version" {
-  echo "#################_TESTING_OF_PREVIOUS_VERSION_#################"
   run_kubernetes_test 'keys | sort_by(.) | .[-2]' 'test-previous-version' '59992'
-  echo "#############################_END_#############################"
 }
