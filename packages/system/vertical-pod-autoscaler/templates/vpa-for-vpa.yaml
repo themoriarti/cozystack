@@ -1,0 +1,86 @@
+{{- if .Values.vpaForVPA }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    cozystack.io/system: "true"
+  name: cozy-vpa-for-vpa
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/system-app: "true"
+  name: vpa-for-vpa
+  namespace: cozy-vpa-for-vpa
+spec:
+  chart:
+    spec:
+      chart: cozy-vertical-pod-autoscaler
+      reconcileStrategy: Revision
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-system
+        namespace: cozy-system
+      version: '>= 0.0.0-0'
+  dependsOn:
+  - name: monitoring-agents
+    namespace: cozy-monitoring
+  install:
+    crds: Skip
+    remediation:
+      retries: -1
+  interval: 5m
+  releaseName: vertical-pod-autoscaler
+  upgrade:
+    crds: Skip
+    remediation:
+      retries: -1
+  values:
+    vpaForVPA: false
+    vertical-pod-autoscaler:
+      nameOverride: vpa-for-vpa
+      fullnameOverride: vpa-for-vpa
+      admissionController:
+        enabled: false
+      recommender:
+        extraArgs:
+          vpa-object-namespace: {{ .Release.Namespace }}
+          recommender-name: vpa-for-vpa
+        resources:
+          limits:
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 512Mi
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-for-vpa
+  namespace: {{ .Release.Namespace }}
+spec:
+  recommenders:
+  - name: vpa-for-vpa
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ dig "vertical-pod-autoscaler" "nameOverride" "" .Values.AsMap | default "vertical-pod-autoscaler" | trunc 63 | trimSuffix "-" }}-recommender
+  updatePolicy:
+    updateMode: Auto
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-for-vpa
+  namespace: cozy-vpa-for-vpa
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vpa-for-vpa-recommender
+  updatePolicy:
+    updateMode: Auto
+{{- end }}
