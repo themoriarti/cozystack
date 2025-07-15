@@ -74,10 +74,9 @@
         },
         "resourcesPreset": {
             "type": "string",
-            "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
             "default": "nano",
             "enum": [
-                "none",
                 "nano",
                 "micro",
                 "small",

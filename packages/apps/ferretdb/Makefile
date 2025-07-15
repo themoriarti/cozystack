@@ -1,5 +1,6 @@
 include ../../../scripts/package.mk
+PRESET_ENUM := ["nano","micro","small","medium","large","xlarge","2xlarge"]
 
 generate:
 	readme-generator -v values.yaml -s values.schema.json -r README.md
-	yq -i -o json --indent 4 '.properties.resourcesPreset.enum = ["none", "nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"]' values.schema.json
+	yq -i -o json --indent 4 '.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
