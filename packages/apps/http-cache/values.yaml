@@ -18,7 +18,7 @@ haproxy:
   #   cpu: 4000m
   #   memory: 4Gi
 
-  ## @param haproxy.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
+  ## @param haproxy.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
   resourcesPreset: "nano"
 nginx:
   replicas: 2
@@ -28,7 +28,7 @@ nginx:
   #   cpu: 4000m
   #   memory: 4Gi
 
-  ## @param nginx.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
+  ## @param nginx.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
   resourcesPreset: "nano"
 
 ## @section Configuration parameters
