@@ -59,6 +59,8 @@ kafka 0.8.0 08cb7c0f
 kafka 0.8.1 HEAD
 kubernetes 0.24.0 62cb694d
 kubernetes 0.25.0 70f82667
+kubernetes 0.25.1 acd4663a
+kubernetes 0.25.2 08cb7c0f
 kubernetes 0.26.0 HEAD
 mysql 0.1.0 263e47be
 mysql 0.2.0 c24a103f
@@ -148,7 +150,8 @@ tcp-balancer 0.4.2 4369b031
 tcp-balancer 0.5.0 08cb7c0f
 tcp-balancer 0.5.1 HEAD
 tenant 1.10.0 4369b031
-tenant 1.11.0 HEAD
+tenant 1.11.0 08cb7c0f
+tenant 1.11.1 HEAD
 virtual-machine 0.1.4 f2015d65
 virtual-machine 0.1.5 263e47be
 virtual-machine 0.2.0 c0685f43
@@ -166,7 +169,8 @@ virtual-machine 0.9.1 93bdf411
 virtual-machine 0.10.0 6130f43d
 virtual-machine 0.10.2 632224a3
 virtual-machine 0.11.0 4369b031
-virtual-machine 0.12.0 HEAD
+virtual-machine 0.12.0 acd4663a
+virtual-machine 0.12.1 HEAD
 vm-disk 0.1.0 d971f2ff
 vm-disk 0.1.1 6130f43d
 vm-disk 0.1.2 632224a3
@@ -183,7 +187,8 @@ vm-instance 0.6.0 721c12a7
 vm-instance 0.7.0 6130f43d
 vm-instance 0.7.2 632224a3
 vm-instance 0.8.0 4369b031
-vm-instance 0.9.0 HEAD
+vm-instance 0.9.0 acd4663a
+vm-instance 0.10.0 HEAD
 vpn 0.1.0 263e47be
 vpn 0.2.0 53f2365e
 vpn 0.3.0 6c5cf5bf
