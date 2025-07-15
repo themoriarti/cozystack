@@ -4,7 +4,7 @@ run_kubernetes_test() {
     local version_expr="$1"
     local test_name="$2"
     local port="$3"
-    local k8s_version=$(yq "$version_expr" ../packages/apps/kubernetes/files/versions.yaml)
+    local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
