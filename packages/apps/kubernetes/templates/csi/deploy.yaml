@@ -69,6 +69,11 @@ spec:
             requests:
               cpu: 125m
               memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
         - name: csi-provisioner
           image: quay.io/openshift/origin-csi-external-provisioner:latest
           resources:
@@ -78,6 +83,11 @@ spec:
             requests:
               cpu: 125m
               memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
           args:
             - "--csi-address=$(ADDRESS)"
             - "--default-fstype=ext4"
@@ -118,6 +128,11 @@ spec:
             requests:
               cpu: 125m
               memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
         - name: csi-liveness-probe
           image: quay.io/openshift/origin-csi-livenessprobe:latest
           args:
@@ -134,6 +149,62 @@ spec:
             requests:
               cpu: 125m
               memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+        - name: csi-snapshotter
+          args:
+          - --timeout=1m
+          - --csi-address=$(ADDRESS)
+          - --worker-threads=10
+          - --kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc
+          env:
+          - name: ADDRESS
+            value: /csi/csi.sock
+          image: registry.k8s.io/sig-storage/csi-snapshotter:v8.3.0
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
+            requests:
+              cpu: 125m
+              memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+          - mountPath: /csi
+            name: socket-dir
+          - mountPath: /etc/kubernetes/kubeconfig
+            name: kubeconfig
+            readOnly: true
+        - name: snapshot-controller
+          image: registry.k8s.io/sig-storage/snapshot-controller:v8.3.0
+          args:
+            - --worker-threads=10
+            - --kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
+            requests:
+              cpu: 125m
+              memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+          - mountPath: /etc/kubernetes/kubeconfig
+            name: kubeconfig
+            readOnly: true
       volumes:
         - name: socket-dir
           emptyDir: {}
