@@ -11,6 +11,7 @@ rules:
   - {{ .Release.Name }}-r
   - {{ .Release.Name }}-ro
   - {{ .Release.Name }}-rw
+  - {{ .Release.Name }}-external-write
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - ""
