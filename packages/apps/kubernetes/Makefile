@@ -7,6 +7,7 @@ include ../../../scripts/package.mk
 
 generate:
 	readme-generator -v values.yaml -s values.schema.json -r README.md
+	yq -o=json -i '.properties.version.enum = (load("files/versions.yaml") | keys)' values.schema.json
 	yq -o json -i '.properties.addons.properties.ingressNginx.properties.exposeMethod.enum = ["Proxied","LoadBalancer"]' values.schema.json
 	yq -o json -i '.properties.controlPlane.properties.apiServer.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
 	yq -o json -i '.properties.controlPlane.properties.controllerManager.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
