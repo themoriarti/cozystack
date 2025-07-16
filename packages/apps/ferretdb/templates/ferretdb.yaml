@@ -16,12 +16,14 @@ spec:
     spec:
       containers:
       - name: ferretdb
-        image: ghcr.io/ferretdb/ferretdb:1.24.0
+        image: ghcr.io/ferretdb/ferretdb:2.4.0
         ports:
         - containerPort: 27017
         env:
-          - name: FERRETDB_POSTGRESQL_URL
+          - name: POSTGRESQL_PASSWORD
             valueFrom:
               secretKeyRef:
-                name: {{ .Release.Name }}-postgres-app
-                key: uri
+                name: {{ .Release.Name }}-postgres-superuser
+                key: password
+          - name: FERRETDB_POSTGRESQL_URL
+            value: "postgresql://postgres:$(POSTGRESQL_PASSWORD)@{{ .Release.Name }}-postgres-rw:5432/postgres"
