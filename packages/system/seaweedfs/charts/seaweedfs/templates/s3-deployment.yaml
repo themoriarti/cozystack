@@ -9,12 +9,16 @@ metadata:
     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: s3
+{{- if .Values.s3.annotations }}
+  annotations:
+    {{- toYaml .Values.s3.annotations | nindent 4 }}
+{{- end }}
 spec:
   replicas: {{ .Values.s3.replicas }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
-      helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: s3
   template:
@@ -39,6 +43,14 @@ spec:
       {{- end }}
     spec:
       restartPolicy: {{ default .Values.global.restartPolicy .Values.s3.restartPolicy }}
+      {{- if .Values.s3.affinity }}
+      affinity:
+        {{ tpl .Values.s3.affinity . | nindent 8 | trim }}
+      {{- end }}
+      {{- if .Values.s3.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{ tpl .Values.s3.topologySpreadConstraints . | nindent 8 | trim }}
+      {{- end }}
       {{- if .Values.s3.tolerations }}
       tolerations:
         {{ tpl .Values.s3.tolerations . | nindent 8 | trim }}
@@ -131,7 +143,7 @@ spec:
               {{- if .Values.s3.domainName }}
               -domainName={{ .Values.s3.domainName }} \
               {{- end }}
-              {{- if .Values.s3.allowEmptyFolder }}
+              {{- if eq (typeOf .Values.s3.allowEmptyFolder) "bool" }}
               -allowEmptyFolder={{ .Values.s3.allowEmptyFolder }} \
               {{- end }}
               {{- if .Values.s3.enableAuth }}
@@ -176,9 +188,13 @@ spec:
           ports:
             - containerPort: {{ .Values.s3.port }}
               name: swfs-s3
+            {{- if .Values.s3.httpsPort }}
+            - containerPort: {{ .Values.s3.httpsPort }}
+              name: swfs-s3-tls
+            {{- end }}
             {{- if .Values.s3.metricsPort }}
             - containerPort: {{ .Values.s3.metricsPort }}
-              name: "metrics"
+              name: metrics
             {{- end }}
           {{- if .Values.s3.readinessProbe.enabled }}
           readinessProbe:

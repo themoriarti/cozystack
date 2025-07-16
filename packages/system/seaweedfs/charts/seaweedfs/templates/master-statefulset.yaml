@@ -9,6 +9,11 @@ metadata:
     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: master
+{{- if .Values.master.annotations }}
+  annotations:
+    {{- toYaml .Values.master.annotations | nindent 4 }}
+{{- end }}
 spec:
   serviceName: {{ template "seaweedfs.name" . }}-master
   podManagementPolicy: {{ .Values.master.podManagementPolicy }}
@@ -49,6 +54,10 @@ spec:
       {{- if .Values.master.affinity }}
       affinity:
         {{ tpl .Values.master.affinity . | nindent 8 | trim }}
+      {{- end }}
+      {{- if .Values.master.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{ tpl .Values.master.topologySpreadConstraints . | nindent 8 | trim }}
       {{- end }}
       {{- if .Values.master.tolerations }}
       tolerations:
@@ -131,7 +140,7 @@ spec:
               -mdir=/data \
               -ip.bind={{ .Values.master.ipBind }} \
               {{- if .Values.global.enableReplication }}
-              -defaultReplication={{ .Values.global.replicationPlacment }} \
+              -defaultReplication={{ .Values.global.replicationPlacement }} \
               {{- else }}
               -defaultReplication={{ .Values.master.defaultReplication }} \
               {{- end }}
@@ -149,18 +158,36 @@ spec:
               {{- if .Values.master.metricsPort }}
               -metricsPort={{ .Values.master.metricsPort }} \
               {{- end }}
+              {{- if .Values.master.metricsIp }}
+              -metricsIp={{ .Values.master.metricsIp }} \
+              {{- end }}
               -volumeSizeLimitMB={{ .Values.master.volumeSizeLimitMB }} \
               {{- if .Values.master.disableHttp }}
               -disableHttp \
               {{- end }}
-              {{- if .Values.master.pulseSeconds }}
-              -pulseSeconds={{ .Values.master.pulseSeconds }} \
+              {{- if .Values.master.resumeState }}
+              -resumeState \
+              {{- end }}
+              {{- if .Values.master.raftHashicorp }}
+              -raftHashicorp \
+              {{- end }}
+              {{- if .Values.master.raftBootstrap }}
+              -raftBootstrap \
+              {{- end }}
+              {{- if .Values.master.electionTimeout }}
+              -electionTimeout={{ .Values.master.electionTimeout }} \
+              {{- end }}
+              {{- if .Values.master.heartbeatInterval }}
+              -heartbeatInterval={{ .Values.master.heartbeatInterval }} \
               {{- end }}
               {{- if .Values.master.garbageThreshold }}
               -garbageThreshold={{ .Values.master.garbageThreshold }} \
               {{- end }}
               -ip=${POD_NAME}.${SEAWEEDFS_FULLNAME}-master.{{ .Release.Namespace }} \
-              -peers={{ range $index := until (.Values.master.replicas | int) }}${SEAWEEDFS_FULLNAME}-master-{{ $index }}.${SEAWEEDFS_FULLNAME}-master.{{ $.Release.Namespace }}:{{ $.Values.master.port }}{{ if lt $index (sub ($.Values.master.replicas | int) 1) }},{{ end }}{{ end }}
+              -peers={{ range $index := until (.Values.master.replicas | int) }}${SEAWEEDFS_FULLNAME}-master-{{ $index }}.${SEAWEEDFS_FULLNAME}-master.{{ $.Release.Namespace }}:{{ $.Values.master.port }}{{ if lt $index (sub ($.Values.master.replicas | int) 1) }},{{ end }}{{ end }} \
+              {{- range .Values.master.extraArgs }}
+              {{ . }} \
+              {{- end }}
           volumeMounts:
             - name : data-{{ .Release.Namespace }}
               mountPath: /data

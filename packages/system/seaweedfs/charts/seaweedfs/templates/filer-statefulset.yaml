@@ -10,6 +10,10 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: filer
+{{- if .Values.filer.annotations }}
+  annotations:
+    {{- toYaml .Values.filer.annotations | nindent 4 }}
+{{- end }}
 spec:
   serviceName: {{ template "seaweedfs.name" . }}-filer
   podManagementPolicy: {{ .Values.filer.podManagementPolicy }}
@@ -56,6 +60,10 @@ spec:
       {{- if .Values.filer.affinity }}
       affinity:
         {{ tpl .Values.filer.affinity . | nindent 8 | trim }}
+      {{- end }}
+      {{- if .Values.filer.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{ tpl .Values.filer.topologySpreadConstraints . | nindent 8 | trim }}
       {{- end }}
       {{- if .Values.filer.tolerations }}
       tolerations:
@@ -154,6 +162,9 @@ spec:
               {{- if .Values.filer.metricsPort }}
               -metricsPort={{ .Values.filer.metricsPort }} \
               {{- end }}
+              {{- if .Values.filer.metricsIp }}
+              -metricsIp={{ .Values.filer.metricsIp }} \
+              {{- end }}
               {{- if .Values.filer.redirectOnRead }}
               -redirectOnRead \
               {{- end }}
@@ -165,7 +176,7 @@ spec:
               {{- end }}
               -dirListLimit={{ .Values.filer.dirListLimit }} \
               {{- if .Values.global.enableReplication }}
-              -defaultReplicaPlacement={{ .Values.global.replicationPlacment }} \
+              -defaultReplicaPlacement={{ .Values.global.replicationPlacement }} \
               {{- else }}
               -defaultReplicaPlacement={{ .Values.filer.defaultReplicaPlacement }} \
               {{- end }}
@@ -179,8 +190,15 @@ spec:
               -encryptVolumeData \
               {{- end }}
               -ip=${POD_IP} \
+              -ip.bind={{ .Values.filer.ipBind }} \
               {{- if .Values.filer.filerGroup}}
               -filerGroup={{ .Values.filer.filerGroup}} \
+              {{- end }}
+              {{- if .Values.filer.rack }}
+              -rack={{ .Values.filer.rack }} \
+              {{- end }}
+              {{- if .Values.filer.dataCenter }}
+              -dataCenter={{ .Values.filer.dataCenter }} \
               {{- end }}
               {{- if .Values.filer.s3.enabled }}
               -s3 \
@@ -195,7 +213,7 @@ spec:
               -s3.cert.file=/usr/local/share/ca-certificates/client/tls.crt \
               -s3.key.file=/usr/local/share/ca-certificates/client/tls.key \
               {{- end }}
-              {{- if .Values.filer.s3.allowEmptyFolder }}
+              {{- if eq (typeOf .Values.filer.s3.allowEmptyFolder) "bool" }}
               -s3.allowEmptyFolder={{ .Values.filer.s3.allowEmptyFolder }} \
               {{- end }}
               {{- if .Values.filer.s3.enableAuth }}
@@ -205,7 +223,10 @@ spec:
               -s3.auditLogConfig=/etc/sw/filer_s3_auditLogConfig.json \
               {{- end }}
               {{- end }}
-              -master={{ if .Values.global.masterServer }}{{.Values.global.masterServer}}{{ else }}{{ range $index := until (.Values.master.replicas | int) }}${SEAWEEDFS_FULLNAME}-master-{{ $index }}.${SEAWEEDFS_FULLNAME}-master.{{ $.Release.Namespace }}:{{ $.Values.master.port }}{{ if lt $index (sub ($.Values.master.replicas | int) 1) }},{{ end }}{{ end }}{{ end }}
+              -master={{ if .Values.global.masterServer }}{{.Values.global.masterServer}}{{ else }}{{ range $index := until (.Values.master.replicas | int) }}${SEAWEEDFS_FULLNAME}-master-{{ $index }}.${SEAWEEDFS_FULLNAME}-master.{{ $.Release.Namespace }}:{{ $.Values.master.port }}{{ if lt $index (sub ($.Values.master.replicas | int) 1) }},{{ end }}{{ end }}{{ end }} \
+              {{- range .Values.filer.extraArgs }}
+              {{ . }} \
+              {{- end }}
           volumeMounts:
             {{- if (or (eq .Values.filer.logs.type "hostPath") (eq .Values.filer.logs.type "persistentVolumeClaim") (eq .Values.filer.logs.type "emptyDir")) }}
             - name: seaweedfs-filer-log-volume
@@ -219,6 +240,12 @@ spec:
             {{- if (or .Values.filer.enablePVC (or (eq .Values.filer.data.type "hostPath") (eq .Values.filer.data.type "persistentVolumeClaim") (eq .Values.filer.data.type "emptyDir"))) }}
             - name: data-filer
               mountPath: /data
+            {{- end }}
+            {{- if .Values.filer.notificationConfig }}
+            - name: notification-config
+              readOnly: true
+              mountPath: /etc/seaweedfs/notification.toml
+              subPath: notification.toml
             {{- end }}
             {{- if .Values.global.enableSecurity }}
             - name: security-config
@@ -249,6 +276,14 @@ spec:
               name: metrics
             - containerPort: {{ .Values.filer.grpcPort }}
               #name: swfs-filer-grpc
+            {{- if .Values.filer.s3.enabled }}
+            - containerPort: {{ .Values.filer.s3.port }}
+              name: swfs-s3
+            {{- if .Values.filer.s3.httpsPort }}
+            - containerPort: {{ .Values.filer.s3.httpsPort }}
+              name: swfs-s3-tls
+            {{- end }}
+            {{- end }}
           {{- if .Values.filer.readinessProbe.enabled }}
           readinessProbe:
             httpGet:
@@ -326,6 +361,11 @@ spec:
             {{- else }}
             secretName: seaweedfs-s3-secret
             {{- end }}
+        {{- end }}
+        {{- if .Values.filer.notificationConfig }}
+        - name: notification-config
+          configMap:
+            name: {{ template "seaweedfs.name" . }}-notification-config
         {{- end }}
         {{- if .Values.global.enableSecurity }}
         - name: security-config
