@@ -52,6 +52,13 @@ spec:
       containers:
         - name: update-resources
           image: bitnami/kubectl:latest
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
           command: ["sh", "-exc"]
           args:
             - |
