@@ -2,5 +2,5 @@ include ../../../scripts/common-envs.mk
 include ../../../scripts/package.mk
 
 generate:
-	readme-generator -v values.yaml -s values.schema.json -r README.md
+	readme-generator-for-helm -v values.yaml -s values.schema.json -r README.md
 

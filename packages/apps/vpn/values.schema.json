@@ -1,21 +1,37 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
+        "external": {
+            "default": false,
+            "description": "Enable external access from outside the cluster",
+            "type": "boolean"
+        },
+        "externalIPs": {
+            "default": [],
+            "description": "List of externalIPs for service. Optional. If not specified will use LoadBalancer service by default.",
+            "items": {
+                "type": "string"
+            },
+            "type": "array"
+        },
+        "host": {
+            "default": "",
+            "description": "Host used to substitute into generated URLs",
+            "type": "string"
+        },
         "replicas": {
-            "type": "number",
+            "default": 2,
             "description": "Number of VPN server replicas",
-            "default": 2
+            "type": "number"
         },
         "resources": {
-            "type": "object",
+            "default": {},
             "description": "Explicit CPU and memory configuration for each VPN server replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-            "default": {}
+            "type": "object"
         },
         "resourcesPreset": {
-            "type": "string",
-            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
             "default": "nano",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "type": "string",
             "enum": [
                 "nano",
                 "micro",
@@ -25,24 +41,8 @@
                 "xlarge",
                 "2xlarge"
             ]
-        },
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
-        },
-        "host": {
-            "type": "string",
-            "description": "Host used to substitute into generated URLs",
-            "default": ""
-        },
-        "externalIPs": {
-            "type": "array",
-            "description": "List of externalIPs for service. Optional. If not specified will use LoadBalancer service by default.",
-            "default": "[]",
-            "items": {
-                "type": "string"
-            }
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }

@@ -13,4 +13,3 @@
 | `size`              | Persistent Volume size                                                                                 | `10Gi`   |
 | `storageClass`      | StorageClass used to store the data                                                                    | `""`     |
 | `zones`             | A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.         | `{}`     |
-

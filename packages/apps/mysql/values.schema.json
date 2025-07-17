@@ -1,21 +1,69 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
+        "backup": {
+            "properties": {
+                "cleanupStrategy": {
+                    "default": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m",
+                    "description": "The strategy for cleaning up old backups",
+                    "type": "string"
+                },
+                "enabled": {
+                    "default": false,
+                    "description": "Enable periodic backups",
+                    "type": "boolean"
+                },
+                "resticPassword": {
+                    "default": "ChaXoveekoh6eigh4siesheeda2quai0",
+                    "description": "The password for Restic backup encryption",
+                    "type": "string"
+                },
+                "s3AccessKey": {
+                    "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu",
+                    "description": "The access key for S3, used for authentication",
+                    "type": "string"
+                },
+                "s3Bucket": {
+                    "default": "s3.example.org/postgres-backups",
+                    "description": "The S3 bucket used for storing backups",
+                    "type": "string"
+                },
+                "s3Region": {
+                    "default": "us-east-1",
+                    "description": "The AWS S3 region where backups are stored",
+                    "type": "string"
+                },
+                "s3SecretKey": {
+                    "default": "ju3eum4dekeich9ahM1te8waeGai0oog",
+                    "description": "The secret key for S3, used for authentication",
+                    "type": "string"
+                },
+                "schedule": {
+                    "default": "0 2 * * *",
+                    "description": "Cron schedule for automated backups",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "external": {
+            "default": false,
+            "description": "Enable external access from outside the cluster",
+            "type": "boolean"
+        },
         "replicas": {
-            "type": "number",
+            "default": 2,
             "description": "Number of MariaDB replicas",
-            "default": 2
+            "type": "number"
         },
         "resources": {
-            "type": "object",
+            "default": {},
             "description": "Explicit CPU and memory configuration for each MariaDB replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-            "default": {}
+            "type": "object"
         },
         "resourcesPreset": {
-            "type": "string",
-            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
             "default": "nano",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "type": "string",
             "enum": [
                 "nano",
                 "micro",
@@ -27,64 +75,16 @@
             ]
         },
         "size": {
-            "type": "string",
+            "default": "10Gi",
             "description": "Persistent Volume size",
-            "default": "10Gi"
+            "type": "string"
         },
         "storageClass": {
-            "type": "string",
+            "default": "",
             "description": "StorageClass used to store the data",
-            "default": ""
-        },
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
-        },
-        "backup": {
-            "type": "object",
-            "properties": {
-                "enabled": {
-                    "type": "boolean",
-                    "description": "Enable periodic backups",
-                    "default": false
-                },
-                "s3Region": {
-                    "type": "string",
-                    "description": "The AWS S3 region where backups are stored",
-                    "default": "us-east-1"
-                },
-                "s3Bucket": {
-                    "type": "string",
-                    "description": "The S3 bucket used for storing backups",
-                    "default": "s3.example.org/postgres-backups"
-                },
-                "schedule": {
-                    "type": "string",
-                    "description": "Cron schedule for automated backups",
-                    "default": "0 2 * * *"
-                },
-                "cleanupStrategy": {
-                    "type": "string",
-                    "description": "The strategy for cleaning up old backups",
-                    "default": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
-                },
-                "s3AccessKey": {
-                    "type": "string",
-                    "description": "The access key for S3, used for authentication",
-                    "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu"
-                },
-                "s3SecretKey": {
-                    "type": "string",
-                    "description": "The secret key for S3, used for authentication",
-                    "default": "ju3eum4dekeich9ahM1te8waeGai0oog"
-                },
-                "resticPassword": {
-                    "type": "string",
-                    "description": "The password for Restic backup encryption",
-                    "default": "ChaXoveekoh6eigh4siesheeda2quai0"
-                }
-            }
+            "type": "string"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }

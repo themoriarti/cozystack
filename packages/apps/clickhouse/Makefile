@@ -5,7 +5,7 @@ include ../../../scripts/common-envs.mk
 include ../../../scripts/package.mk
 
 generate:
-	readme-generator -v values.yaml -s values.schema.json -r README.md
+	readme-generator-for-helm -v values.yaml -s values.schema.json -r README.md
 	yq -i -o json --indent 4 '.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
 
 image:

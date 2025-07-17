@@ -1,25 +1,27 @@
 {
-  "title": "Chart Values",
-  "type": "object",
   "properties": {
-    "whitelistHTTP": {
-      "type": "boolean",
-      "description": "Secure HTTP by enabling  client networks whitelisting",
-      "default": true
-    },
-    "whitelist": {
-      "type": "array",
-      "description": "List of client networks",
-      "default": [],
-      "items": {}
-    },
     "machines": {
-      "type": "array",
+      "default": [],
       "description": "Configuration of physical machine instances",
-      "default": "[]",
       "items": {
         "type": "object"
-      }
+      },
+      "type": "array"
+    },
+    "whitelist": {
+      "default": [],
+      "description": "List of client networks",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "whitelistHTTP": {
+      "default": true,
+      "description": "Secure HTTP by enabling  client networks whitelisting",
+      "type": "boolean"
     }
-  }
+  },
+  "title": "Chart Values",
+  "type": "object"
 }
