@@ -2,30 +2,49 @@
     "title": "Chart Values",
     "type": "object",
     "properties": {
-        "size": {
-            "type": "string",
-            "description": "Size of Persistent Volume for data",
-            "default": "10Gi"
-        },
-        "logStorageSize": {
-            "type": "string",
-            "description": "Size of Persistent Volume for logs",
-            "default": "2Gi"
+        "replicas": {
+            "type": "number",
+            "description": "Number of Clickhouse replicas",
+            "default": 2
         },
         "shards": {
             "type": "number",
             "description": "Number of Clickhouse shards",
             "default": 1
         },
-        "replicas": {
-            "type": "number",
-            "description": "Number of Clickhouse replicas",
-            "default": 2
+        "resources": {
+            "type": "object",
+            "description": "Explicit CPU and memory configuration for each ClickHouse replica. When left empty, the preset defined in `resourcesPreset` is applied.",
+            "default": {}
+        },
+        "resourcesPreset": {
+            "type": "string",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "default": "small",
+            "enum": [
+                "nano",
+                "micro",
+                "small",
+                "medium",
+                "large",
+                "xlarge",
+                "2xlarge"
+            ]
+        },
+        "size": {
+            "type": "string",
+            "description": "Persistent Volume Claim size, available for application data",
+            "default": "10Gi"
         },
         "storageClass": {
             "type": "string",
-            "description": "StorageClass used to store the data",
+            "description": "StorageClass used to store the application data",
             "default": ""
+        },
+        "logStorageSize": {
+            "type": "string",
+            "description": "Size of Persistent Volume for logs",
+            "default": "2Gi"
         },
         "logTTL": {
             "type": "number",
@@ -76,25 +95,6 @@
                     "default": "ChaXoveekoh6eigh4siesheeda2quai0"
                 }
             }
-        },
-        "resources": {
-            "type": "object",
-            "description": "Explicit CPU and memory configuration for each ClickHouse replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-            "default": {}
-        },
-        "resourcesPreset": {
-            "type": "string",
-            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
-            "default": "small",
-            "enum": [
-                "nano",
-                "micro",
-                "small",
-                "medium",
-                "large",
-                "xlarge",
-                "2xlarge"
-            ]
         }
     }
 }

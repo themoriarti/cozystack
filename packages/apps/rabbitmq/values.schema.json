@@ -2,30 +2,10 @@
     "title": "Chart Values",
     "type": "object",
     "properties": {
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
-        },
-        "size": {
-            "type": "string",
-            "description": "Persistent Volume size",
-            "default": "10Gi"
-        },
         "replicas": {
             "type": "number",
             "description": "Number of RabbitMQ replicas",
             "default": 3
-        },
-        "storageClass": {
-            "type": "string",
-            "description": "StorageClass used to store the data",
-            "default": ""
-        },
-        "vhosts": {
-            "type": "object",
-            "description": "Virtual Hosts configuration",
-            "default": {}
         },
         "resources": {
             "type": "object",
@@ -45,6 +25,26 @@
                 "xlarge",
                 "2xlarge"
             ]
+        },
+        "size": {
+            "type": "string",
+            "description": "Persistent Volume size",
+            "default": "10Gi"
+        },
+        "storageClass": {
+            "type": "string",
+            "description": "StorageClass used to store the data",
+            "default": ""
+        },
+        "external": {
+            "type": "boolean",
+            "description": "Enable external access from outside the cluster",
+            "default": false
+        },
+        "vhosts": {
+            "type": "object",
+            "description": "Virtual Hosts configuration",
+            "default": {}
         }
     }
 }

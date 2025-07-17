@@ -2,30 +2,10 @@
     "title": "Chart Values",
     "type": "object",
     "properties": {
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
-        },
-        "size": {
-            "type": "string",
-            "description": "Persistent Volume size",
-            "default": "1Gi"
-        },
         "replicas": {
             "type": "number",
             "description": "Number of Redis replicas",
             "default": 2
-        },
-        "storageClass": {
-            "type": "string",
-            "description": "StorageClass used to store the data",
-            "default": ""
-        },
-        "authEnabled": {
-            "type": "boolean",
-            "description": "Enable password generation",
-            "default": true
         },
         "resources": {
             "type": "object",
@@ -45,6 +25,26 @@
                 "xlarge",
                 "2xlarge"
             ]
+        },
+        "size": {
+            "type": "string",
+            "description": "Persistent Volume size",
+            "default": "1Gi"
+        },
+        "storageClass": {
+            "type": "string",
+            "description": "StorageClass used to store the data",
+            "default": ""
+        },
+        "external": {
+            "type": "boolean",
+            "description": "Enable external access from outside the cluster",
+            "default": false
+        },
+        "authEnabled": {
+            "type": "boolean",
+            "description": "Enable password generation",
+            "default": true
         }
     }
 }

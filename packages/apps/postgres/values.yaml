@@ -1,29 +1,34 @@
 ## @section Common parameters
-
-## @param external Enable external access from outside the cluster
-## @param size Persistent Volume size
-## @param replicas Number of Postgres replicas
-## @param storageClass StorageClass used to store the data
 ##
-external: false
-size: 10Gi
+## @param replicas Number of Postgres replicas
 replicas: 2
+## @param resources Explicit CPU and memory configuration for each PostgreSQL replica. When left empty, the preset defined in `resourcesPreset` is applied.
+resources: {}
+  # resources:
+  #   cpu: 4000m
+  #   memory: 4Gi
+## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+resourcesPreset: "micro"
+## @param size Persistent Volume size
+size: 10Gi
+## @param storageClass StorageClass used to store the data
 storageClass: ""
+## @param external Enable external access from outside the cluster
+external: false
 
-## Server Configuration
+
+## @section Application-specific parameters
+##
 ## @param postgresql.parameters.max_connections Determines the maximum number of concurrent connections to the database server. The default is typically 100 connections
 postgresql:
   parameters:
     max_connections: 100
 
-## Configuration for the quorum-based synchronous replication
 ## @param quorum.minSyncReplicas Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed.
 ## @param quorum.maxSyncReplicas Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the number of instances).
 quorum:
   minSyncReplicas: 0
   maxSyncReplicas: 0
-
-## @section Configuration parameters
 
 ## @param users [object] Users configuration
 ## Example:
@@ -75,7 +80,7 @@ backup:
   s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
   s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
 
-## @section Bootstrap parameters
+## @section Bootstrap (recovery) parameters
 
 ## @param bootstrap.enabled Restore database cluster from a backup
 ## @param bootstrap.recoveryTime Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest
@@ -87,11 +92,3 @@ bootstrap:
   recoveryTime: ""
   oldName: ""
 
-## @param resources Explicit CPU and memory configuration for each PostgreSQL replica. When left empty, the preset defined in `resourcesPreset` is applied.
-resources: {}
- # resources:
- #   cpu: 4000m
- #   memory: 4Gi
- 
-## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
-resourcesPreset: "micro"

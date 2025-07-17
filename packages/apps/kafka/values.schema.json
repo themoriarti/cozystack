@@ -7,23 +7,19 @@
             "description": "Enable external access from outside the cluster",
             "default": false
         },
+        "topics": {
+            "type": "array",
+            "description": "Topics configuration (see example)",
+            "default": [],
+            "items": {}
+        },
         "kafka": {
             "type": "object",
             "properties": {
-                "size": {
-                    "type": "string",
-                    "description": "Persistent Volume size for Kafka",
-                    "default": "10Gi"
-                },
                 "replicas": {
                     "type": "number",
                     "description": "Number of Kafka replicas",
                     "default": 3
-                },
-                "storageClass": {
-                    "type": "string",
-                    "description": "StorageClass used to store the Kafka data",
-                    "default": ""
                 },
                 "resources": {
                     "type": "object",
@@ -43,26 +39,26 @@
                         "xlarge",
                         "2xlarge"
                     ]
+                },
+                "size": {
+                    "type": "string",
+                    "description": "Persistent Volume size for Kafka",
+                    "default": "10Gi"
+                },
+                "storageClass": {
+                    "type": "string",
+                    "description": "StorageClass used to store the Kafka data",
+                    "default": ""
                 }
             }
         },
         "zookeeper": {
             "type": "object",
             "properties": {
-                "size": {
-                    "type": "string",
-                    "description": "Persistent Volume size for ZooKeeper",
-                    "default": "5Gi"
-                },
                 "replicas": {
                     "type": "number",
                     "description": "Number of ZooKeeper replicas",
                     "default": 3
-                },
-                "storageClass": {
-                    "type": "string",
-                    "description": "StorageClass used to store the ZooKeeper data",
-                    "default": ""
                 },
                 "resources": {
                     "type": "object",
@@ -82,14 +78,18 @@
                         "xlarge",
                         "2xlarge"
                     ]
+                },
+                "size": {
+                    "type": "string",
+                    "description": "Persistent Volume size for ZooKeeper",
+                    "default": "5Gi"
+                },
+                "storageClass": {
+                    "type": "string",
+                    "description": "StorageClass used to store the ZooKeeper data",
+                    "default": ""
                 }
             }
-        },
-        "topics": {
-            "type": "array",
-            "description": "Topics configuration",
-            "default": [],
-            "items": {}
         }
     }
 }
