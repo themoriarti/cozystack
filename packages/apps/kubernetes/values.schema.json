@@ -125,7 +125,7 @@
     },
     "version": {
       "type": "string",
-      "description": "Kubernetes version given as vMAJOR.MINOR",
+      "description": "Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.",
       "default": "v1.32",
       "enum": [
         "v1.28",

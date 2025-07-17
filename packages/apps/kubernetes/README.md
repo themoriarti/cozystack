@@ -11,6 +11,9 @@ Tenant clusters are fully separated from the management cluster and are intended
 Within a tenant cluster, users can take advantage of LoadBalancer services and easily provision physical volumes as needed.                               
 The control-plane operates within containers, while the worker nodes are deployed as virtual machines, all seamlessly managed by the application.
 
+Kubernetes version in tenant clusters is independent of Kubernetes in the management cluster.
+Users can select the latest patch versions from 1.28 to 1.33.
+
 ## Why Use a Managed Kubernetes Cluster?
 
 Kubernetes has emerged as the industry standard, providing a unified and accessible API, primarily utilizing YAML for configuration.
@@ -86,7 +89,7 @@ See the reference for components utilized in this service:
 | `host`                  | Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty. | `""`         |
 | `controlPlane.replicas` | Number of replicas for Kubernetes control-plane components.                                                       | `2`          |
 | `storageClass`          | StorageClass used to store user data.                                                                             | `replicated` |
-| `version`               | Kubernetes version given as vMAJOR.MINOR                                                                          | `v1.32`      |
+| `version`               | Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.                               | `v1.32`      |
 | `nodeGroups`            | nodeGroups configuration                                                                                          | `{}`         |
 
 ### Cluster Addons

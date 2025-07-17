@@ -3,7 +3,7 @@
 ## @param host Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.
 ## @param controlPlane.replicas Number of replicas for Kubernetes control-plane components.
 ## @param storageClass StorageClass used to store user data.
-## @param version Kubernetes version given as vMAJOR.MINOR
+## @param version Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.
 ##
 host: ""
 storageClass: replicated
