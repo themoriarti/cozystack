@@ -132,7 +132,6 @@ See the reference for components utilized in this service:
 | `controlPlane.konnectivity.server.resources`       | Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.           | `{}`     |
 | `controlPlane.konnectivity.server.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.            | `micro`  |
 
-
 ## Parameter examples and reference
 
 ### resources and resourcesPreset

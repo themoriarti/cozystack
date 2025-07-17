@@ -1,21 +1,54 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
+        "config": {
+            "properties": {
+                "merge": {
+                    "default": {},
+                    "description": "Additional configuration to merge into NATS config (see example)",
+                    "type": "object"
+                },
+                "resolver": {
+                    "default": {},
+                    "description": "Additional resolver configuration to merge into NATS config (see example)",
+                    "type": "object"
+                }
+            },
+            "type": "object"
+        },
+        "external": {
+            "default": false,
+            "description": "Enable external access from outside the cluster",
+            "type": "boolean"
+        },
+        "jetstream": {
+            "properties": {
+                "enabled": {
+                    "default": true,
+                    "description": "Enable or disable Jetstream",
+                    "type": "boolean"
+                },
+                "size": {
+                    "default": "10Gi",
+                    "description": "Jetstream persistent storage size",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
         "replicas": {
-            "type": "number",
+            "default": 2,
             "description": "Number of replicas",
-            "default": 2
+            "type": "number"
         },
         "resources": {
-            "type": "object",
+            "default": {},
             "description": "Explicit CPU and memory configuration for each NATS replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-            "default": {}
+            "type": "object"
         },
         "resourcesPreset": {
-            "type": "string",
-            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
             "default": "nano",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "type": "string",
             "enum": [
                 "nano",
                 "micro",
@@ -27,44 +60,11 @@
             ]
         },
         "storageClass": {
-            "type": "string",
+            "default": "",
             "description": "StorageClass used to store the data",
-            "default": ""
-        },
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
-        },
-        "jetstream": {
-            "type": "object",
-            "properties": {
-                "enabled": {
-                    "type": "boolean",
-                    "description": "Enable or disable Jetstream",
-                    "default": true
-                },
-                "size": {
-                    "type": "string",
-                    "description": "Jetstream persistent storage size",
-                    "default": "10Gi"
-                }
-            }
-        },
-        "config": {
-            "type": "object",
-            "properties": {
-                "merge": {
-                    "type": "object",
-                    "description": "Additional configuration to merge into NATS config (see example)",
-                    "default": {}
-                },
-                "resolver": {
-                    "type": "object",
-                    "description": "Additional resolver configuration to merge into NATS config (see example)",
-                    "default": {}
-                }
-            }
+            "type": "string"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }

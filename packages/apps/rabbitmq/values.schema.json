@@ -1,21 +1,24 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
+        "external": {
+            "default": false,
+            "description": "Enable external access from outside the cluster",
+            "type": "boolean"
+        },
         "replicas": {
-            "type": "number",
+            "default": 3,
             "description": "Number of RabbitMQ replicas",
-            "default": 3
+            "type": "number"
         },
         "resources": {
-            "type": "object",
+            "default": {},
             "description": "Explicit CPU and memory configuration for each RabbitMQ replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-            "default": {}
+            "type": "object"
         },
         "resourcesPreset": {
-            "type": "string",
-            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
             "default": "nano",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "type": "string",
             "enum": [
                 "nano",
                 "micro",
@@ -27,24 +30,21 @@
             ]
         },
         "size": {
-            "type": "string",
+            "default": "10Gi",
             "description": "Persistent Volume size",
-            "default": "10Gi"
+            "type": "string"
         },
         "storageClass": {
-            "type": "string",
+            "default": "",
             "description": "StorageClass used to store the data",
-            "default": ""
-        },
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
+            "type": "string"
         },
         "vhosts": {
-            "type": "object",
+            "default": {},
             "description": "Virtual Hosts configuration",
-            "default": {}
+            "type": "object"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }

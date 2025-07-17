@@ -23,7 +23,7 @@ image-nginx:
 	rm -f images/nginx-cache.json
 
 generate:
-	readme-generator -v values.yaml -s values.schema.json -r README.md
+	readme-generator-for-helm -v values.yaml -s values.schema.json -r README.md
 	yq -i -o json --indent 4 '.properties.haproxy.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
 	yq -i -o json --indent 4 '.properties.nginx.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
 

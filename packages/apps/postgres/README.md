@@ -105,7 +105,6 @@ See:
 | `bootstrap.recoveryTime` | Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest | `""`    |
 | `bootstrap.oldName`      | Name of database cluster before deleting                                                                             | `""`    |
 
-
 ## Parameter examples and reference
 
 ### resources and resourcesPreset

@@ -1,41 +1,41 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
-        "host": {
-            "type": "string",
-            "description": "The hostname used to access tenant services (defaults to using the tenant name as a subdomain for it's parent tenant host).",
-            "default": ""
-        },
         "etcd": {
-            "type": "boolean",
+            "default": false,
             "description": "Deploy own Etcd cluster",
-            "default": false
+            "type": "boolean"
         },
-        "monitoring": {
-            "type": "boolean",
-            "description": "Deploy own Monitoring Stack",
-            "default": false
+        "host": {
+            "default": "",
+            "description": "The hostname used to access tenant services (defaults to using the tenant name as a subdomain for it's parent tenant host).",
+            "type": "string"
         },
         "ingress": {
-            "type": "boolean",
+            "default": false,
             "description": "Deploy own Ingress Controller",
-            "default": false
-        },
-        "seaweedfs": {
-            "type": "boolean",
-            "description": "Deploy own SeaweedFS",
-            "default": false
+            "type": "boolean"
         },
         "isolated": {
-            "type": "boolean",
+            "default": true,
             "description": "Enforce tenant namespace with network policies",
-            "default": true
+            "type": "boolean"
+        },
+        "monitoring": {
+            "default": false,
+            "description": "Deploy own Monitoring Stack",
+            "type": "boolean"
         },
         "resourceQuotas": {
-            "type": "object",
+            "default": {},
             "description": "Define resource quotas for the tenant",
-            "default": {}
+            "type": "object"
+        },
+        "seaweedfs": {
+            "default": false,
+            "description": "Deploy own SeaweedFS",
+            "type": "boolean"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }

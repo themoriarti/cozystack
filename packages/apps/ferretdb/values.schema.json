@@ -1,21 +1,99 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
+        "backup": {
+            "properties": {
+                "destinationPath": {
+                    "default": "s3://bucket/path/to/folder/",
+                    "description": "Path to store the backup (i.e. s3://bucket/path/to/folder)",
+                    "type": "string"
+                },
+                "enabled": {
+                    "default": false,
+                    "description": "Enable regular backups",
+                    "type": "boolean"
+                },
+                "endpointURL": {
+                    "default": "http://minio-gateway-service:9000",
+                    "description": "S3 Endpoint used to upload data to the cloud",
+                    "type": "string"
+                },
+                "retentionPolicy": {
+                    "default": "30d",
+                    "description": "Retention policy",
+                    "type": "string"
+                },
+                "s3AccessKey": {
+                    "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu",
+                    "description": "Access key for S3, used for authentication",
+                    "type": "string"
+                },
+                "s3SecretKey": {
+                    "default": "ju3eum4dekeich9ahM1te8waeGai0oog",
+                    "description": "Secret key for S3, used for authentication",
+                    "type": "string"
+                },
+                "schedule": {
+                    "default": "0 2 * * * *",
+                    "description": "Cron schedule for automated backups",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "bootstrap": {
+            "properties": {
+                "enabled": {
+                    "default": false,
+                    "description": "Restore database cluster from a backup",
+                    "type": "boolean"
+                },
+                "oldName": {
+                    "default": "",
+                    "description": "Name of database cluster before deleting",
+                    "type": "string"
+                },
+                "recoveryTime": {
+                    "default": "",
+                    "description": "Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "external": {
+            "default": false,
+            "description": "Enable external access from outside the cluster",
+            "type": "boolean"
+        },
+        "quorum": {
+            "properties": {
+                "maxSyncReplicas": {
+                    "default": 0,
+                    "description": "Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the total number of replicas)",
+                    "type": "number"
+                },
+                "minSyncReplicas": {
+                    "default": 0,
+                    "description": "Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed",
+                    "type": "number"
+                }
+            },
+            "type": "object"
+        },
         "replicas": {
-            "type": "number",
+            "default": 2,
             "description": "Number of replicas",
-            "default": 2
+            "type": "number"
         },
         "resources": {
-            "type": "object",
+            "default": {},
             "description": "Explicit CPU and memory configuration for each FerretDB replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-            "default": {}
+            "type": "object"
         },
         "resourcesPreset": {
-            "type": "string",
-            "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
             "default": "micro",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "type": "string",
             "enum": [
                 "nano",
                 "micro",
@@ -27,94 +105,16 @@
             ]
         },
         "size": {
-            "type": "string",
+            "default": "10Gi",
             "description": "Persistent Volume size",
-            "default": "10Gi"
+            "type": "string"
         },
         "storageClass": {
-            "type": "string",
+            "default": "",
             "description": "StorageClass used to store the data",
-            "default": ""
-        },
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
-        },
-        "quorum": {
-            "type": "object",
-            "properties": {
-                "minSyncReplicas": {
-                    "type": "number",
-                    "description": "Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed",
-                    "default": 0
-                },
-                "maxSyncReplicas": {
-                    "type": "number",
-                    "description": "Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the total number of replicas)",
-                    "default": 0
-                }
-            }
-        },
-        "backup": {
-            "type": "object",
-            "properties": {
-                "enabled": {
-                    "type": "boolean",
-                    "description": "Enable regular backups",
-                    "default": false
-                },
-                "schedule": {
-                    "type": "string",
-                    "description": "Cron schedule for automated backups",
-                    "default": "0 2 * * * *"
-                },
-                "retentionPolicy": {
-                    "type": "string",
-                    "description": "Retention policy",
-                    "default": "30d"
-                },
-                "destinationPath": {
-                    "type": "string",
-                    "description": "Path to store the backup (i.e. s3://bucket/path/to/folder)",
-                    "default": "s3://bucket/path/to/folder/"
-                },
-                "endpointURL": {
-                    "type": "string",
-                    "description": "S3 Endpoint used to upload data to the cloud",
-                    "default": "http://minio-gateway-service:9000"
-                },
-                "s3AccessKey": {
-                    "type": "string",
-                    "description": "Access key for S3, used for authentication",
-                    "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu"
-                },
-                "s3SecretKey": {
-                    "type": "string",
-                    "description": "Secret key for S3, used for authentication",
-                    "default": "ju3eum4dekeich9ahM1te8waeGai0oog"
-                }
-            }
-        },
-        "bootstrap": {
-            "type": "object",
-            "properties": {
-                "enabled": {
-                    "type": "boolean",
-                    "description": "Restore database cluster from a backup",
-                    "default": false
-                },
-                "recoveryTime": {
-                    "type": "string",
-                    "description": "Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest",
-                    "default": ""
-                },
-                "oldName": {
-                    "type": "string",
-                    "description": "Name of database cluster before deleting",
-                    "default": ""
-                }
-            }
+            "type": "string"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }
