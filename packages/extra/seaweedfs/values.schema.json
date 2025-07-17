@@ -1,26 +1,45 @@
 {
-    "title": "Chart Values",
-    "type": "object",
-    "properties": {
-        "host": {
-            "type": "string",
-            "description": "The hostname used to access the grafana externally (defaults to 'grafana' subdomain for the tenant host).",
-            "default": ""
-        },
-        "replicas": {
-            "type": "number",
-            "description": "Persistent Volume size for NATS",
-            "default": 2
-        },
-        "size": {
-            "type": "string",
-            "description": "Persistent Volume size",
-            "default": "10Gi"
-        },
-        "storageClass": {
-            "type": "string",
-            "description": "StorageClass used to store the data",
-            "default": ""
-        }
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "host": {
+      "type": "string",
+      "description": "The hostname used to access the SeaweedFS externally (defaults to 's3' subdomain for the tenant host).",
+      "default": ""
+    },
+    "topology": {
+      "type": "string",
+      "description": "The topology of the SeaweedFS cluster. (allowed values: Simple, MultiZone)",
+      "default": "Simple",
+      "enum": [
+        "Simple",
+        "MultiZone"
+      ]
+    },
+    "replicationFactor": {
+      "type": "number",
+      "description": "The number of replicas for each volume in the SeaweedFS cluster.",
+      "default": 2
+    },
+    "replicas": {
+      "type": "number",
+      "description": "Persistent Volume size for SeaweedFS",
+      "default": 2
+    },
+    "size": {
+      "type": "string",
+      "description": "Persistent Volume size",
+      "default": "10Gi"
+    },
+    "storageClass": {
+      "type": "string",
+      "description": "StorageClass used to store the data",
+      "default": ""
+    },
+    "zones": {
+      "type": "object",
+      "description": "A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.",
+      "default": {}
     }
+  }
 }
