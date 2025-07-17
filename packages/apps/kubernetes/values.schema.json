@@ -2,10 +2,168 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "storageClass": {
+      "type": "string",
+      "description": "StorageClass used to store user data.",
+      "default": "replicated"
+    },
+    "version": {
+      "type": "string",
+      "description": "Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.",
+      "default": "v1.32",
+      "enum": [
+        "v1.28",
+        "v1.29",
+        "v1.30",
+        "v1.31",
+        "v1.32",
+        "v1.33"
+      ]
+    },
     "host": {
       "type": "string",
       "description": "Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.",
       "default": ""
+    },
+    "addons": {
+      "type": "object",
+      "properties": {
+        "certManager": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable cert-manager, which automatically creates and manages SSL/TLS certificates.",
+              "default": false
+            },
+            "valuesOverride": {
+              "type": "object",
+              "description": "Custom values to override",
+              "default": {}
+            }
+          }
+        },
+        "cilium": {
+          "type": "object",
+          "properties": {
+            "valuesOverride": {
+              "type": "object",
+              "description": "Custom values to override",
+              "default": {}
+            }
+          }
+        },
+        "gatewayAPI": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the Gateway API",
+              "default": false
+            }
+          }
+        },
+        "ingressNginx": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).",
+              "default": false
+            },
+            "exposeMethod": {
+              "type": "string",
+              "description": "Method to expose the Ingress-NGINX controller. (allowed values: Proxied, LoadBalancer)",
+              "default": "Proxied",
+              "enum": [
+                "Proxied",
+                "LoadBalancer"
+              ]
+            },
+            "hosts": {
+              "type": "array",
+              "description": "List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.",
+              "default": [],
+              "items": {}
+            },
+            "valuesOverride": {
+              "type": "object",
+              "description": "Custom values to override",
+              "default": {}
+            }
+          }
+        },
+        "gpuOperator": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the GPU-operator",
+              "default": false
+            },
+            "valuesOverride": {
+              "type": "object",
+              "description": "Custom values to override",
+              "default": {}
+            }
+          }
+        },
+        "fluxcd": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable FluxCD",
+              "default": false
+            },
+            "valuesOverride": {
+              "type": "object",
+              "description": "Custom values to override",
+              "default": {}
+            }
+          }
+        },
+        "monitoringAgents": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable monitoring agents (Fluent Bit and VMAgents) to send logs and metrics. If tenant monitoring is enabled, data is sent to tenant storage; otherwise, it goes to root storage.",
+              "default": false
+            },
+            "valuesOverride": {
+              "type": "object",
+              "description": "Custom values to override",
+              "default": {}
+            }
+          }
+        },
+        "verticalPodAutoscaler": {
+          "type": "object",
+          "properties": {
+            "valuesOverride": {
+              "type": "object",
+              "description": "Custom values to override",
+              "default": {}
+            }
+          }
+        },
+        "velero": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable velero for backup and restore k8s cluster.",
+              "default": false
+            },
+            "valuesOverride": {
+              "type": "object",
+              "description": "Custom values to override",
+              "default": {}
+            }
+          }
+        }
+      }
     },
     "controlPlane": {
       "type": "object",
@@ -113,164 +271,6 @@
                   ]
                 }
               }
-            }
-          }
-        }
-      }
-    },
-    "storageClass": {
-      "type": "string",
-      "description": "StorageClass used to store user data.",
-      "default": "replicated"
-    },
-    "version": {
-      "type": "string",
-      "description": "Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.",
-      "default": "v1.32",
-      "enum": [
-        "v1.28",
-        "v1.29",
-        "v1.30",
-        "v1.31",
-        "v1.32",
-        "v1.33"
-      ]
-    },
-    "addons": {
-      "type": "object",
-      "properties": {
-        "certManager": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable cert-manager, which automatically creates and manages SSL/TLS certificates.",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "cilium": {
-          "type": "object",
-          "properties": {
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "gatewayAPI": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable the Gateway API",
-              "default": false
-            }
-          }
-        },
-        "ingressNginx": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            },
-            "exposeMethod": {
-              "type": "string",
-              "description": "Method to expose the Ingress-NGINX controller. (allowed values: Proxied, LoadBalancer)",
-              "default": "Proxied",
-              "enum": [
-                "Proxied",
-                "LoadBalancer"
-              ]
-            },
-            "hosts": {
-              "type": "array",
-              "description": "List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.",
-              "default": [],
-              "items": {}
-            }
-          }
-        },
-        "gpuOperator": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable the GPU-operator",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "fluxcd": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable FluxCD",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "monitoringAgents": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable monitoring agents (Fluent Bit and VMAgents) to send logs and metrics. If tenant monitoring is enabled, data is sent to tenant storage; otherwise, it goes to root storage.",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "verticalPodAutoscaler": {
-          "type": "object",
-          "properties": {
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "velero": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable velero for backup and restore k8s cluster.",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
             }
           }
         }

@@ -2,25 +2,44 @@
     "title": "Chart Values",
     "type": "object",
     "properties": {
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
+        "replicas": {
+            "type": "number",
+            "description": "Number of MariaDB replicas",
+            "default": 2
+        },
+        "resources": {
+            "type": "object",
+            "description": "Explicit CPU and memory configuration for each MariaDB replica. When left empty, the preset defined in `resourcesPreset` is applied.",
+            "default": {}
+        },
+        "resourcesPreset": {
+            "type": "string",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "default": "nano",
+            "enum": [
+                "nano",
+                "micro",
+                "small",
+                "medium",
+                "large",
+                "xlarge",
+                "2xlarge"
+            ]
         },
         "size": {
             "type": "string",
             "description": "Persistent Volume size",
             "default": "10Gi"
         },
-        "replicas": {
-            "type": "number",
-            "description": "Number of MariaDB replicas",
-            "default": 2
-        },
         "storageClass": {
             "type": "string",
             "description": "StorageClass used to store the data",
             "default": ""
+        },
+        "external": {
+            "type": "boolean",
+            "description": "Enable external access from outside the cluster",
+            "default": false
         },
         "backup": {
             "type": "object",
@@ -66,25 +85,6 @@
                     "default": "ChaXoveekoh6eigh4siesheeda2quai0"
                 }
             }
-        },
-        "resources": {
-            "type": "object",
-            "description": "Explicit CPU and memory configuration for each MariaDB replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-            "default": {}
-        },
-        "resourcesPreset": {
-            "type": "string",
-            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
-            "default": "nano",
-            "enum": [
-                "nano",
-                "micro",
-                "small",
-                "medium",
-                "large",
-                "xlarge",
-                "2xlarge"
-            ]
         }
     }
 }

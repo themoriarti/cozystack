@@ -1,14 +1,14 @@
 ## @section Common Parameters
 
-## @param host Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.
-## @param controlPlane.replicas Number of replicas for Kubernetes control-plane components.
 ## @param storageClass StorageClass used to store user data.
-## @param version Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.
-##
-host: ""
 storageClass: replicated
+
+## @section Application-specific parameters
+## @param version Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.
 version: "v1.32"
-## @param nodeGroups [object] nodeGroups configuration
+## @param host Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.
+host: ""
+## @param nodeGroups [object] Worker nodes configuration (see example)
 ##
 nodeGroups:
   md0:
@@ -34,13 +34,12 @@ nodeGroups:
 ## @section Cluster Addons
 ##
 addons:
-
   ## Cert-manager: automatically creates and manages SSL/TLS certificate
   ##
   certManager:
     ## @param addons.certManager.enabled Enable cert-manager, which automatically creates and manages SSL/TLS certificates.
-    ## @param addons.certManager.valuesOverride Custom values to override
     enabled: false
+    ## @param addons.certManager.valuesOverride Custom values to override
     valuesOverride: {}
 
   ## Cilium CNI plugin
@@ -59,18 +58,17 @@ addons:
   ##
   ingressNginx:
     ## @param addons.ingressNginx.enabled Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).
-    ## @param addons.ingressNginx.valuesOverride Custom values to override
-    ##
     enabled: false
     ## @param addons.ingressNginx.exposeMethod Method to expose the Ingress-NGINX controller. (allowed values: Proxied, LoadBalancer)
+    exposeMethod: Proxied
     ## @param addons.ingressNginx.hosts List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.
     ## e.g:
     ## hosts:
     ## - example.org
     ## - foo.example.net
     ##
-    exposeMethod: Proxied
     hosts: []
+    ## @param addons.ingressNginx.valuesOverride Custom values to override
     valuesOverride: {}
 
   ## GPU-operator: NVIDIA GPU Operator
@@ -117,12 +115,12 @@ addons:
 
 ## @section Kubernetes Control Plane Configuration
 ##
-
 controlPlane:
+  ## @param controlPlane.replicas Number of replicas for Kubernetes control-plane components.
   replicas: 2
-
   apiServer:
     ## @param controlPlane.apiServer.resources Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.
+    resources: {}
     ## @param controlPlane.apiServer.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
     ## e.g:
     ## resources:
@@ -130,7 +128,6 @@ controlPlane:
     ##   memory: 4Gi
     ##
     resourcesPreset: "medium"
-    resources: {}
 
   controllerManager:
     ## @param controlPlane.controllerManager.resources Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.

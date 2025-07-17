@@ -2,15 +2,34 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
-    "external": {
-      "type": "boolean",
-      "description": "Enable external access from outside the cluster",
-      "default": false
-    },
     "replicas": {
       "type": "number",
       "description": "Number of HAProxy replicas",
       "default": 2
+    },
+    "resources": {
+      "type": "object",
+      "description": "Explicit CPU and memory configuration for each TCP Balancer replica. When left empty, the preset defined in `resourcesPreset` is applied.",
+      "default": {}
+    },
+    "resourcesPreset": {
+      "type": "string",
+      "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+      "default": "nano",
+      "enum": [
+        "nano",
+        "micro",
+        "small",
+        "medium",
+        "large",
+        "xlarge",
+        "2xlarge"
+      ]
+    },
+    "external": {
+      "type": "boolean",
+      "description": "Enable external access from outside the cluster",
+      "default": false
     },
     "httpAndHttps": {
       "type": "object",
@@ -49,7 +68,7 @@
     },
     "whitelistHTTP": {
       "type": "boolean",
-      "description": "Secure HTTP by enabling  client networks whitelisting",
+      "description": "Secure HTTP by whitelisting client networks",
       "default": false
     },
     "whitelist": {
@@ -57,25 +76,6 @@
       "description": "List of client networks",
       "default": [],
       "items": {}
-    },
-    "resources": {
-      "type": "object",
-      "description": "Explicit CPU and memory configuration for each TCP Balancer replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-      "default": {}
-    },
-    "resourcesPreset": {
-      "type": "string",
-      "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
-      "default": "nano",
-      "enum": [
-        "nano",
-        "micro",
-        "small",
-        "medium",
-        "large",
-        "xlarge",
-        "2xlarge"
-      ]
     }
   }
 }

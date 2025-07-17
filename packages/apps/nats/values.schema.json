@@ -2,50 +2,10 @@
     "title": "Chart Values",
     "type": "object",
     "properties": {
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
-        },
         "replicas": {
             "type": "number",
-            "description": "Persistent Volume size for NATS",
+            "description": "Number of replicas",
             "default": 2
-        },
-        "storageClass": {
-            "type": "string",
-            "description": "StorageClass used to store the data",
-            "default": ""
-        },
-        "jetstream": {
-            "type": "object",
-            "properties": {
-                "size": {
-                    "type": "string",
-                    "description": "Jetstream persistent storage size",
-                    "default": "10Gi"
-                },
-                "enabled": {
-                    "type": "boolean",
-                    "description": "Enable or disable Jetstream",
-                    "default": true
-                }
-            }
-        },
-        "config": {
-            "type": "object",
-            "properties": {
-                "merge": {
-                    "type": "object",
-                    "description": "Additional configuration to merge into NATS config",
-                    "default": {}
-                },
-                "resolver": {
-                    "type": "object",
-                    "description": "Additional configuration to merge into NATS config",
-                    "default": {}
-                }
-            }
         },
         "resources": {
             "type": "object",
@@ -65,6 +25,46 @@
                 "xlarge",
                 "2xlarge"
             ]
+        },
+        "storageClass": {
+            "type": "string",
+            "description": "StorageClass used to store the data",
+            "default": ""
+        },
+        "external": {
+            "type": "boolean",
+            "description": "Enable external access from outside the cluster",
+            "default": false
+        },
+        "jetstream": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable or disable Jetstream",
+                    "default": true
+                },
+                "size": {
+                    "type": "string",
+                    "description": "Jetstream persistent storage size",
+                    "default": "10Gi"
+                }
+            }
+        },
+        "config": {
+            "type": "object",
+            "properties": {
+                "merge": {
+                    "type": "object",
+                    "description": "Additional configuration to merge into NATS config (see example)",
+                    "default": {}
+                },
+                "resolver": {
+                    "type": "object",
+                    "description": "Additional resolver configuration to merge into NATS config (see example)",
+                    "default": {}
+                }
+            }
         }
     }
 }

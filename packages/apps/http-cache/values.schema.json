@@ -2,11 +2,6 @@
     "title": "Chart Values",
     "type": "object",
     "properties": {
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
-        },
         "size": {
             "type": "string",
             "description": "Persistent Volume size",
@@ -16,6 +11,17 @@
             "type": "string",
             "description": "StorageClass used to store the data",
             "default": ""
+        },
+        "external": {
+            "type": "boolean",
+            "description": "Enable external access from outside the cluster",
+            "default": false
+        },
+        "endpoints": {
+            "type": "array",
+            "description": "Endpoints configuration",
+            "default": [],
+            "items": {}
         },
         "haproxy": {
             "type": "object",
@@ -74,12 +80,6 @@
                     ]
                 }
             }
-        },
-        "endpoints": {
-            "type": "array",
-            "description": "Endpoints configuration",
-            "default": [],
-            "items": {}
         }
     }
 }

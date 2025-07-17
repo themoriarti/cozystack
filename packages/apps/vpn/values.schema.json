@@ -2,28 +2,10 @@
     "title": "Chart Values",
     "type": "object",
     "properties": {
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
-        },
         "replicas": {
             "type": "number",
             "description": "Number of VPN server replicas",
             "default": 2
-        },
-        "host": {
-            "type": "string",
-            "description": "Host used to substitute into generated URLs",
-            "default": ""
-        },
-        "externalIPs": {
-            "type": "array",
-            "description": "List of externalIPs for service. Optional. If not specified will use LoadBalancer service by default.",
-            "default": "[]",
-            "items": {
-                "type": "string"
-            }
         },
         "resources": {
             "type": "object",
@@ -43,6 +25,24 @@
                 "xlarge",
                 "2xlarge"
             ]
+        },
+        "external": {
+            "type": "boolean",
+            "description": "Enable external access from outside the cluster",
+            "default": false
+        },
+        "host": {
+            "type": "string",
+            "description": "Host used to substitute into generated URLs",
+            "default": ""
+        },
+        "externalIPs": {
+            "type": "array",
+            "description": "List of externalIPs for service. Optional. If not specified will use LoadBalancer service by default.",
+            "default": "[]",
+            "items": {
+                "type": "string"
+            }
         }
     }
 }

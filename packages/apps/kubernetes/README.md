@@ -84,13 +84,17 @@ See the reference for components utilized in this service:
 
 ### Common Parameters
 
-| Name                    | Description                                                                                                       | Value        |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------ |
-| `host`                  | Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty. | `""`         |
-| `controlPlane.replicas` | Number of replicas for Kubernetes control-plane components.                                                       | `2`          |
-| `storageClass`          | StorageClass used to store user data.                                                                             | `replicated` |
-| `version`               | Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.                               | `v1.32`      |
-| `nodeGroups`            | nodeGroups configuration                                                                                          | `{}`         |
+| Name           | Description                           | Value        |
+| -------------- | ------------------------------------- | ------------ |
+| `storageClass` | StorageClass used to store user data. | `replicated` |
+
+### Application-specific parameters
+
+| Name         | Description                                                                                                       | Value   |
+| ------------ | ----------------------------------------------------------------------------------------------------------------- | ------- |
+| `version`    | Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.                               | `v1.32` |
+| `host`       | Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty. | `""`    |
+| `nodeGroups` | Worker nodes configuration (see example)                                                                          | `{}`    |
 
 ### Cluster Addons
 
@@ -101,9 +105,9 @@ See the reference for components utilized in this service:
 | `addons.cilium.valuesOverride`                | Custom values to override                                                                                                                                                         | `{}`      |
 | `addons.gatewayAPI.enabled`                   | Enable the Gateway API                                                                                                                                                            | `false`   |
 | `addons.ingressNginx.enabled`                 | Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).                                                                                       | `false`   |
-| `addons.ingressNginx.valuesOverride`          | Custom values to override                                                                                                                                                         | `{}`      |
 | `addons.ingressNginx.exposeMethod`            | Method to expose the Ingress-NGINX controller. (allowed values: Proxied, LoadBalancer)                                                                                            | `Proxied` |
 | `addons.ingressNginx.hosts`                   | List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.                                | `[]`      |
+| `addons.ingressNginx.valuesOverride`          | Custom values to override                                                                                                                                                         | `{}`      |
 | `addons.gpuOperator.enabled`                  | Enable the GPU-operator                                                                                                                                                           | `false`   |
 | `addons.gpuOperator.valuesOverride`           | Custom values to override                                                                                                                                                         | `{}`      |
 | `addons.fluxcd.enabled`                       | Enable FluxCD                                                                                                                                                                     | `false`   |
@@ -118,6 +122,7 @@ See the reference for components utilized in this service:
 
 | Name                                               | Description                                                                                                                            | Value    |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `controlPlane.replicas`                            | Number of replicas for Kubernetes control-plane components.                                                                            | `2`      |
 | `controlPlane.apiServer.resources`                 | Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.         | `{}`     |
 | `controlPlane.apiServer.resourcesPreset`           | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.            | `medium` |
 | `controlPlane.controllerManager.resources`         | Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`     |
