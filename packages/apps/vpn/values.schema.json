@@ -8,9 +8,7 @@
         "externalIPs": {
             "default": [],
             "description": "List of externalIPs for service. Optional. If not specified will use LoadBalancer service by default.",
-            "items": {
-                "type": "string"
-            },
+            "items": {},
             "type": "array"
         },
         "host": {

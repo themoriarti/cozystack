@@ -47,9 +47,7 @@
         "topics": {
             "default": [],
             "description": "Topics configuration (see example)",
-            "items": {
-                "type": "string"
-            },
+            "items": {},
             "type": "array"
         },
         "zookeeper": {

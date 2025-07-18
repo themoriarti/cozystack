@@ -176,9 +176,7 @@
     "sshKeys": {
       "default": [],
       "description": "List of SSH public keys for authentication. Can be a single key or a list of keys.",
-      "items": {
-        "type": "string"
-      },
+      "items": {},
       "type": "array"
     },
     "systemDisk": {

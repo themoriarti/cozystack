@@ -3,9 +3,7 @@
         "endpoints": {
             "default": [],
             "description": "Endpoints configuration",
-            "items": {
-                "type": "string"
-            },
+            "items": {},
             "type": "array"
         },
         "external": {

@@ -10,9 +10,7 @@
         "endpoints": {
           "default": [],
           "description": "Endpoint addresses list",
-          "items": {
-            "type": "string"
-          },
+          "items": {},
           "type": "array"
         },
         "mode": {
@@ -69,9 +67,7 @@
     "whitelist": {
       "default": [],
       "description": "List of client networks",
-      "items": {
-        "type": "string"
-      },
+      "items": {},
       "type": "array"
     },
     "whitelistHTTP": {

@@ -86,9 +86,7 @@
             "hosts": {
               "default": [],
               "description": "List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.",
-              "items": {
-                "type": "string"
-              },
+              "items": {},
               "type": "array"
             },
             "valuesOverride": {

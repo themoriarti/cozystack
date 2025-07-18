@@ -13,9 +13,7 @@
         "whitelist": {
             "default": [],
             "description": "List of client networks",
-            "items": {
-                "type": "string"
-            },
+            "items": {},
             "type": "array"
         }
     },
