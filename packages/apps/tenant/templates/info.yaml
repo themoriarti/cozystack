@@ -6,8 +6,6 @@ kind: HelmRelease
 metadata:
   name: info
   namespace: {{ include "tenant.name" . }}
-  annotations:
-    helm.sh/resource-policy: keep
   labels:
     cozystack.io/ui: "true"
     app.kubernetes.io/instance: {{ .Release.Name }}
@@ -21,7 +19,6 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
-      version: "*"
   interval: 1m0s
   timeout: 5m0s
 {{- end }}

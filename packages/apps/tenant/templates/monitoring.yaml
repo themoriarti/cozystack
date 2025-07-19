@@ -17,31 +17,6 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
-      version: "*"
   interval: 1m0s
   timeout: 5m0s
-  values:
-    metricsStorages:
-    - name: shortterm
-      retentionPeriod: "3d"
-      deduplicationInterval: "15s"
-      storage: 10Gi
-      vminsert:
-        resources: {}
-      vmselect:
-        resources: {}
-      vmstorage:
-        resources: {}
-    - name: longterm
-      retentionPeriod: "14d"
-      deduplicationInterval: "5m"
-      storage: 10Gi
-      vminsert:
-        resources: {}
-      vmselect:
-        resources: {}
-      vmstorage:
-        resources: {}
-    oncall:
-      enabled: false
 {{- end }}
