@@ -11,14 +11,14 @@ repos:
     - id: run-make-generate
       name: Run 'make generate' in all app directories
       entry: |
-        /bin/bash -c '
-          for dir in ./packages/apps/*/; do
+        flock -x .git/pre-commit.lock sh -c '
+          for dir in ./packages/apps/*/ ./packages/extra/*/ ./packages/system/cozystack-api/; do
             if [ -d "$dir" ]; then
               echo "Running make generate in $dir"
-              (cd "$dir" && make generate)
+              make generate -C "$dir" || exit $?
             fi
           done
           git diff --color=always | cat
         '
-      language: script
+      language: system
       files: ^.*$

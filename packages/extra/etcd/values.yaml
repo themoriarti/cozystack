@@ -8,7 +8,9 @@ size: 4Gi
 storageClass: ""
 replicas: 3
 
-## @param resources Resources
+## Resources
+## @param resources.cpu The number of CPU cores allocated
+## @param resources.memory The amount of memory allocated
 resources:
   cpu: 4
   memory: 1Gi

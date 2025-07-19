@@ -1,98 +1,100 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
-        },
-        "size": {
-            "type": "string",
-            "description": "Persistent Volume size",
-            "default": "10Gi"
-        },
-        "replicas": {
-            "type": "number",
-            "description": "Number of replicas",
-            "default": 2
-        },
-        "storageClass": {
-            "type": "string",
-            "description": "StorageClass used to store the data",
-            "default": ""
-        },
-        "quorum": {
-            "type": "object",
-            "properties": {
-                "minSyncReplicas": {
-                    "type": "number",
-                    "description": "Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed",
-                    "default": 0
-                },
-                "maxSyncReplicas": {
-                    "type": "number",
-                    "description": "Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the total number of replicas)",
-                    "default": 0
-                }
-            }
-        },
         "backup": {
-            "type": "object",
             "properties": {
+                "destinationPath": {
+                    "default": "s3://bucket/path/to/folder/",
+                    "description": "Path to store the backup (i.e. s3://bucket/path/to/folder)",
+                    "type": "string"
+                },
                 "enabled": {
-                    "type": "boolean",
-                    "description": "Enable periodic backups",
-                    "default": false
+                    "default": false,
+                    "description": "Enable regular backups",
+                    "type": "boolean"
                 },
-                "s3Region": {
-                    "type": "string",
-                    "description": "The AWS S3 region where backups are stored",
-                    "default": "us-east-1"
+                "endpointURL": {
+                    "default": "http://minio-gateway-service:9000",
+                    "description": "S3 Endpoint used to upload data to the cloud",
+                    "type": "string"
                 },
-                "s3Bucket": {
-                    "type": "string",
-                    "description": "The S3 bucket used for storing backups",
-                    "default": "s3.example.org/postgres-backups"
-                },
-                "schedule": {
-                    "type": "string",
-                    "description": "Cron schedule for automated backups",
-                    "default": "0 2 * * *"
-                },
-                "cleanupStrategy": {
-                    "type": "string",
-                    "description": "The strategy for cleaning up old backups",
-                    "default": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
+                "retentionPolicy": {
+                    "default": "30d",
+                    "description": "Retention policy",
+                    "type": "string"
                 },
                 "s3AccessKey": {
-                    "type": "string",
-                    "description": "The access key for S3, used for authentication",
-                    "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu"
+                    "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu",
+                    "description": "Access key for S3, used for authentication",
+                    "type": "string"
                 },
                 "s3SecretKey": {
-                    "type": "string",
-                    "description": "The secret key for S3, used for authentication",
-                    "default": "ju3eum4dekeich9ahM1te8waeGai0oog"
+                    "default": "ju3eum4dekeich9ahM1te8waeGai0oog",
+                    "description": "Secret key for S3, used for authentication",
+                    "type": "string"
                 },
-                "resticPassword": {
-                    "type": "string",
-                    "description": "The password for Restic backup encryption",
-                    "default": "ChaXoveekoh6eigh4siesheeda2quai0"
+                "schedule": {
+                    "default": "0 2 * * * *",
+                    "description": "Cron schedule for automated backups",
+                    "type": "string"
                 }
-            }
+            },
+            "type": "object"
+        },
+        "bootstrap": {
+            "properties": {
+                "enabled": {
+                    "default": false,
+                    "description": "Restore database cluster from a backup",
+                    "type": "boolean"
+                },
+                "oldName": {
+                    "default": "",
+                    "description": "Name of database cluster before deleting",
+                    "type": "string"
+                },
+                "recoveryTime": {
+                    "default": "",
+                    "description": "Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "external": {
+            "default": false,
+            "description": "Enable external access from outside the cluster",
+            "type": "boolean"
+        },
+        "quorum": {
+            "properties": {
+                "maxSyncReplicas": {
+                    "default": 0,
+                    "description": "Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the total number of replicas)",
+                    "type": "number"
+                },
+                "minSyncReplicas": {
+                    "default": 0,
+                    "description": "Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed",
+                    "type": "number"
+                }
+            },
+            "type": "object"
+        },
+        "replicas": {
+            "default": 2,
+            "description": "Number of replicas",
+            "type": "number"
         },
         "resources": {
-            "type": "object",
+            "default": {},
             "description": "Explicit CPU and memory configuration for each FerretDB replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-            "default": {}
+            "type": "object"
         },
         "resourcesPreset": {
-            "type": "string",
+            "default": "micro",
             "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
-            "default": "nano",
+            "type": "string",
             "enum": [
-                "none",
                 "nano",
                 "micro",
                 "small",
@@ -101,6 +103,18 @@
                 "xlarge",
                 "2xlarge"
             ]
+        },
+        "size": {
+            "default": "10Gi",
+            "description": "Persistent Volume size",
+            "type": "string"
+        },
+        "storageClass": {
+            "default": "",
+            "description": "StorageClass used to store the data",
+            "type": "string"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }

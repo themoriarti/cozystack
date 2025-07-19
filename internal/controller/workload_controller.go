@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -13,6 +14,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+)
+
+const (
+	deletionRequeueDelay = 30 * time.Second
 )
 
 // WorkloadMonitorReconciler reconciles a WorkloadMonitor object
@@ -52,6 +57,9 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// found object, nothing to do
 	if err == nil {
+		if !t.GetDeletionTimestamp().IsZero() {
+			return ctrl.Result{RequeueAfter: deletionRequeueDelay}, nil
+		}
 		return ctrl.Result{}, nil
 	}
 

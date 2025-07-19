@@ -1,41 +1,27 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
         "external": {
-            "type": "boolean",
+            "default": false,
             "description": "Enable external access from outside the cluster",
-            "default": false
+            "type": "boolean"
         },
         "kafka": {
-            "type": "object",
             "properties": {
-                "size": {
-                    "type": "string",
-                    "description": "Persistent Volume size for Kafka",
-                    "default": "10Gi"
-                },
                 "replicas": {
-                    "type": "number",
+                    "default": 3,
                     "description": "Number of Kafka replicas",
-                    "default": 3
-                },
-                "storageClass": {
-                    "type": "string",
-                    "description": "StorageClass used to store the Kafka data",
-                    "default": ""
+                    "type": "number"
                 },
                 "resources": {
-                    "type": "object",
+                    "default": {},
                     "description": "Explicit CPU and memory configuration for each Kafka replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-                    "default": {}
+                    "type": "object"
                 },
                 "resourcesPreset": {
-                    "type": "string",
-                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
                     "default": "small",
+                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+                    "type": "string",
                     "enum": [
-                        "none",
                         "nano",
                         "micro",
                         "small",
@@ -44,54 +30,66 @@
                         "xlarge",
                         "2xlarge"
                     ]
-                }
-            }
-        },
-        "zookeeper": {
-            "type": "object",
-            "properties": {
-                "size": {
-                    "type": "string",
-                    "description": "Persistent Volume size for ZooKeeper",
-                    "default": "5Gi"
                 },
-                "replicas": {
-                    "type": "number",
-                    "description": "Number of ZooKeeper replicas",
-                    "default": 3
+                "size": {
+                    "default": "10Gi",
+                    "description": "Persistent Volume size for Kafka",
+                    "type": "string"
                 },
                 "storageClass": {
-                    "type": "string",
-                    "description": "StorageClass used to store the ZooKeeper data",
-                    "default": ""
-                },
-                "resources": {
-                    "type": "object",
-                    "description": "Explicit CPU and memory configuration for each Zookeeper replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-                    "default": {}
-                },
-                "resourcesPreset": {
-                    "type": "string",
-                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
-                    "default": "small",
-                    "enum": [
-                        "none",
-                        "nano",
-                        "micro",
-                        "small",
-                        "medium",
-                        "large",
-                        "xlarge",
-                        "2xlarge"
-                    ]
+                    "default": "",
+                    "description": "StorageClass used to store the Kafka data",
+                    "type": "string"
                 }
-            }
+            },
+            "type": "object"
         },
         "topics": {
-            "type": "array",
-            "description": "Topics configuration",
             "default": [],
-            "items": {}
+            "description": "Topics configuration (see example)",
+            "items": {},
+            "type": "array"
+        },
+        "zookeeper": {
+            "properties": {
+                "replicas": {
+                    "default": 3,
+                    "description": "Number of ZooKeeper replicas",
+                    "type": "number"
+                },
+                "resources": {
+                    "default": {},
+                    "description": "Explicit CPU and memory configuration for each Zookeeper replica. When left empty, the preset defined in `resourcesPreset` is applied.",
+                    "type": "object"
+                },
+                "resourcesPreset": {
+                    "default": "small",
+                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+                    "type": "string",
+                    "enum": [
+                        "nano",
+                        "micro",
+                        "small",
+                        "medium",
+                        "large",
+                        "xlarge",
+                        "2xlarge"
+                    ]
+                },
+                "size": {
+                    "default": "5Gi",
+                    "description": "Persistent Volume size for ZooKeeper",
+                    "type": "string"
+                },
+                "storageClass": {
+                    "default": "",
+                    "description": "StorageClass used to store the ZooKeeper data",
+                    "type": "string"
+                }
+            },
+            "type": "object"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }

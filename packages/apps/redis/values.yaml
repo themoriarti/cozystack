@@ -1,22 +1,23 @@
 ## @section Common parameters
-
-## @param external Enable external access from outside the cluster
-## @param size Persistent Volume size
-## @param replicas Number of Redis replicas
-## @param storageClass StorageClass used to store the data
-## @param authEnabled Enable password generation
 ##
-external: false
-size: 1Gi
+## @param replicas Number of Redis replicas
 replicas: 2
-storageClass: ""
-authEnabled: true
-
 ## @param resources Explicit CPU and memory configuration for each Redis replica. When left empty, the preset defined in `resourcesPreset` is applied.
 resources: {}
- # resources:
- #   cpu: 4000m
- #   memory: 4Gi
- 
-## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
+  # resources:
+  #   cpu: 4000m
+  #   memory: 4Gi
+## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
 resourcesPreset: "nano"
+## @param size Persistent Volume size
+size: 1Gi
+## @param storageClass StorageClass used to store the data
+storageClass: ""
+## @param external Enable external access from outside the cluster
+external: false
+
+
+## @section Application-specific parameters
+##
+## @param authEnabled Enable password generation
+authEnabled: true

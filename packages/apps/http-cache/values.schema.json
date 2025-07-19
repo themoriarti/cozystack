@@ -1,41 +1,33 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
+        "endpoints": {
+            "default": [],
+            "description": "Endpoints configuration",
+            "items": {},
+            "type": "array"
+        },
         "external": {
-            "type": "boolean",
+            "default": false,
             "description": "Enable external access from outside the cluster",
-            "default": false
-        },
-        "size": {
-            "type": "string",
-            "description": "Persistent Volume size",
-            "default": "10Gi"
-        },
-        "storageClass": {
-            "type": "string",
-            "description": "StorageClass used to store the data",
-            "default": ""
+            "type": "boolean"
         },
         "haproxy": {
-            "type": "object",
             "properties": {
                 "replicas": {
-                    "type": "number",
+                    "default": 2,
                     "description": "Number of HAProxy replicas",
-                    "default": 2
+                    "type": "number"
                 },
                 "resources": {
-                    "type": "object",
+                    "default": {},
                     "description": "Explicit CPU and memory configuration for each HAProxy replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-                    "default": {}
+                    "type": "object"
                 },
                 "resourcesPreset": {
-                    "type": "string",
-                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
                     "default": "nano",
+                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+                    "type": "string",
                     "enum": [
-                        "none",
                         "nano",
                         "micro",
                         "small",
@@ -45,27 +37,26 @@
                         "2xlarge"
                     ]
                 }
-            }
+            },
+            "type": "object"
         },
         "nginx": {
-            "type": "object",
             "properties": {
                 "replicas": {
-                    "type": "number",
+                    "default": 2,
                     "description": "Number of Nginx replicas",
-                    "default": 2
+                    "type": "number"
                 },
                 "resources": {
-                    "type": "object",
+                    "default": {},
                     "description": "Explicit CPU and memory configuration for each nginx replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-                    "default": {}
+                    "type": "object"
                 },
                 "resourcesPreset": {
-                    "type": "string",
-                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
                     "default": "nano",
+                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+                    "type": "string",
                     "enum": [
-                        "none",
                         "nano",
                         "micro",
                         "small",
@@ -75,13 +66,20 @@
                         "2xlarge"
                     ]
                 }
-            }
+            },
+            "type": "object"
         },
-        "endpoints": {
-            "type": "array",
-            "description": "Endpoints configuration",
-            "default": [],
-            "items": {}
+        "size": {
+            "default": "10Gi",
+            "description": "Persistent Volume size",
+            "type": "string"
+        },
+        "storageClass": {
+            "default": "",
+            "description": "StorageClass used to store the data",
+            "type": "string"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }

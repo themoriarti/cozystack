@@ -1,4 +1,5 @@
 NGINX_CACHE_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
+PRESET_ENUM := ["nano","micro","small","medium","large","xlarge","2xlarge"]
 
 include ../../../scripts/common-envs.mk
 include ../../../scripts/package.mk
@@ -22,9 +23,9 @@ image-nginx:
 	rm -f images/nginx-cache.json
 
 generate:
-	readme-generator -v values.yaml -s values.schema.json -r README.md
-	yq -i -o json --indent 4 '.properties.haproxy.properties.resourcesPreset.enum = ["none", "nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"]' values.schema.json
-	yq -i -o json --indent 4 '.properties.nginx.properties.resourcesPreset.enum = ["none", "nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"]' values.schema.json
+	readme-generator-for-helm -v values.yaml -s values.schema.json -r README.md
+	yq -i -o json --indent 4 '.properties.haproxy.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
+	yq -i -o json --indent 4 '.properties.nginx.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
 
 update:
 	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/chrislim2888/IP2Location-C-Library | awk -F'[/^]' 'END{print $$3}') && \

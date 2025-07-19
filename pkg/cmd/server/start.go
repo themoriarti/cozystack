@@ -18,6 +18,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,8 +40,6 @@ import (
 	utilversionpkg "k8s.io/apiserver/pkg/util/version"
 	"k8s.io/component-base/featuregate"
 	baseversion "k8s.io/component-base/version"
-	"k8s.io/klog/v2"
-	"k8s.io/kube-openapi/pkg/validation/spec"
 	netutils "k8s.io/utils/net"
 )
 
@@ -159,22 +159,6 @@ func (o AppsServerOptions) Validate(args []string) error {
 	return utilerrors.NewAggregate(allErrors)
 }
 
-// DeepCopySchema делает глубокую копию структуры spec.Schema
-func DeepCopySchema(schema *spec.Schema) (*spec.Schema, error) {
-	data, err := json.Marshal(schema)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal schema: %w", err)
-	}
-
-	var newSchema spec.Schema
-	err = json.Unmarshal(data, &newSchema)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal schema: %w", err)
-	}
-
-	return &newSchema, nil
-}
-
 // Config returns the configuration for the API server based on AppsServerOptions
 func (o *AppsServerOptions) Config() (*apiserver.Config, error) {
 	// TODO: set the "real" external address
@@ -195,98 +179,34 @@ func (o *AppsServerOptions) Config() (*apiserver.Config, error) {
 	serverConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(
 		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
 	)
-	serverConfig.OpenAPIConfig.Info.Title = "Apps"
-	serverConfig.OpenAPIConfig.Info.Version = "0.1"
 
-	serverConfig.OpenAPIConfig.PostProcessSpec = func(swagger *spec.Swagger) (*spec.Swagger, error) {
-		defs := swagger.Definitions
-
-		// Verify the presence of the base Application/ApplicationList definitions
-		appDef, exists := defs["com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1.Application"]
-		if !exists {
-			return swagger, fmt.Errorf("Application definition not found")
+	version := "0.1"
+	if o.ResourceConfig != nil {
+		raw, err := json.Marshal(o.ResourceConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal resource config: %v", err)
 		}
-
-		listDef, exists := defs["com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1.ApplicationList"]
-		if !exists {
-			return swagger, fmt.Errorf("ApplicationList definition not found")
-		}
-
-		// Iterate over all registered GVKs (e.g., Bucket, Database, etc.)
-		for _, gvk := range v1alpha1.RegisteredGVKs {
-			// This will be something like:
-			// "com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1.Bucket"
-			resourceName := fmt.Sprintf("com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1.%s", gvk.Kind)
-
-			// 1. Create a copy of the base Application definition for the new resource
-			newDef, err := DeepCopySchema(&appDef)
-			if err != nil {
-				return nil, fmt.Errorf("failed to deepcopy schema for %s: %w", gvk.Kind, err)
-			}
-
-			// 2. Update x-kubernetes-group-version-kind to match the new resource
-			if newDef.Extensions == nil {
-				newDef.Extensions = map[string]interface{}{}
-			}
-			newDef.Extensions["x-kubernetes-group-version-kind"] = []map[string]interface{}{
-				{
-					"group":   gvk.Group,
-					"version": gvk.Version,
-					"kind":    gvk.Kind,
-				},
-			}
-
-			// 3. Save the new resource definition under the correct name
-			defs[resourceName] = *newDef
-			klog.V(6).Infof("PostProcessSpec: Added OpenAPI definition for %s\n", resourceName)
-
-			// 4. Now handle the corresponding List type (e.g., BucketList).
-			//    We'll start by copying the ApplicationList definition.
-			listResourceName := fmt.Sprintf("com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1.%sList", gvk.Kind)
-			newListDef, err := DeepCopySchema(&listDef)
-			if err != nil {
-				return nil, fmt.Errorf("failed to deepcopy schema for %sList: %w", gvk.Kind, err)
-			}
-
-			// 5. Update x-kubernetes-group-version-kind for the List definition
-			if newListDef.Extensions == nil {
-				newListDef.Extensions = map[string]interface{}{}
-			}
-			newListDef.Extensions["x-kubernetes-group-version-kind"] = []map[string]interface{}{
-				{
-					"group":   gvk.Group,
-					"version": gvk.Version,
-					"kind":    fmt.Sprintf("%sList", gvk.Kind),
-				},
-			}
-
-			// 6. IMPORTANT: Fix the "items" reference so it points to the new resource
-			//    rather than to "Application".
-			if itemsProp, found := newListDef.Properties["items"]; found {
-				if itemsProp.Items != nil && itemsProp.Items.Schema != nil {
-					itemsProp.Items.Schema.Ref = spec.MustCreateRef("#/definitions/" + resourceName)
-					newListDef.Properties["items"] = itemsProp
-				}
-			}
-
-			// 7. Finally, save the new List definition
-			defs[listResourceName] = *newListDef
-			klog.V(6).Infof("PostProcessSpec: Added OpenAPI definition for %s\n", listResourceName)
-		}
-
-		// Remove the original Application/ApplicationList from the definitions
-		delete(defs, "com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1.Application")
-		delete(defs, "com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1.ApplicationList")
-
-		swagger.Definitions = defs
-		return swagger, nil
+		sum := sha256.Sum256(raw)
+		version = "0.1-" + hex.EncodeToString(sum[:8])
 	}
+
+	// capture schemas from config once for fast lookup inside the closure
+	kindSchemas := map[string]string{}
+	for _, r := range o.ResourceConfig.Resources {
+		kindSchemas[r.Application.Kind] = r.Application.OpenAPISchema
+	}
+
+	serverConfig.OpenAPIConfig.Info.Title = "Apps"
+	serverConfig.OpenAPIConfig.Info.Version = version
+	serverConfig.OpenAPIConfig.PostProcessSpec = buildPostProcessV2(kindSchemas)
 
 	serverConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(
 		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
 	)
 	serverConfig.OpenAPIV3Config.Info.Title = "Apps"
-	serverConfig.OpenAPIV3Config.Info.Version = "0.1"
+	serverConfig.OpenAPIV3Config.Info.Version = version
+
+	serverConfig.OpenAPIV3Config.PostProcessSpec = buildPostProcessV3(kindSchemas)
 
 	serverConfig.FeatureGate = utilversionpkg.DefaultComponentGlobalsRegistry.FeatureGateFor(
 		utilversionpkg.DefaultKubeComponent,

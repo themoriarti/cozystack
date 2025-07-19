@@ -1,43 +1,30 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
-        "external": {
-            "type": "boolean",
-            "description": "Enable external access from outside the cluster",
-            "default": false
+        "authEnabled": {
+            "default": true,
+            "description": "Enable password generation",
+            "type": "boolean"
         },
-        "size": {
-            "type": "string",
-            "description": "Persistent Volume size",
-            "default": "1Gi"
+        "external": {
+            "default": false,
+            "description": "Enable external access from outside the cluster",
+            "type": "boolean"
         },
         "replicas": {
-            "type": "number",
+            "default": 2,
             "description": "Number of Redis replicas",
-            "default": 2
-        },
-        "storageClass": {
-            "type": "string",
-            "description": "StorageClass used to store the data",
-            "default": ""
-        },
-        "authEnabled": {
-            "type": "boolean",
-            "description": "Enable password generation",
-            "default": true
+            "type": "number"
         },
         "resources": {
-            "type": "object",
+            "default": {},
             "description": "Explicit CPU and memory configuration for each Redis replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-            "default": {}
+            "type": "object"
         },
         "resourcesPreset": {
-            "type": "string",
-            "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
             "default": "nano",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "type": "string",
             "enum": [
-                "none",
                 "nano",
                 "micro",
                 "small",
@@ -46,6 +33,18 @@
                 "xlarge",
                 "2xlarge"
             ]
+        },
+        "size": {
+            "default": "1Gi",
+            "description": "Persistent Volume size",
+            "type": "string"
+        },
+        "storageClass": {
+            "default": "",
+            "description": "StorageClass used to store the data",
+            "type": "string"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }

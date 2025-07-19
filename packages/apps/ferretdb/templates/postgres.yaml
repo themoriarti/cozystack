@@ -5,6 +5,50 @@ metadata:
   name: {{ .Release.Name }}-postgres
 spec:
   instances: {{ .Values.replicas }}
+  {{- if .Values.backup.enabled }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.backup.destinationPath }}
+      endpointURL: {{ .Values.backup.endpointURL }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ .Release.Name }}-s3-creds
+          key: AWS_ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ .Release.Name }}-s3-creds
+          key: AWS_SECRET_ACCESS_KEY
+    retentionPolicy: {{ .Values.backup.retentionPolicy }}
+  {{- end }}
+
+  bootstrap:
+    initdb:
+      postInitSQL:
+        - 'CREATE EXTENSION IF NOT EXISTS documentdb CASCADE;'
+    {{- if .Values.bootstrap.enabled }}
+    recovery:
+      source: {{ .Values.bootstrap.oldName }}
+      {{- if .Values.bootstrap.recoveryTime }}
+      recoveryTarget:
+        targetTime: {{ .Values.bootstrap.recoveryTime }}
+      {{- end }}
+    {{- end }}
+  {{- if .Values.bootstrap.enabled }}
+  externalClusters:
+    - name: {{ .Values.bootstrap.oldName }}
+      barmanObjectStore:
+        destinationPath: {{ .Values.backup.destinationPath }}
+        endpointURL: {{ .Values.backup.endpointURL }}
+        s3Credentials:
+          accessKeyId:
+            name: {{ .Release.Name }}-s3-creds
+            key: AWS_ACCESS_KEY_ID
+          secretAccessKey:
+            name: {{ .Release.Name }}-s3-creds
+            key: AWS_SECRET_ACCESS_KEY
+  {{- end }}
+  imageName: ghcr.io/ferretdb/postgres-documentdb:17-0.105.0-ferretdb-2.4.0
+  postgresUID: 999
+  postgresGID: 999
   enableSuperuserAccess: true
   {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
   {{- if $configMap }}
@@ -21,6 +65,17 @@ spec:
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
   monitoring:
     enablePodMonitor: true
+
+  postgresql:
+    shared_preload_libraries:
+      - pg_cron
+      - pg_documentdb_core
+      - pg_documentdb
+    parameters:
+      cron.database_name: 'postgres'
+    pg_hba:
+      - host postgres postgres 127.0.0.1/32 trust
+      - host postgres postgres ::1/128 trust
 
   storage:
     size: {{ required ".Values.size is required" .Values.size }}
@@ -42,8 +97,6 @@ spec:
       passwordSecret:
         name: {{ printf "%s-user-%s" $.Release.Name $user }}
       login: true
-      inRoles:
-      - app
     {{- end }}
   {{- end }}
 

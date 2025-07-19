@@ -1,34 +1,159 @@
 {
-  "title": "Chart Values",
-  "type": "object",
   "properties": {
-    "host": {
-      "type": "string",
-      "description": "Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.",
-      "default": ""
+    "addons": {
+      "properties": {
+        "certManager": {
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Enable cert-manager, which automatically creates and manages SSL/TLS certificates.",
+              "type": "boolean"
+            },
+            "valuesOverride": {
+              "default": {},
+              "description": "Custom values to override",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "cilium": {
+          "properties": {
+            "valuesOverride": {
+              "default": {},
+              "description": "Custom values to override",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "fluxcd": {
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Enable FluxCD",
+              "type": "boolean"
+            },
+            "valuesOverride": {
+              "default": {},
+              "description": "Custom values to override",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "gatewayAPI": {
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Enable the Gateway API",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "gpuOperator": {
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Enable the GPU-operator",
+              "type": "boolean"
+            },
+            "valuesOverride": {
+              "default": {},
+              "description": "Custom values to override",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "ingressNginx": {
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).",
+              "type": "boolean"
+            },
+            "exposeMethod": {
+              "default": "Proxied",
+              "description": "Method to expose the Ingress-NGINX controller. (allowed values: Proxied, LoadBalancer)",
+              "type": "string",
+              "enum": [
+                "Proxied",
+                "LoadBalancer"
+              ]
+            },
+            "hosts": {
+              "default": [],
+              "description": "List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.",
+              "items": {},
+              "type": "array"
+            },
+            "valuesOverride": {
+              "default": {},
+              "description": "Custom values to override",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "monitoringAgents": {
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Enable monitoring agents (Fluent Bit and VMAgents) to send logs and metrics. If tenant monitoring is enabled, data is sent to tenant storage; otherwise, it goes to root storage.",
+              "type": "boolean"
+            },
+            "valuesOverride": {
+              "default": {},
+              "description": "Custom values to override",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "velero": {
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Enable velero for backup and restore k8s cluster.",
+              "type": "boolean"
+            },
+            "valuesOverride": {
+              "default": {},
+              "description": "Custom values to override",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "verticalPodAutoscaler": {
+          "properties": {
+            "valuesOverride": {
+              "default": {},
+              "description": "Custom values to override",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
     },
     "controlPlane": {
-      "type": "object",
       "properties": {
-        "replicas": {
-          "type": "number",
-          "description": "Number of replicas for Kubernetes control-plane components.",
-          "default": 2
-        },
         "apiServer": {
-          "type": "object",
           "properties": {
             "resources": {
-              "type": "object",
+              "default": {},
               "description": "Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.",
-              "default": {}
+              "type": "object"
             },
             "resourcesPreset": {
-              "type": "string",
-              "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
               "default": "medium",
+              "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+              "type": "string",
               "enum": [
-                "none",
                 "nano",
                 "micro",
                 "small",
@@ -38,22 +163,21 @@
                 "2xlarge"
               ]
             }
-          }
+          },
+          "type": "object"
         },
         "controllerManager": {
-          "type": "object",
           "properties": {
             "resources": {
-              "type": "object",
+              "default": {},
               "description": "Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.",
-              "default": {}
+              "type": "object"
             },
             "resourcesPreset": {
-              "type": "string",
-              "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
               "default": "micro",
+              "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+              "type": "string",
               "enum": [
-                "none",
                 "nano",
                 "micro",
                 "small",
@@ -63,50 +187,23 @@
                 "2xlarge"
               ]
             }
-          }
-        },
-        "scheduler": {
-          "type": "object",
-          "properties": {
-            "resources": {
-              "type": "object",
-              "description": "Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.",
-              "default": {}
-            },
-            "resourcesPreset": {
-              "type": "string",
-              "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
-              "default": "micro",
-              "enum": [
-                "none",
-                "nano",
-                "micro",
-                "small",
-                "medium",
-                "large",
-                "xlarge",
-                "2xlarge"
-              ]
-            }
-          }
+          },
+          "type": "object"
         },
         "konnectivity": {
-          "type": "object",
           "properties": {
             "server": {
-              "type": "object",
               "properties": {
                 "resources": {
-                  "type": "object",
+                  "default": {},
                   "description": "Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.",
-                  "default": {}
+                  "type": "object"
                 },
                 "resourcesPreset": {
-                  "type": "string",
-                  "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
                   "default": "micro",
+                  "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+                  "type": "string",
                   "enum": [
-                    "none",
                     "nano",
                     "micro",
                     "small",
@@ -116,156 +213,68 @@
                     "2xlarge"
                   ]
                 }
-              }
+              },
+              "type": "object"
             }
-          }
+          },
+          "type": "object"
+        },
+        "replicas": {
+          "default": 2,
+          "description": "Number of replicas for Kubernetes control-plane components.",
+          "type": "number"
+        },
+        "scheduler": {
+          "properties": {
+            "resources": {
+              "default": {},
+              "description": "Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.",
+              "type": "object"
+            },
+            "resourcesPreset": {
+              "default": "micro",
+              "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+              "type": "string",
+              "enum": [
+                "nano",
+                "micro",
+                "small",
+                "medium",
+                "large",
+                "xlarge",
+                "2xlarge"
+              ]
+            }
+          },
+          "type": "object"
         }
-      }
+      },
+      "type": "object"
+    },
+    "host": {
+      "default": "",
+      "description": "Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.",
+      "type": "string"
     },
     "storageClass": {
-      "type": "string",
+      "default": "replicated",
       "description": "StorageClass used to store user data.",
-      "default": "replicated"
+      "type": "string"
     },
-    "addons": {
-      "type": "object",
-      "properties": {
-        "certManager": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable cert-manager, which automatically creates and manages SSL/TLS certificates.",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "cilium": {
-          "type": "object",
-          "properties": {
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "gatewayAPI": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable the Gateway API",
-              "default": false
-            }
-          }
-        },
-        "ingressNginx": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            },
-            "exposeMethod": {
-              "type": "string",
-              "description": "Method to expose the Ingress-NGINX controller. (allowed values: Proxied, LoadBalancer)",
-              "default": "Proxied",
-              "enum": [
-                "Proxied",
-                "LoadBalancer"
-              ]
-            },
-            "hosts": {
-              "type": "array",
-              "description": "List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.",
-              "default": [],
-              "items": {}
-            }
-          }
-        },
-        "gpuOperator": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable the GPU-operator",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "fluxcd": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable FluxCD",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "monitoringAgents": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable monitoring agents (Fluent Bit and VMAgents) to send logs and metrics. If tenant monitoring is enabled, data is sent to tenant storage; otherwise, it goes to root storage.",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "verticalPodAutoscaler": {
-          "type": "object",
-          "properties": {
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        },
-        "velero": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable velero for backup and restore k8s cluster.",
-              "default": false
-            },
-            "valuesOverride": {
-              "type": "object",
-              "description": "Custom values to override",
-              "default": {}
-            }
-          }
-        }
-      }
+    "version": {
+      "default": "v1.32",
+      "description": "Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.",
+      "type": "string",
+      "enum": [
+        "v1.28",
+        "v1.29",
+        "v1.30",
+        "v1.31",
+        "v1.32",
+        "v1.33"
+      ]
     }
-  }
+  },
+  "title": "Chart Values",
+  "type": "object"
 }

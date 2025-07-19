@@ -57,6 +57,10 @@ logsStorages:
 ## Configuration for Alerta
 ## @param alerta.storage Persistent Volume size for alerta database
 ## @param alerta.storageClassName StorageClass used to store the data
+## @param alerta.resources.requests.cpu The minimum amount of CPU required for alerta
+## @param alerta.resources.requests.memory  The minimum amount of memory required for alerta
+## @param alerta.resources.limits.cpu The maximum amount of CPU allowed for alerta
+## @param alerta.resources.limits.memory The maximum amount of memory allowed for alerta
 ##
 alerta:
   storage: 10Gi
@@ -85,6 +89,10 @@ alerta:
 
 ## Configuration for Grafana
 ## @param grafana.db.size Persistent Volume size for grafana database
+## @param grafana.resources.requests.cpu The minimum amount of CPU required for grafana
+## @param grafana.resources.requests.memory  The minimum amount of memory required for grafana
+## @param grafana.resources.limits.cpu The maximum amount of CPU allowed for grafana
+## @param grafana.resources.limits.memory The maximum amount of memory allowed for grafana
 grafana:
   db:
     size: 10Gi

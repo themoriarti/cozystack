@@ -38,7 +38,7 @@ stringData:
     until pg_isready ; do sleep 5; done
 
     echo "== create users"
-    {{- if .Values.users }}
+    {{- if and .Values.users (not (hasKey .Values.users "postgres")) }}
     psql -v ON_ERROR_STOP=1 <<\EOT
     {{- range $user, $u := .Values.users }}
     SELECT 'CREATE ROLE "{{ $user }}" LOGIN INHERIT;'
@@ -47,6 +47,8 @@ stringData:
     COMMENT ON ROLE "{{ $user }}" IS 'user managed by helm';
     {{- end }}
     EOT
+    {{- else if and .Values.users (hasKey .Values.users "postgres") }}
+    {{- fail "`users.postgres` is forbidden by policy. Use a different username." }}
     {{- end }}
 
     echo "== delete users"

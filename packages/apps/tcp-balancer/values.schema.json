@@ -1,74 +1,60 @@
 {
-  "title": "Chart Values",
-  "type": "object",
   "properties": {
     "external": {
-      "type": "boolean",
+      "default": false,
       "description": "Enable external access from outside the cluster",
-      "default": false
-    },
-    "replicas": {
-      "type": "number",
-      "description": "Number of HAProxy replicas",
-      "default": 2
+      "type": "boolean"
     },
     "httpAndHttps": {
-      "type": "object",
       "properties": {
+        "endpoints": {
+          "default": [],
+          "description": "Endpoint addresses list",
+          "items": {},
+          "type": "array"
+        },
         "mode": {
-          "type": "string",
-          "description": "Mode for balancer. Allowed values: `tcp` and `tcp-with-proxy`",
           "default": "tcp",
+          "description": "Mode for balancer. Allowed values: `tcp` and `tcp-with-proxy`",
+          "type": "string",
           "enum": [
             "tcp",
             "tcp-with-proxy"
           ]
         },
         "targetPorts": {
-          "type": "object",
           "properties": {
             "http": {
-              "type": "number",
+              "default": 80,
               "description": "HTTP port number.",
-              "default": 80
+              "type": "number"
             },
             "https": {
-              "type": "number",
+              "default": 443,
               "description": "HTTPS port number.",
-              "default": 443
+              "type": "number"
             }
-          }
-        },
-        "endpoints": {
-          "type": "array",
-          "description": "Endpoint addresses list",
-          "default": [],
-          "items": {}
+          },
+          "type": "object"
         }
-      }
+      },
+      "type": "object"
     },
-    "whitelistHTTP": {
-      "type": "boolean",
-      "description": "Secure HTTP by enabling  client networks whitelisting",
-      "default": false
-    },
-    "whitelist": {
-      "type": "array",
-      "description": "List of client networks",
-      "default": [],
-      "items": {}
+    "replicas": {
+      "default": 2,
+      "description": "Number of HAProxy replicas",
+      "type": "number"
     },
     "resources": {
-      "type": "object",
+      "default": {},
       "description": "Explicit CPU and memory configuration for each TCP Balancer replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-      "default": {}
+      "type": "object"
     },
     "resourcesPreset": {
-      "type": "string",
-      "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
       "default": "nano",
+      "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+      "type": "string",
       "enum": [
-        "none",
         "nano",
         "micro",
         "small",
@@ -77,6 +63,19 @@
         "xlarge",
         "2xlarge"
       ]
+    },
+    "whitelist": {
+      "default": [],
+      "description": "List of client networks",
+      "items": {},
+      "type": "array"
+    },
+    "whitelistHTTP": {
+      "default": false,
+      "description": "Secure HTTP by whitelisting client networks",
+      "type": "boolean"
     }
-  }
+  },
+  "title": "Chart Values",
+  "type": "object"
 }

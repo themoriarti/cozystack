@@ -1,30 +1,22 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
-        "replicas": {
-            "type": "number",
-            "description": "Number of ingress-nginx replicas",
-            "default": 2
+        "clouflareProxy": {
+            "default": false,
+            "description": "Restoring original visitor IPs when Cloudflare proxied is enabled",
+            "type": "boolean"
         },
-        "externalIPs": {
-            "type": "array",
-            "description": "List of externalIPs for service.",
-            "default": "[]",
-            "items": {
-                "type": "string"
-            }
+        "replicas": {
+            "default": 2,
+            "description": "Number of ingress-nginx replicas",
+            "type": "number"
         },
         "whitelist": {
-            "type": "array",
-            "description": "List of client networks",
             "default": [],
-            "items": {}
-        },
-        "clouflareProxy": {
-            "type": "boolean",
-            "description": "Restoring original visitor IPs when Cloudflare proxied is enabled",
-            "default": false
+            "description": "List of client networks",
+            "items": {},
+            "type": "array"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }

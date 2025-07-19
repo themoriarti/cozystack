@@ -1,26 +1,26 @@
 {
-    "title": "Chart Values",
-    "type": "object",
     "properties": {
-        "source": {
-            "type": "object",
-            "description": "The source image location used to create a disk",
-            "default": {}
-        },
         "optical": {
-            "type": "boolean",
+            "default": false,
             "description": "Defines is disk should be considered as optical",
-            "default": false
+            "type": "boolean"
+        },
+        "source": {
+            "default": {},
+            "description": "The source image location used to create a disk",
+            "type": "object"
         },
         "storage": {
-            "type": "string",
+            "default": "5Gi",
             "description": "The size of the disk allocated for the virtual machine",
-            "default": "5Gi"
+            "type": "string"
         },
         "storageClass": {
-            "type": "string",
+            "default": "replicated",
             "description": "StorageClass used to store the data",
-            "default": "replicated"
+            "type": "string"
         }
-    }
+    },
+    "title": "Chart Values",
+    "type": "object"
 }
