@@ -9,6 +9,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -385,15 +386,24 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	monitor.Status.ObservedReplicas = observedReplicas
 	monitor.Status.AvailableReplicas = availableReplicas
 
-	// Default to operational = true, but check MinReplicas if set
-	monitor.Status.Operational = pointer.Bool(true)
-	if monitor.Spec.MinReplicas != nil && availableReplicas < *monitor.Spec.MinReplicas {
-		monitor.Status.Operational = pointer.Bool(false)
-	}
-
 	// Update the WorkloadMonitor status in the cluster
-	if err := r.Status().Update(ctx, monitor); err != nil {
-		logger.Error(err, "Unable to update WorkloadMonitor status", "monitor", monitor.Name)
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		fresh := &cozyv1alpha1.WorkloadMonitor{}
+		if err := r.Get(ctx, req.NamespacedName, fresh); err != nil {
+			return err
+		}
+		fresh.Status.ObservedReplicas = observedReplicas
+		fresh.Status.AvailableReplicas = availableReplicas
+
+		// Default to operational = true, but check MinReplicas if set
+		monitor.Status.Operational = pointer.Bool(true)
+		if monitor.Spec.MinReplicas != nil && availableReplicas < *monitor.Spec.MinReplicas {
+			monitor.Status.Operational = pointer.Bool(false)
+		}
+		return r.Status().Update(ctx, fresh)
+	})
+	if err != nil {
+		logger.Error(err, "unable to update WorkloadMonitor status after retries")
 		return ctrl.Result{}, err
 	}
 
