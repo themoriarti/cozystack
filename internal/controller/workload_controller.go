@@ -8,7 +8,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -44,9 +43,11 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, r.Delete(ctx, w)
 	}
 	monitor := &cozyv1alpha1.WorkloadMonitor{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: w.Namespace, Name: monName}, monitor); apierrors.IsNotFound(err) {
-		return ctrl.Result{}, r.Delete(ctx, w)
+	if err := r.Get(ctx, client.ObjectKey{Namespace: w.Namespace, Name: monName}, monitor); apierrors.IsNotFound(err) {
+		// Monitor is gone → delete the Workload.  Ignore NotFound here, too.
+		return ctrl.Result{}, client.IgnoreNotFound(r.Delete(ctx, w))
 	} else if err != nil {
+		// Some other error fetching the monitor
 		log.Error(err, "failed to get WorkloadMonitor", "monitor", monName)
 		return ctrl.Result{}, err
 	}
