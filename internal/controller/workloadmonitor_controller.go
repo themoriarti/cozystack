@@ -112,6 +112,7 @@ func (r *WorkloadMonitorReconciler) reconcileServiceForMonitor(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("svc-%s", svc.Name),
 			Namespace: svc.Namespace,
+			Labels:    make(map[string]string, len(svc.Labels)),
 		},
 	}
 
@@ -140,10 +141,8 @@ func (r *WorkloadMonitorReconciler) reconcileServiceForMonitor(
 		// Update owner references with the new monitor
 		updateOwnerReferences(workload.GetObjectMeta(), &svc)
 
-		workload.Labels = svc.Labels
-
-		if workload.Labels == nil {
-			workload.Labels = map[string]string{}
+		for k, v := range svc.Labels {
+			workload.Labels[k] = v
 		}
 		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
 
@@ -174,6 +173,7 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("pvc-%s", pvc.Name),
 			Namespace: pvc.Namespace,
+			Labels:    make(map[string]string, len(pvc.Labels)),
 		},
 	}
 
@@ -192,12 +192,10 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 		// Update owner references with the new monitor
 		updateOwnerReferences(workload.GetObjectMeta(), &pvc)
 
-		if workload.Labels == nil {
-			workload.Labels = map[string]string{}
+		for k, v := range pvc.Labels {
+			workload.Labels[k] = v
 		}
 		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
-
-		workload.Labels = pvc.Labels
 
 		// Fill Workload status fields:
 		workload.Status.Kind = monitor.Spec.Kind
@@ -259,7 +257,7 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("pod-%s", pod.Name),
 			Namespace: pod.Namespace,
-			Labels:    map[string]string{},
+			Labels:    make(map[string]string, len(pod.Labels)),
 		},
 	}
 
@@ -268,15 +266,10 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 		// Update owner references with the new monitor
 		updateOwnerReferences(workload.GetObjectMeta(), &pod)
 
-		if workload.Labels == nil {
-			workload.Labels = map[string]string{}
-		}
-		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
-
-		// Copy labels from the Pod if needed
 		for k, v := range pod.Labels {
 			workload.Labels[k] = v
 		}
+		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
 
 		// Add workload meta to labels
 		for k, v := range metaLabels {

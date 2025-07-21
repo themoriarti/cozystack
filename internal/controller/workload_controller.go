@@ -38,9 +38,9 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// If my monitor is gone, delete me.
-	monName, has := w.Labels["workloadmonitor.cozystack.io/name"]
+	monName, has := w.Labels["workloads.cozystack.io/monitor"]
 	if !has {
-		return ctrl.Result{}, r.Delete(ctx, w)
+		return ctrl.Result{}, client.IgnoreNotFound(r.Delete(ctx, w))
 	}
 	monitor := &cozyv1alpha1.WorkloadMonitor{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: w.Namespace, Name: monName}, monitor); apierrors.IsNotFound(err) {
