@@ -26,60 +26,38 @@ type WorkloadReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+// workload_controller.go
 func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
+	log := log.FromContext(ctx)
+
 	w := &cozyv1alpha1.Workload{}
-	err := r.Get(ctx, req.NamespacedName, w)
-	if err != nil {
+	if err := r.Get(ctx, req.NamespacedName, w); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "Unable to fetch Workload")
 		return ctrl.Result{}, err
 	}
 
-	// it's being deleted, nothing to handle
-	if w.DeletionTimestamp != nil {
-		return ctrl.Result{}, nil
+	// If my monitor is gone, delete me.
+	monName, has := w.Labels["workloadmonitor.cozystack.io/name"]
+	if !has {
+		return ctrl.Result{}, r.Delete(ctx, w)
 	}
-
-	t := getMonitoredObject(w)
-
-	if t == nil {
-		err = r.Delete(ctx, w)
-		if err != nil {
-			logger.Error(err, "failed to delete workload")
-		}
+	monitor := &cozyv1alpha1.WorkloadMonitor{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: w.Namespace, Name: monName}, monitor); apierrors.IsNotFound(err) {
+		return ctrl.Result{}, r.Delete(ctx, w)
+	} else if err != nil {
+		log.Error(err, "failed to get WorkloadMonitor", "monitor", monName)
 		return ctrl.Result{}, err
 	}
 
-	err = r.Get(ctx, types.NamespacedName{Name: t.GetName(), Namespace: t.GetNamespace()}, t)
-
-	// found object, nothing to do
-	if err == nil {
-		if !t.GetDeletionTimestamp().IsZero() {
-			return ctrl.Result{RequeueAfter: deletionRequeueDelay}, nil
-		}
-		return ctrl.Result{}, nil
-	}
-
-	// error getting object but not 404 -- requeue
-	if !apierrors.IsNotFound(err) {
-		logger.Error(err, "failed to get dependent object", "kind", t.GetObjectKind(), "dependent-object-name", t.GetName())
-		return ctrl.Result{}, err
-	}
-
-	err = r.Delete(ctx, w)
-	if err != nil {
-		logger.Error(err, "failed to delete workload")
-	}
-	return ctrl.Result{}, err
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		// Watch WorkloadMonitor objects
+		// Watch Workload objects
 		For(&cozyv1alpha1.Workload{}).
 		Complete(r)
 }

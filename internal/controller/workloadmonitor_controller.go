@@ -137,9 +137,14 @@ func (r *WorkloadMonitorReconciler) reconcileServiceForMonitor(
 
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
-		updateOwnerReferences(workload.GetObjectMeta(), monitor)
+		updateOwnerReferences(workload.GetObjectMeta(), &svc)
 
 		workload.Labels = svc.Labels
+
+		if workload.Labels == nil {
+			workload.Labels = map[string]string{}
+		}
+		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
 
 		// Fill Workload status fields:
 		workload.Status.Kind = monitor.Spec.Kind
@@ -184,7 +189,12 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
-		updateOwnerReferences(workload.GetObjectMeta(), monitor)
+		updateOwnerReferences(workload.GetObjectMeta(), &pvc)
+
+		if workload.Labels == nil {
+			workload.Labels = map[string]string{}
+		}
+		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
 
 		workload.Labels = pvc.Labels
 
@@ -255,7 +265,12 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 	metaLabels := r.getWorkloadMetadata(&pod)
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
-		updateOwnerReferences(workload.GetObjectMeta(), monitor)
+		updateOwnerReferences(workload.GetObjectMeta(), &pod)
+
+		if workload.Labels == nil {
+			workload.Labels = map[string]string{}
+		}
+		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
 
 		// Copy labels from the Pod if needed
 		for k, v := range pod.Labels {
