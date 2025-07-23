@@ -1,6 +1,9 @@
 {{- /* Preflight checks for Helm template */ -}}
-{{- if not (has .Values.topology (list "Simple" "MultiZone")) }}
-{{-   fail "Invalid value for .Values.topology. Must be one of 'Simple' or 'MultiZone'." }}
+{{- if not (has .Values.topology (list "Simple" "MultiZone" "Client")) }}
+{{-   fail "Invalid value for .Values.topology. Must be one of 'Simple', 'MultiZone' or 'Client'." }}
+{{- end }}
+{{- if and (eq .Values.topology "Client") (not .Values.remoteEndpoint) }}
+{{-   fail "When topology is 'Client', .Values.remoteEndpoint must be set to a valid remote filer GRPC service endpoint." }}
 {{- end }}
 {{- if lt (int .Values.replicationFactor) 1 }}
 {{-   fail "Invalid value for .Values.replicationFactor. Must be at least 1." }}
@@ -13,16 +16,24 @@
 {{-     fail "replicationFactor must be less than or equal to the number of zones defined in .Values.zones." }}
 {{-   end }}
 {{- end }}
-{{- if lookup "v1" "PersistentVolumeClaim" "" (printf "%s-data1-seaweedfs-volume-0" .Release.Name) }}
-{{-   if eq .Values.topology "MultiZone" }}
-{{-     fail "Not allowed to switch between Simple and MultiZone topologies after the first deployment." }}
-{{-   end }}
+
+{{- $detectedTopology := "Unknown" }}
+{{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-deployed-topology" .Release.Name) }}
+{{- if $configMap }}
+{{-   $detectedTopology = dig "data" "topology" "Unknown" $configMap }}
 {{- else }}
-{{-   if and (eq .Values.topology "Simple") (.Release.IsUpgrade) }}
-{{-     fail "Not allowed to switch between Simple and MultiZone topologies after the first deployment." }}
+{{-   if lookup "v1" "PersistentVolumeClaim" .Release.Namespace (printf "data1-%s-volume-0" .Release.Name) }}
+{{-     $detectedTopology = "Simple" }}
+{{-   else if lookup "apps/v1" "StatefulSet" .Release.Namespace (printf "%s-master" .Release.Name) }}
+{{-     $detectedTopology = "MultiZone" }}
 {{-   end }}
 {{- end }}
 
+{{- if not (has $detectedTopology (list .Values.topology "Unknown")) }}
+{{-   fail (printf "Not allowed to switch between topologies after the first deployment: %s" $detectedTopology) }}
+{{- end }}
+
+{{- if not (eq .Values.topology "Client") }}
 {{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
 {{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
@@ -198,3 +209,4 @@ spec:
     cnpg.io/cluster: seaweedfs-db
     cnpg.io/podRole: instance
   version: {{ $.Chart.Version }}
+{{- end }}

@@ -3,7 +3,7 @@
 ## @param host The hostname used to access the SeaweedFS externally (defaults to 's3' subdomain for the tenant host).
 host: ""
 
-## @param topology The topology of the SeaweedFS cluster. (allowed values: Simple, MultiZone)
+## @param topology The topology of the SeaweedFS cluster. (allowed values: Simple, MultiZone, Client)
 ##
 topology: Simple
 
@@ -31,3 +31,10 @@ storageClass: ""
 ##     replicas: 2
 ##     size: 10Gi
 zones: {}
+
+## @param filer.external Enable external access to the SeaweedFS filer from outside the cluster. Use this when `topology` is not set to `Client`.
+filer:
+  external: false
+
+## @param remoteEndpoint The endpoint of the remote filer GRPC service. Used when `topology` is set to `Client`.
+remoteEndpoint: "1.2.3.4:18888"
