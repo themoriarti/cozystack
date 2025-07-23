@@ -258,3 +258,10 @@ releases:
   privileged: true
   optional: true
   dependsOn: [cilium]
+
+- name: hetzner-robotlb
+  releaseName: robotlb
+  optional: true
+  chart: cozy-hetzner-robotlb
+  namespace: cozy-hetzner-robotlb
+  dependsOn: [cilium]
