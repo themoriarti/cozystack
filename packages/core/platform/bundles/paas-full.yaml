@@ -415,3 +415,10 @@ releases:
   privileged: true
   optional: true
   dependsOn: [monitoring-agents]
+
+- name: hetzner-robotlb
+  releaseName: robotlb
+  optional: true
+  chart: cozy-hetzner-robotlb
+  namespace: cozy-hetzner-robotlb
+  dependsOn: [cilium, kubeovn]
