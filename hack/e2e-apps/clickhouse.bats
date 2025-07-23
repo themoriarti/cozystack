@@ -38,4 +38,5 @@ EOF
   timeout 100 sh -ec "until kubectl -n tenant-test get svc chi-clickhouse-$name-clickhouse-0-0 -o jsonpath='{.spec.ports[*].port}' | grep -q '9000 8123 9009'; do sleep 10; done"
   timeout 80 sh -ec "until kubectl -n tenant-test get sts chi-clickhouse-$name-clickhouse-0-1 ; do sleep 10; done"
   kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-1 --timeout=140s --for=jsonpath='{.status.replicas}'=1
+  kubectl -n tenant-test delete clickhouse $name
 }
