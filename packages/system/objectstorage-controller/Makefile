@@ -27,3 +27,4 @@ image-controller image-sidecar:
 	IMAGE="$(REGISTRY)/objectstorage-$(TARGET):$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/$(TARGET).json -r)" \
 		yq -i '$(YAML_PATH) = strenv(IMAGE)' $(VALUES_FILE)
 	rm -f images/$(TARGET).json
+	yq .seaweedfs.cosi.sidecar.image ../seaweedfs/values.yaml > ../../extra/seaweedfs/images/objectstorage-sidecar.tag
