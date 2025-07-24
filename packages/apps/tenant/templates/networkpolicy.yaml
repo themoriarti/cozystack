@@ -48,6 +48,20 @@ spec:
     {{- range $i, $v := $parts }}
     {{- if ne $i 0 }}
     - matchLabels:
+        "k8s:app.kubernetes.io/name": "vminsert"
+        "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- end }}    
+  {{- if ne (include "tenant.name" .) "tenant-root" }}
+  - toEndpoints:
+    {{- if hasPrefix "tenant-" .Release.Namespace }}
+    {{- $parts := splitList "-" .Release.Namespace }}
+    {{- range $i, $v := $parts }}
+    {{- if ne $i 0 }}
+    - matchLabels:
+        "k8s:app.kubernetes.io/instance": "etcd"
         "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
     {{- end }}
     {{- end }}
