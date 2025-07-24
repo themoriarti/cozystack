@@ -4,7 +4,6 @@ global:
   extraEnvironmentVars:
     WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
     WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
-
 seaweedfs:
   master:
     replicas: 3
@@ -14,24 +13,19 @@ seaweedfs:
     # Y number of replica in other racks in the same data center
     # Z number of replica in other servers in the same rack
     defaultReplication: "001"
-  
     data:
       type: "emptyDir"
-  
     logs:
       type: ""
-  
   volume:
     replicas: 2
     # minimum free disk space(in percents). If free disk space lower this value - all volumes marks as ReadOnly
     minFreeSpacePercent: 5
-  
     dataDirs:
-    - name: data1
-      type: "persistentVolumeClaim"
-      size: "10Gi"
-      maxVolumes: 0
-  
+      - name: data1
+        type: "persistentVolumeClaim"
+        size: "10Gi"
+        maxVolumes: 0
   filer:
     replicas: 2
     #  replication type is XYZ:
@@ -41,10 +35,8 @@ seaweedfs:
     defaultReplicaPlacement: "001"
     data:
       type: "emptyDir"
-  
     logs:
       type: ""
-  
     extraEnvironmentVars:
       WEED_LEVELDB2_ENABLED: "false"
       WEED_POSTGRES2_ENABLED: "true"
@@ -73,7 +65,6 @@ seaweedfs:
         secretKeyRef:
           key: password
           name: seaweedfs-db-app
-
     s3:
       enabled: true
       port: 8333
@@ -86,13 +77,10 @@ seaweedfs:
       # should have a secret key called seaweedfs_s3_config with an inline json configure
       existingConfigSecret: null
       auditLogConfig: {}
-  
   s3:
     enableAuth: true
-  
     logs:
       type: ""
-   
     ingress:
       enabled: true
       className: "tenant-root"
@@ -104,9 +92,8 @@ seaweedfs:
         cert-manager.io/cluster-issuer: letsencrypt-prod
       tls:
         - hosts:
-          - seaweedfs.demo.cozystack.io
+            - seaweedfs.demo.cozystack.io
           secretName: seaweedfs-s3-ingress-tls
-
   cosi:
     enabled: true
     podLabels:
@@ -114,13 +101,12 @@ seaweedfs:
     driverName: "seaweedfs.objectstorage.k8s.io"
     bucketClassName: "seaweedfs"
     region: ""
-  
     sidecar:
-      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:latest@sha256:6bdb9ff087097be1f25759165da8f1c8674fb30ee41a93750219c8f8d9dfd942"
+      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v0.35.0-alpha.1@sha256:e4f9a7302285ea9febeb28fc2fa97cb7c01bb91e602f975c31aad1fe46f778f7"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []
     keyAlgorithm: RSA
     keySize: 2048
-    duration: 2160h  # 90d
-    renewBefore: 360h  # 15d
+    duration: 2160h # 90d
+    renewBefore: 360h # 15d
