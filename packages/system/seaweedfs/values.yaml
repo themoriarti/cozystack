@@ -116,8 +116,7 @@ seaweedfs:
     region: ""
   
     sidecar:
-      image: "ghcr.io/kvaps/test:cosi-provisioner-sidecar-25"
-  
+      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:latest@sha256:6bdb9ff087097be1f25759165da8f1c8674fb30ee41a93750219c8f8d9dfd942"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []

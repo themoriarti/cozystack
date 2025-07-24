@@ -24,6 +24,6 @@ image-controller image-sidecar:
 		--metadata-file images/$(TARGET).json \
 		--push=$(PUSH) --provenance=false --load=$(LOAD) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack"
-	IMAGE="$(REGISTRY)/objectstorage-$(TARGET):$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/$(TARGET).json -r)" && \
+	IMAGE="$(REGISTRY)/objectstorage-$(TARGET):$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/$(TARGET).json -r)" \
 		yq -i '$(YAML_PATH) = strenv(IMAGE)' $(VALUES_FILE)
 	rm -f images/$(TARGET).json
