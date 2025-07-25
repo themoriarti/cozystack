@@ -44,7 +44,6 @@
       "default": "ubuntu",
       "description": "Virtual Machine preferences profile",
       "type": "string",
-      "optional": true,
       "enum": [
         "alpine",
         "centos.7",
@@ -95,7 +94,6 @@
       "default": "u1.medium",
       "description": "Virtual Machine instance type",
       "type": "string",
-      "optional": true,
       "enum": [
         "cx1.2xlarge",
         "cx1.4xlarge",
