@@ -2,10 +2,21 @@
   "properties": {
     "filer": {
       "properties": {
-        "external": {
-          "default": false,
-          "description": "Enable external access to the SeaweedFS filer from outside the cluster. Use this when `topology` is not set to `Client`.",
-          "type": "boolean"
+        "grpcHost": {
+          "default": "",
+          "description": "The hostname used to expose or access the filer service externally.",
+          "type": "string"
+        },
+        "grpcPort": {
+          "default": 443,
+          "description": "The port used to access the filer service externally.",
+          "type": "number"
+        },
+        "whitelist": {
+          "default": [],
+          "description": "A list of IP addresses or CIDR ranges that are allowed to access the filer service.",
+          "items": {},
+          "type": "array"
         }
       },
       "type": "object"
@@ -13,11 +24,6 @@
     "host": {
       "default": "",
       "description": "The hostname used to access the SeaweedFS externally (defaults to 's3' subdomain for the tenant host).",
-      "type": "string"
-    },
-    "remoteEndpoint": {
-      "default": "1.2.3.4:18888",
-      "description": "The endpoint of the remote filer GRPC service. Used when `topology` is set to `Client`.",
       "type": "string"
     },
     "replicas": {

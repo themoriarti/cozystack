@@ -2,8 +2,8 @@
 {{- if not (has .Values.topology (list "Simple" "MultiZone" "Client")) }}
 {{-   fail "Invalid value for .Values.topology. Must be one of 'Simple', 'MultiZone' or 'Client'." }}
 {{- end }}
-{{- if and (eq .Values.topology "Client") (not .Values.remoteEndpoint) }}
-{{-   fail "When topology is 'Client', .Values.remoteEndpoint must be set to a valid remote filer GRPC service endpoint." }}
+{{- if and (eq .Values.topology "Client") (not .Values.filer.grpcHost) }}
+{{-   fail "When topology is 'Client', .Values.filer.grpcHost must be set to a valid remote filer GRPC service endpoint." }}
 {{- end }}
 {{- if lt (int .Values.replicationFactor) 1 }}
 {{-   fail "Invalid value for .Values.replicationFactor. Must be at least 1." }}
