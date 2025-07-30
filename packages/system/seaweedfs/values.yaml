@@ -82,7 +82,6 @@ seaweedfs:
   s3:
     enabled: true
     enableAuth: true
-    metricsPort: 9334
     readinessProbe:
       scheme: HTTPS
     logs:
