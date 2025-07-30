@@ -80,6 +80,7 @@ seaweedfs:
       existingConfigSecret: null
       auditLogConfig: {}
   s3:
+    enabled: true
     enableAuth: true
     metricsPort: 9334
     readinessProbe:
