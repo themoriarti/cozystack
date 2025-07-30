@@ -87,7 +87,10 @@ spec:
             - name: KEYCLOAK_ADMIN
               value: admin
             - name: KEYCLOAK_ADMIN_PASSWORD
-              value: {{ $password }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-credentials
+                  key: password
             - name: KC_DB
               value: "postgres"
             - name: KC_DB_URL_HOST
