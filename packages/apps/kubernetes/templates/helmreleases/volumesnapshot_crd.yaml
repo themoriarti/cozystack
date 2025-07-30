@@ -1,16 +1,16 @@
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: {{ .Release.Name }}-volumesnapshot-crd-for-tenant-k8s
+  name: {{ .Release.Name }}-vsnap-crd
   labels:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
   interval: 5m
-  releaseName: volumesnapshot-crd-for-tenant-k8s
+  releaseName: vsnap-crd
   chart:
     spec:
-      chart: cozy-volumesnapshot-crd-for-tenant-k8s
+      chart: cozy-vsnap-crd
       reconcileStrategy: Revision
       sourceRef:
         kind: HelmRepository
@@ -21,8 +21,8 @@ spec:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig
       key: super-admin.svc
-  targetNamespace: cozy-volumesnapshot-crd-for-tenant-k8s
-  storageNamespace: cozy-volumesnapshot-crd-for-tenant-k8s
+  targetNamespace: cozy-vsnap-crd
+  storageNamespace: cozy-vsnap-crd
   install:
     createNamespace: true
     remediation:

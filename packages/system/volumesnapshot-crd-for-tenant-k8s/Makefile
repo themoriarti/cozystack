@@ -1,4 +1,4 @@
-export NAME=volumesnapshot-crd-for-tenant-k8s
+export NAME=vsnap-crd
 export NAMESPACE=cozy-$(NAME)
 
 include ../../../scripts/package.mk
