@@ -69,10 +69,8 @@ seaweedfs:
           name: seaweedfs-db-app
     s3:
       enabled: true
-      metricsPort: 9334
-      enableAuth: true
-      readinessProbe:
-        scheme: HTTPS
+      port: 8333
+      httpsPort: 0
       # Suffix of the host name, {bucket}.{domainName}
       domainName: ""
       # enable user & permission to s3 (need to inject to all services)
@@ -83,6 +81,9 @@ seaweedfs:
       auditLogConfig: {}
   s3:
     enableAuth: true
+    metricsPort: 9334
+    readinessProbe:
+      scheme: HTTPS
     logs:
       type: ""
     ingress:
