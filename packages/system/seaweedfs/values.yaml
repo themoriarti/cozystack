@@ -4,6 +4,8 @@ global:
   extraEnvironmentVars:
     WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
     WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
+  monitoring:
+    enabled: true
 seaweedfs:
   master:
     replicas: 3
@@ -67,8 +69,10 @@ seaweedfs:
           name: seaweedfs-db-app
     s3:
       enabled: true
-      port: 8333
-      httpsPort: 0
+      metricsPort: 9334
+      enableAuth: true
+      readinessProbe:
+        scheme: HTTPS
       # Suffix of the host name, {bucket}.{domainName}
       domainName: ""
       # enable user & permission to s3 (need to inject to all services)
