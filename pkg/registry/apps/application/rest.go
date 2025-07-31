@@ -271,7 +271,6 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 			klog.Errorf("Invalid field selector: %v", err)
 			return nil, fmt.Errorf("invalid field selector: %v", err)
 		}
-
 		// Check if selector is for metadata.name
 		if name, exists := fs.RequiresExactMatch("metadata.name"); exists {
 			// Convert Application name to HelmRelease name
@@ -321,17 +320,8 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		return nil, err
 	}
 
-	// Initialize empty Application list
-	appList := &appsv1alpha1.ApplicationList{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apps.cozystack.io/v1alpha1",
-			Kind:       "ApplicationList",
-		},
-		ListMeta: metav1.ListMeta{
-			ResourceVersion: hrList.GetResourceVersion(),
-		},
-		Items: []appsv1alpha1.Application{},
-	}
+	// Initialize unstructured items array
+	items := make([]unstructured.Unstructured, 0)
 
 	// Iterate over HelmReleases and convert to Applications
 	for _, hr := range hrList.Items {
@@ -369,7 +359,6 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 				klog.Errorf("Invalid field selector: %v", err)
 				continue
 			}
-
 			fieldsSet := fields.Set{
 				"metadata.name":      app.Name,
 				"metadata.namespace": app.Namespace,
@@ -379,10 +368,23 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 			}
 		}
 
-		appList.Items = append(appList.Items, app)
+		// Convert Application to unstructured
+		unstructuredApp, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&app)
+		if err != nil {
+			klog.Errorf("Error converting Application %s to unstructured: %v", app.Name, err)
+			continue
+		}
+		items = append(items, unstructured.Unstructured{Object: unstructuredApp})
 	}
 
-	klog.V(6).Infof("Successfully listed %d Application resources in namespace %s", len(appList.Items), namespace)
+	// Explicitly set apiVersion and kind in unstructured object
+	appList := &unstructured.UnstructuredList{}
+	appList.SetAPIVersion("apps.cozystack.io/v1alpha1")
+	appList.SetKind(r.kindName + "List")
+	appList.SetResourceVersion(hrList.GetResourceVersion())
+	appList.Items = items
+
+	klog.V(6).Infof("Successfully listed %d Application resources in namespace %s", len(items), namespace)
 	return appList, nil
 }
 
@@ -1036,6 +1038,19 @@ func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableO
 	case *appsv1alpha1.Application:
 		table = r.buildTableFromApplication(*obj)
 		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
+	case *unstructured.UnstructuredList:
+		apps := make([]appsv1alpha1.Application, 0, len(obj.Items))
+		for _, u := range obj.Items {
+			var a appsv1alpha1.Application
+			err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &a)
+			if err != nil {
+				klog.Errorf("Failed to convert Unstructured to Application: %v", err)
+				continue
+			}
+			apps = append(apps, a)
+		}
+		table = r.buildTableFromApplications(apps)
+		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
 	case *unstructured.Unstructured:
 		var app appsv1alpha1.Application
 		err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &app)
@@ -1067,7 +1082,6 @@ func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableO
 	}
 
 	klog.V(6).Infof("ConvertToTable: returning table with %d rows", len(table.Rows))
-
 	return &table, nil
 }
 
