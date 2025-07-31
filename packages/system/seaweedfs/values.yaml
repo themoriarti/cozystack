@@ -99,6 +99,13 @@ seaweedfs:
         - hosts:
             - seaweedfs.demo.cozystack.io
           secretName: seaweedfs-s3-ingress-tls
+    resources:
+      limits:
+        cpu: "2"
+        memory: "2Gi"
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
   cosi:
     enabled: true
     podLabels:
