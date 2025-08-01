@@ -4,6 +4,8 @@ global:
   extraEnvironmentVars:
     WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
     WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
+  monitoring:
+    enabled: true
 seaweedfs:
   master:
     replicas: 3
@@ -78,7 +80,10 @@ seaweedfs:
       existingConfigSecret: null
       auditLogConfig: {}
   s3:
+    enabled: true
     enableAuth: true
+    readinessProbe:
+      scheme: HTTPS
     logs:
       type: ""
     ingress:
@@ -94,6 +99,13 @@ seaweedfs:
         - hosts:
             - seaweedfs.demo.cozystack.io
           secretName: seaweedfs-s3-ingress-tls
+    resources:
+      limits:
+        cpu: "2"
+        memory: "2Gi"
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
   cosi:
     enabled: true
     podLabels:
