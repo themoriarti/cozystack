@@ -200,7 +200,7 @@ spec:
     - groups
     - kubernetes-client
   redirectUris:
-    - "http://dashboard.{{ $host }}/oauth2/callback/*"
+    - "https://dashboard.{{ $host }}/oauth2/callback/*"
     {{- range $i, $v := $extraRedirectUris }}
     - "{{ $v }}"
     {{- end }}
@@ -223,8 +223,7 @@ data:
         clientSecret: {{ $kubeappsClient }}
         cookieSecret: {{ $cookieSecret }}
         extraFlags:
-          - --ssl-insecure-skip-verify
-          - --cookie-secure=false
+          - --cookie-secure
           - --scope=openid email groups
           - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/cozy
 
