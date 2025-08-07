@@ -62,7 +62,6 @@ For more details, read [Restic: Effective Backup from Stdin](https://blog.aenix.
 | `clickhouseKeeper.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge. | `micro` |
 | `clickhouseKeeper.replicas`        | Number of keeper replicas                                                                                                   | `3`     |
 
-
 ## Parameter examples and reference
 
 ### resources and resourcesPreset
