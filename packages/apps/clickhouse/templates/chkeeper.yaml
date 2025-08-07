@@ -15,7 +15,7 @@ spec:
     clusters:
       - name: "cluster1"
         layout:
-          replicasCount: 3
+          replicasCount: {{ .Values.clickhouseKeeper.replicas }}
     settings:
       logger/level: "trace"
       logger/console: "true"

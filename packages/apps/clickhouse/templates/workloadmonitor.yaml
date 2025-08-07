@@ -18,8 +18,8 @@ kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-keeper
 spec:
-  replicas: 3
-  minReplicas: 3
+  replicas: {{ .Values.clickhouseKeeper.replicas }}
+  minReplicas: 1
   kind: clickhouse
   type: clickhouse
   selector:
