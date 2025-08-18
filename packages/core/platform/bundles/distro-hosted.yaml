@@ -171,3 +171,9 @@ releases:
   namespace: cozy-velero
   privileged: true
   optional: true
+
+- name: hetzner-robotlb
+  releaseName: robotlb
+  optional: true
+  chart: cozy-hetzner-robotlb
+  namespace: cozy-hetzner-robotlb

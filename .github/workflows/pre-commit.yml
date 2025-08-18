@@ -28,16 +28,7 @@ jobs:
 
       - name: Install generate
         run: |
-          sudo apt update
-          sudo apt install curl -y
-          sudo apt install nodejs -y
-          sudo apt install npm -y
-
-          git clone --branch 2.7.0 --depth 1 https://github.com/bitnami/readme-generator-for-helm.git
-          cd ./readme-generator-for-helm
-          npm install
-          npm install -g @yao-pkg/pkg
-          pkg . -o /usr/local/bin/readme-generator
+          curl -sSL https://github.com/cozystack/cozyvalues-gen/releases/download/v0.8.5/cozyvalues-gen-linux-amd64.tar.gz | tar -xzvf- -C /usr/local/bin/ cozyvalues-gen
 
       - name: Run pre-commit hooks
         run: |

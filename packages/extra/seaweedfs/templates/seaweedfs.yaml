@@ -1,3 +1,39 @@
+{{- /* Preflight checks for Helm template */ -}}
+{{- if not (has .Values.topology (list "Simple" "MultiZone" "Client")) }}
+{{-   fail "Invalid value for .Values.topology. Must be one of 'Simple', 'MultiZone' or 'Client'." }}
+{{- end }}
+{{- if and (eq .Values.topology "Client") (not .Values.filer.grpcHost) }}
+{{-   fail "When topology is 'Client', .Values.filer.grpcHost must be set to a valid remote filer GRPC service endpoint." }}
+{{- end }}
+{{- if lt (int .Values.replicationFactor) 1 }}
+{{-   fail "Invalid value for .Values.replicationFactor. Must be at least 1." }}
+{{- end }}
+{{- if eq .Values.topology "MultiZone" }}
+{{-   if (eq (len .Values.zones) 0) }}
+{{-     fail "Zones must be defined for MultiZone topology." }}
+{{-   end }}
+{{-   if and (hasKey .Values "zones") (gt (int .Values.replicationFactor) (len .Values.zones)) }}
+{{-     fail "replicationFactor must be less than or equal to the number of zones defined in .Values.zones." }}
+{{-   end }}
+{{- end }}
+
+{{- $detectedTopology := "Unknown" }}
+{{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-deployed-topology" .Release.Name) }}
+{{- if $configMap }}
+{{-   $detectedTopology = dig "data" "topology" "Unknown" $configMap }}
+{{- else }}
+{{-   if lookup "v1" "PersistentVolumeClaim" .Release.Namespace (printf "data1-%s-volume-0" .Release.Name) }}
+{{-     $detectedTopology = "Simple" }}
+{{-   else if lookup "apps/v1" "StatefulSet" .Release.Namespace (printf "%s-master" .Release.Name) }}
+{{-     $detectedTopology = "MultiZone" }}
+{{-   end }}
+{{- end }}
+
+{{- if not (has $detectedTopology (list .Values.topology "Unknown")) }}
+{{-   fail (printf "Not allowed to switch between topologies after the first deployment: %s" $detectedTopology) }}
+{{- end }}
+
+{{- if not (eq .Values.topology "Client") }}
 {{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
 {{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
@@ -22,6 +58,11 @@ spec:
       serviceAccountName: "{{ .Release.Namespace }}-seaweedfs"
     seaweedfs:
       master:
+        {{ if eq .Values.topology "Simple" }}
+        defaultReplicaPlacement: "00{{ sub .Values.replicationFactor 1 }}"
+        {{- else if eq .Values.topology "MultiZone" }}
+        defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
+        {{- end }}
         resources:
           requests:
             cpu: "100m"
@@ -30,6 +71,9 @@ spec:
             cpu: "500m"
             memory: "512Mi"
       volume:
+        {{ if eq .Values.topology "MultiZone" }}
+        enabled: false
+        {{- end }}
         replicas: {{ .Values.replicas }}
         resources:
           requests:
@@ -38,9 +82,6 @@ spec:
           limits:
             cpu: "500m"
             memory: "512Mi"
-        # TODO: workaround for non-working online resize
-        podAnnotations:
-          volume-size: "{{ .Values.size }}"
         dataDirs:
         - name: data1
           type: "persistentVolumeClaim"
@@ -49,7 +90,38 @@ spec:
           storageClass: {{ . }}
           {{- end }}
           maxVolumes: 0
+      {{ if eq .Values.topology "MultiZone" }}
+      volumes:
+        {{- range $zoneName, $zone := .Values.zones }}
+        {{ $zoneName }}:
+          {{ with $zone.replicas }}
+          replicas: {{ . }}
+          {{- end }}
+          dataDirs:
+          - name: data1
+            type: "persistentVolumeClaim"
+            {{- if $zone.size }}
+            size: "{{ $zone.size }}"
+            {{- else }}
+            size: "{{ $.Values.size }}"
+            {{- end }}
+            {{- if $zone.storageClass }}
+            storageClass: {{ $zone.storageClass }}
+            {{- else if $.Values.storageClass }}
+            storageClass: {{ $.Values.storageClass }}
+            {{- end }}
+            maxVolumes: 0
+          nodeSelector: |
+            topology.kubernetes.io/zone: {{ $zoneName }}
+          dataCenter: {{ $zone.dataCenter | default $zoneName }}
+        {{- end }}
+      {{- end }}
       filer:
+        {{ if eq .Values.topology "Simple" }}
+        defaultReplicaPlacement: "00{{ sub .Values.replicationFactor 1 }}"
+        {{- else if eq .Values.topology "MultiZone" }}
+        defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
+        {{- end }}
         s3:
           domainName: {{ .Values.host | default (printf "s3.%s" $host) }}
         resources:
@@ -138,3 +210,4 @@ spec:
     cnpg.io/cluster: seaweedfs-db
     cnpg.io/podRole: instance
   version: {{ $.Chart.Version }}
+{{- end }}

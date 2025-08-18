@@ -25,4 +25,4 @@ image-cozystack-api:
 generate:
 	rm -rf openapi-schemas
 	mkdir -p openapi-schemas
-	find ../../apps ../../extra -maxdepth 2 -name values.schema.json -exec sh -c 'ln -s ../{} openapi-schemas/$$(basename $$(dirname {})).json' \;
+	find ../../apps ../../extra -maxdepth 2 -name values.schema.json -exec sh -ec 'ln -s ../{} openapi-schemas/$$(basename $$(dirname {})).json' \;

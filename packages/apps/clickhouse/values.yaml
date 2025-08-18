@@ -1,22 +1,36 @@
 ## @section Common parameters
-
-## @param size Size of Persistent Volume for data
-## @param logStorageSize Size of Persistent Volume for logs
-## @param shards Number of Clickhouse shards
-## @param replicas Number of Clickhouse replicas
-## @param storageClass StorageClass used to store the data
-## @param logTTL TTL (expiration time) for query_log and query_thread_log
 ##
-size: 10Gi
-logStorageSize: 2Gi
-shards: 1
+## @param replicas {int} Number of Clickhouse replicas
 replicas: 2
+## @param shards {int} Number of Clickhouse shards
+shards: 1
+## @param resources {*resources} Explicit CPU and memory configuration for each Clickhouse replica. When left empty, the preset defined in `resourcesPreset` is applied.
+## @field resources.cpu {*quantity} CPU
+## @field resources.memory {*quantity} Memory
+#  resources:
+#    cpu: 4000m
+#    memory: 4Gi
+resources: {}
+
+
+
+## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+resourcesPreset: "small"
+## @param size {quantity} Persistent Volume Claim size, available for application data
+size: 10Gi
+## @param storageClass {string} StorageClass used to store the data
 storageClass: ""
+
+
+## @section Application-specific parameters
+##
+## @param logStorageSize {quantity} Size of Persistent Volume for logs
+logStorageSize: 2Gi
+## @param logTTL {int} TTL (expiration time) for `query_log` and `query_thread_log`
 logTTL: 15
-
-## @section Configuration parameters
-
-## @param users [object] Users configuration
+## @param users {map[string]user} Users configuration
+## @field user.password {*string} Password for the user
+## @field user.readonly {*bool} User is `readonly`, default is `false`.
 ## Example:
 ## users:
 ##   user1:
@@ -27,16 +41,18 @@ logTTL: 15
 ##
 users: {}
 
+
 ## @section Backup parameters
 
-## @param backup.enabled Enable periodic backups
-## @param backup.s3Region AWS S3 region where backups are stored
-## @param backup.s3Bucket S3 bucket used for storing backups
-## @param backup.schedule Cron schedule for automated backups
-## @param backup.cleanupStrategy Retention strategy for cleaning up old backups
-## @param backup.s3AccessKey Access key for S3, used for authentication
-## @param backup.s3SecretKey Secret key for S3, used for authentication
-## @param backup.resticPassword Password for Restic backup encryption
+## @param backup {backup} Backup configuration
+## @field backup.enabled {bool} Enable regular backups, default is `false`
+## @field backup.s3Region {string} AWS S3 region where backups are stored
+## @field backup.s3Bucket {string} S3 bucket used for storing backups
+## @field backup.schedule {string} Cron schedule for automated backups
+## @field backup.cleanupStrategy {string} Retention strategy for cleaning up old backups
+## @field backup.s3AccessKey {string} Access key for S3, used for authentication
+## @field backup.s3SecretKey {string} Secret key for S3, used for authentication
+## @field backup.resticPassword {string} Password for Restic backup encryption
 backup:
   enabled: false
   s3Region: us-east-1
@@ -47,11 +63,15 @@ backup:
   s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
   resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
 
-## @param resources Explicit CPU and memory configuration for each ClickHouse replica. When left empty, the preset defined in `resourcesPreset` is applied.
-resources: {}
- # resources:
- #   cpu: 4000m
- #   memory: 4Gi
 
-## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
-resourcesPreset: "small"
+## @section Clickhouse Keeper parameters
+## @param clickhouseKeeper {*clickhouseKeeper} Clickhouse Keeper configuration
+## @field clickhouseKeeper.enabled {*bool} Deploy ClickHouse Keeper for cluster coordination
+## @field clickhouseKeeper.size {*quantity} Persistent Volume Claim size, available for application data
+## @field clickhouseKeeper.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+## @field clickhouseKeeper.replicas {*int} Number of keeper replicas
+clickhouseKeeper:
+  enabled: true
+  size: 1Gi
+  resourcesPreset: micro
+  replicas: 3

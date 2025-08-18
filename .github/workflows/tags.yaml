@@ -149,36 +149,35 @@ jobs:
           version:     ${{ steps.tag.outputs.tag }}            # A
           compare-to:  ${{ steps.latest_release.outputs.tag }} # B
 
-      # Create or reuse DRAFT GitHub Release
+      # Create or reuse draft release
       - name: Create / reuse draft release
         if: steps.check_release.outputs.skip == 'false'
         id: release
         uses: actions/github-script@v7
         with:
           script: |
-            const tag        = '${{ steps.tag.outputs.tag }}';
-            const isRc       = ${{ steps.tag.outputs.is_rc }};
-            const outdated   = '${{ steps.semver.outputs.comparison-result }}' === '<';
-            const makeLatest = outdated ? false : 'legacy';
-            const releases   = await github.rest.repos.listReleases({
+            const tag      = '${{ steps.tag.outputs.tag }}';
+            const isRc     = ${{ steps.tag.outputs.is_rc }};
+            const releases = await github.rest.repos.listReleases({
               owner: context.repo.owner,
               repo:  context.repo.repo
             });
-            let rel          = releases.data.find(r => r.tag_name === tag);
+
+            let rel = releases.data.find(r => r.tag_name === tag);
             if (!rel) {
               rel = await github.rest.repos.createRelease({
                 owner: context.repo.owner,
                 repo:  context.repo.repo,
-                tag_name:    tag,
-                name:        tag,
-                draft:       true,
-                prerelease:  isRc,
-                make_latest: makeLatest
+                tag_name:   tag,
+                name:       tag,
+                draft:      true,
+                prerelease: isRc               // no make_latest for drafts
               });
               console.log(`Draft release created for ${tag}`);
             } else {
               console.log(`Re-using existing release ${tag}`);
             }
+
             core.setOutput('upload_url', rel.upload_url);
 
       # Build + upload assets (optional)

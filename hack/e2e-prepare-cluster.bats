@@ -82,7 +82,7 @@ EOF
   for i in 1 2 3; do
     cp nocloud-amd64.raw srv${i}/system.img
     qemu-img resize srv${i}/system.img 50G
-    qemu-img create srv${i}/data.img 100G
+    qemu-img create srv${i}/data.img 200G
   done
 }
 
@@ -136,25 +136,25 @@ machine:
     mirrors:
       docker.io:
         endpoints:
-        - https://dockerio.nexus.lllamnyp.su
+        - https://dockerio.nexus.aenix.org
       cr.fluentbit.io:
         endpoints:
-        - https://fluentbit.nexus.lllamnyp.su
+        - https://fluentbit.nexus.aenix.org
       docker-registry3.mariadb.com:
         endpoints:
-        - https://mariadb.nexus.lllamnyp.su
+        - https://mariadb.nexus.aenix.org
       gcr.io:
         endpoints:
-        - https://gcr.nexus.lllamnyp.su
+        - https://gcr.nexus.aenix.org
       ghcr.io:
         endpoints:
-        - https://ghcr.nexus.lllamnyp.su
+        - https://ghcr.nexus.aenix.org
       quay.io:
         endpoints:
-        - https://quay.nexus.lllamnyp.su
+        - https://quay.nexus.aenix.org
       registry.k8s.io:
         endpoints:
-        - https://k8s.nexus.lllamnyp.su
+        - https://k8s.nexus.aenix.org
   files:
   - content: |
       [plugins]

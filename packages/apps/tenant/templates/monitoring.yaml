@@ -4,8 +4,6 @@ kind: HelmRelease
 metadata:
   name: monitoring
   namespace: {{ include "tenant.name" . }}
-  annotations:
-    helm.sh/resource-policy: keep
   labels:
     cozystack.io/ui: "true"
     app.kubernetes.io/instance: {{ .Release.Name }}
@@ -19,31 +17,12 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
-      version: "*"
+  install:
+    remediation:
+      retries: 10
+  upgrade:
+    remediation:
+      retries: 10
   interval: 1m0s
-  timeout: 5m0s
-  values:
-    metricsStorages:
-    - name: shortterm
-      retentionPeriod: "3d"
-      deduplicationInterval: "15s"
-      storage: 10Gi
-      vminsert:
-        resources: {}
-      vmselect:
-        resources: {}
-      vmstorage:
-        resources: {}
-    - name: longterm
-      retentionPeriod: "14d"
-      deduplicationInterval: "5m"
-      storage: 10Gi
-      vminsert:
-        resources: {}
-      vmselect:
-        resources: {}
-      vmstorage:
-        resources: {}
-    oncall:
-      enabled: false
+  timeout: 10m0s
 {{- end }}

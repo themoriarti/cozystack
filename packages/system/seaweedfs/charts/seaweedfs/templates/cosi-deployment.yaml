@@ -9,6 +9,7 @@ metadata:
     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: objectstorage-provisioner
 spec:
   replicas: {{ .Values.cosi.replicas }}
   selector:
@@ -39,6 +40,14 @@ spec:
       {{- end }}
     spec:
       restartPolicy: {{ default .Values.global.restartPolicy .Values.cosi.restartPolicy }}
+      {{- if .Values.cosi.affinity }}
+      affinity:
+        {{ tpl .Values.cosi.affinity . | nindent 8 | trim }}
+      {{- end }}
+      {{- if .Values.cosi.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{ tpl .Values.cosi.topologySpreadConstraint . | nindent 8 | trim }}
+      {{- end }}
       {{- if .Values.cosi.tolerations }}
       tolerations:
         {{ tpl .Values.cosi.tolerations . | nindent 8 | trim }}
@@ -157,7 +166,7 @@ spec:
           volumeMounts:
             - mountPath: /var/lib/cosi
               name: socket
-          {{- with .Values.cosi.resources }}
+          {{- with .Values.cosi.sidecar.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -177,7 +186,7 @@ spec:
             {{- if .Values.cosi.existingConfigSecret }}
             secretName: {{ .Values.cosi.existingConfigSecret }}
             {{- else }}
-            secretName: seaweedfs-client-cert
+            secretName: seaweedfs-s3-secret
             {{- end }}
         {{- end }}
         {{- if .Values.global.enableSecurity }}

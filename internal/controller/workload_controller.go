@@ -3,16 +3,20 @@ package controller
 import (
 	"context"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+)
+
+const (
+	deletionRequeueDelay = 30 * time.Second
 )
 
 // WorkloadMonitorReconciler reconciles a WorkloadMonitor object
@@ -21,57 +25,40 @@ type WorkloadReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+// workload_controller.go
 func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
+	log := log.FromContext(ctx)
+
 	w := &cozyv1alpha1.Workload{}
-	err := r.Get(ctx, req.NamespacedName, w)
-	if err != nil {
+	if err := r.Get(ctx, req.NamespacedName, w); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "Unable to fetch Workload")
 		return ctrl.Result{}, err
 	}
 
-	// it's being deleted, nothing to handle
-	if w.DeletionTimestamp != nil {
-		return ctrl.Result{}, nil
+	// If my monitor is gone, delete me.
+	monName, has := w.Labels["workloads.cozystack.io/monitor"]
+	if !has {
+		return ctrl.Result{}, client.IgnoreNotFound(r.Delete(ctx, w))
 	}
-
-	t := getMonitoredObject(w)
-
-	if t == nil {
-		err = r.Delete(ctx, w)
-		if err != nil {
-			logger.Error(err, "failed to delete workload")
-		}
+	monitor := &cozyv1alpha1.WorkloadMonitor{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: w.Namespace, Name: monName}, monitor); apierrors.IsNotFound(err) {
+		// Monitor is gone → delete the Workload.  Ignore NotFound here, too.
+		return ctrl.Result{}, client.IgnoreNotFound(r.Delete(ctx, w))
+	} else if err != nil {
+		// Some other error fetching the monitor
+		log.Error(err, "failed to get WorkloadMonitor", "monitor", monName)
 		return ctrl.Result{}, err
 	}
 
-	err = r.Get(ctx, types.NamespacedName{Name: t.GetName(), Namespace: t.GetNamespace()}, t)
-
-	// found object, nothing to do
-	if err == nil {
-		return ctrl.Result{}, nil
-	}
-
-	// error getting object but not 404 -- requeue
-	if !apierrors.IsNotFound(err) {
-		logger.Error(err, "failed to get dependent object", "kind", t.GetObjectKind(), "dependent-object-name", t.GetName())
-		return ctrl.Result{}, err
-	}
-
-	err = r.Delete(ctx, w)
-	if err != nil {
-		logger.Error(err, "failed to delete workload")
-	}
-	return ctrl.Result{}, err
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		// Watch WorkloadMonitor objects
+		// Watch Workload objects
 		For(&cozyv1alpha1.Workload{}).
 		Complete(r)
 }

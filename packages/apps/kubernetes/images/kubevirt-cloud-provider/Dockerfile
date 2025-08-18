@@ -21,6 +21,6 @@ RUN go mod vendor
 
 RUN CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o bin/kubevirt-cloud-controller-manager ./cmd/kubevirt-cloud-controller-manager
 
-FROM registry.access.redhat.com/ubi9/ubi-micro
+FROM scratch
 COPY --from=builder /go/src/kubevirt.io/cloud-provider-kubevirt/bin/kubevirt-cloud-controller-manager /bin/kubevirt-cloud-controller-manager
 ENTRYPOINT [ "/bin/kubevirt-cloud-controller-manager" ]

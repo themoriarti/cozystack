@@ -38,3 +38,4 @@ kafka/strimzi-kafka
 goldpinger/goldpinger
 clickhouse/altinity-clickhouse-operator-dashboard
 storage/linstor
+seaweedfs/seaweedfs

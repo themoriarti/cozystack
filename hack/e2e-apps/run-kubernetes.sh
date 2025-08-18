@@ -1,5 +1,3 @@
-#!/usr/bin/env bats
-
 run_kubernetes_test() {
     local version_expr="$1"
     local test_name="$2"
@@ -59,9 +57,6 @@ spec:
       instanceType: u1.medium
       maxReplicas: 10
       minReplicas: 0
-      resources:
-        cpu: ""
-        memory: ""
       roles:
       - ingress-nginx
   storageClass: replicated
@@ -103,11 +98,4 @@ EOF
   # Clean up by deleting the Kubernetes resource
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io $test_name
 
-}
-
-@test "Create a tenant Kubernetes control plane with latest version" {
-  run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991'
-}
-@test "Create a tenant Kubernetes control plane with previous version" {
-  run_kubernetes_test 'keys | sort_by(.) | .[-2]' 'test-previous-version' '59992'
 }

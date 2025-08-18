@@ -9,6 +9,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -111,6 +112,7 @@ func (r *WorkloadMonitorReconciler) reconcileServiceForMonitor(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("svc-%s", svc.Name),
 			Namespace: svc.Namespace,
+			Labels:    make(map[string]string, len(svc.Labels)),
 		},
 	}
 
@@ -137,9 +139,12 @@ func (r *WorkloadMonitorReconciler) reconcileServiceForMonitor(
 
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
-		updateOwnerReferences(workload.GetObjectMeta(), monitor)
+		updateOwnerReferences(workload.GetObjectMeta(), &svc)
 
-		workload.Labels = svc.Labels
+		for k, v := range svc.Labels {
+			workload.Labels[k] = v
+		}
+		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
 
 		// Fill Workload status fields:
 		workload.Status.Kind = monitor.Spec.Kind
@@ -168,6 +173,7 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("pvc-%s", pvc.Name),
 			Namespace: pvc.Namespace,
+			Labels:    make(map[string]string, len(pvc.Labels)),
 		},
 	}
 
@@ -184,9 +190,12 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
-		updateOwnerReferences(workload.GetObjectMeta(), monitor)
+		updateOwnerReferences(workload.GetObjectMeta(), &pvc)
 
-		workload.Labels = pvc.Labels
+		for k, v := range pvc.Labels {
+			workload.Labels[k] = v
+		}
+		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
 
 		// Fill Workload status fields:
 		workload.Status.Kind = monitor.Spec.Kind
@@ -248,19 +257,19 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("pod-%s", pod.Name),
 			Namespace: pod.Namespace,
-			Labels:    map[string]string{},
+			Labels:    make(map[string]string, len(pod.Labels)),
 		},
 	}
 
 	metaLabels := r.getWorkloadMetadata(&pod)
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
-		updateOwnerReferences(workload.GetObjectMeta(), monitor)
+		updateOwnerReferences(workload.GetObjectMeta(), &pod)
 
-		// Copy labels from the Pod if needed
 		for k, v := range pod.Labels {
 			workload.Labels[k] = v
 		}
+		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
 
 		// Add workload meta to labels
 		for k, v := range metaLabels {
@@ -370,15 +379,24 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	monitor.Status.ObservedReplicas = observedReplicas
 	monitor.Status.AvailableReplicas = availableReplicas
 
-	// Default to operational = true, but check MinReplicas if set
-	monitor.Status.Operational = pointer.Bool(true)
-	if monitor.Spec.MinReplicas != nil && availableReplicas < *monitor.Spec.MinReplicas {
-		monitor.Status.Operational = pointer.Bool(false)
-	}
-
 	// Update the WorkloadMonitor status in the cluster
-	if err := r.Status().Update(ctx, monitor); err != nil {
-		logger.Error(err, "Unable to update WorkloadMonitor status", "monitor", monitor.Name)
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		fresh := &cozyv1alpha1.WorkloadMonitor{}
+		if err := r.Get(ctx, req.NamespacedName, fresh); err != nil {
+			return err
+		}
+		fresh.Status.ObservedReplicas = observedReplicas
+		fresh.Status.AvailableReplicas = availableReplicas
+
+		// Default to operational = true, but check MinReplicas if set
+		monitor.Status.Operational = pointer.Bool(true)
+		if monitor.Spec.MinReplicas != nil && availableReplicas < *monitor.Spec.MinReplicas {
+			monitor.Status.Operational = pointer.Bool(false)
+		}
+		return r.Status().Update(ctx, fresh)
+	})
+	if err != nil {
+		logger.Error(err, "unable to update WorkloadMonitor status after retries")
 		return ctrl.Result{}, err
 	}
 

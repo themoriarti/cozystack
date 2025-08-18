@@ -25,11 +25,13 @@ import (
 	"io"
 	"net"
 
+	corev1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
 	"github.com/cozystack/cozystack/pkg/config"
 	sampleopenapi "github.com/cozystack/cozystack/pkg/generated/openapi"
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/version"
@@ -38,9 +40,11 @@ import (
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	utilversionpkg "k8s.io/apiserver/pkg/util/version"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/component-base/featuregate"
 	baseversion "k8s.io/component-base/version"
 	netutils "k8s.io/utils/net"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // AppsServerOptions holds the state for the Apps API server
@@ -51,9 +55,7 @@ type AppsServerOptions struct {
 	StdErr io.Writer
 
 	AlternateDNS []string
-
-	// Add a field to store the configuration path
-	ResourceConfigPath string
+	Client       client.Client
 
 	// Add a field to store the configuration
 	ResourceConfig *config.ResourceConfig
@@ -66,7 +68,6 @@ func NewAppsServerOptions(out, errOut io.Writer) *AppsServerOptions {
 			"",
 			apiserver.Codecs.LegacyCodec(v1alpha1.SchemeGroupVersion),
 		),
-
 		StdOut: out,
 		StdErr: errOut,
 	}
@@ -100,9 +101,6 @@ func NewCommandStartAppsServer(ctx context.Context, defaults *AppsServerOptions)
 
 	flags := cmd.Flags()
 	o.RecommendedOptions.AddFlags(flags)
-
-	// Add a flag for the config path
-	flags.StringVar(&o.ResourceConfigPath, "config", "config.yaml", "Path to the resource configuration file")
 
 	// The following lines demonstrate how to configure version compatibility and feature gates
 	// for the "Apps" component according to KEP-4330.
@@ -142,12 +140,54 @@ func NewCommandStartAppsServer(ctx context.Context, defaults *AppsServerOptions)
 
 // Complete fills in the fields that are not set
 func (o *AppsServerOptions) Complete() error {
-	// Load the configuration file
-	cfg, err := config.LoadConfig(o.ResourceConfigPath)
-	if err != nil {
-		return fmt.Errorf("failed to load config from %s: %v", o.ResourceConfigPath, err)
+	scheme := runtime.NewScheme()
+	if err := corev1alpha1.AddToScheme(scheme); err != nil {
+		return fmt.Errorf("failed to register types: %w", err)
 	}
-	o.ResourceConfig = cfg
+
+	cfg, err := clientcmd.BuildConfigFromFlags("", "")
+	if err != nil {
+		return fmt.Errorf("failed to get kubeconfig: %w", err)
+	}
+
+	o.Client, err = client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return fmt.Errorf("client initialization failed: %w", err)
+	}
+
+	crdList := &corev1alpha1.CozystackResourceDefinitionList{}
+
+	if err := o.Client.List(context.Background(), crdList); err != nil {
+		return fmt.Errorf("failed to list CozystackResourceDefinitions: %w", err)
+	}
+
+	// Convert to ResourceConfig
+	o.ResourceConfig = &config.ResourceConfig{}
+	for _, crd := range crdList.Items {
+		resource := config.Resource{
+			Application: config.ApplicationConfig{
+				Kind:          crd.Spec.Application.Kind,
+				Singular:      crd.Spec.Application.Singular,
+				Plural:        crd.Spec.Application.Plural,
+				ShortNames:    []string{}, // TODO: implement shortnames
+				OpenAPISchema: crd.Spec.Application.OpenAPISchema,
+			},
+			Release: config.ReleaseConfig{
+				Prefix: crd.Spec.Release.Prefix,
+				Labels: crd.Spec.Release.Labels,
+				Chart: config.ChartConfig{
+					Name: crd.Spec.Release.Chart.Name,
+					SourceRef: config.SourceRefConfig{
+						Kind:      crd.Spec.Release.Chart.SourceRef.Kind,
+						Name:      crd.Spec.Release.Chart.SourceRef.Name,
+						Namespace: crd.Spec.Release.Chart.SourceRef.Namespace,
+					},
+				},
+			},
+		}
+		o.ResourceConfig.Resources = append(o.ResourceConfig.Resources, resource)
+	}
+
 	return nil
 }
 

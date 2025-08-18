@@ -27,6 +27,10 @@ spec:
     s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
     s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
     resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
+  clickhouseKeeper:
+    enabled: true
+    resourcesPreset: "micro"
+    size: "1Gi"
   resources: {}
   resourcesPreset: "nano"
 EOF
@@ -38,4 +42,5 @@ EOF
   timeout 100 sh -ec "until kubectl -n tenant-test get svc chi-clickhouse-$name-clickhouse-0-0 -o jsonpath='{.spec.ports[*].port}' | grep -q '9000 8123 9009'; do sleep 10; done"
   timeout 80 sh -ec "until kubectl -n tenant-test get sts chi-clickhouse-$name-clickhouse-0-1 ; do sleep 10; done"
   kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-1 --timeout=140s --for=jsonpath='{.status.replicas}'=1
+  kubectl -n tenant-test delete clickhouse $name
 }

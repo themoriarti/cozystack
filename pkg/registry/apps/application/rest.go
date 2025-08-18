@@ -18,6 +18,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -41,6 +42,10 @@ import (
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
+	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	schemadefault "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
 
 	// Importing API errors package to construct appropriate error responses
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -78,10 +83,21 @@ type REST struct {
 	kindName      string
 	singularName  string
 	releaseConfig config.ReleaseConfig
+	specSchema    *structuralschema.Structural
 }
 
 // NewREST creates a new REST storage for Application with specific configuration
 func NewREST(dynamicClient dynamic.Interface, config *config.Resource) *REST {
+	var specSchema *structuralschema.Structural
+	if raw := strings.TrimSpace(config.Application.OpenAPISchema); raw != "" {
+		var js internalapiext.JSONSchemaProps
+		if err := json.Unmarshal([]byte(raw), &js); err != nil {
+			klog.Errorf("Failed to unmarshal OpenAPI schema: %v", err)
+		} else if specSchema, err = structuralschema.NewStructural(&js); err != nil {
+			klog.Errorf("Failed to create structural schema: %v", err)
+		}
+	}
+
 	return &REST{
 		dynamicClient: dynamicClient,
 		gvr: schema.GroupVersionResource{
@@ -96,6 +112,7 @@ func NewREST(dynamicClient dynamic.Interface, config *config.Resource) *REST {
 		kindName:      config.Application.Kind,
 		singularName:  config.Application.Singular,
 		releaseConfig: config.Release,
+		specSchema:    specSchema,
 	}
 }
 
@@ -254,7 +271,6 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 			klog.Errorf("Invalid field selector: %v", err)
 			return nil, fmt.Errorf("invalid field selector: %v", err)
 		}
-
 		// Check if selector is for metadata.name
 		if name, exists := fs.RequiresExactMatch("metadata.name"); exists {
 			// Convert Application name to HelmRelease name
@@ -304,17 +320,8 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		return nil, err
 	}
 
-	// Initialize empty Application list
-	appList := &appsv1alpha1.ApplicationList{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apps.cozystack.io/v1alpha1",
-			Kind:       "ApplicationList",
-		},
-		ListMeta: metav1.ListMeta{
-			ResourceVersion: hrList.GetResourceVersion(),
-		},
-		Items: []appsv1alpha1.Application{},
-	}
+	// Initialize unstructured items array
+	items := make([]unstructured.Unstructured, 0)
 
 	// Iterate over HelmReleases and convert to Applications
 	for _, hr := range hrList.Items {
@@ -352,7 +359,6 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 				klog.Errorf("Invalid field selector: %v", err)
 				continue
 			}
-
 			fieldsSet := fields.Set{
 				"metadata.name":      app.Name,
 				"metadata.namespace": app.Namespace,
@@ -362,10 +368,23 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 			}
 		}
 
-		appList.Items = append(appList.Items, app)
+		// Convert Application to unstructured
+		unstructuredApp, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&app)
+		if err != nil {
+			klog.Errorf("Error converting Application %s to unstructured: %v", app.Name, err)
+			continue
+		}
+		items = append(items, unstructured.Unstructured{Object: unstructuredApp})
 	}
 
-	klog.V(6).Infof("Successfully listed %d Application resources in namespace %s", len(appList.Items), namespace)
+	// Explicitly set apiVersion and kind in unstructured object
+	appList := &unstructured.UnstructuredList{}
+	appList.SetAPIVersion("apps.cozystack.io/v1alpha1")
+	appList.SetKind(r.kindName + "List")
+	appList.SetResourceVersion(hrList.GetResourceVersion())
+	appList.Items = items
+
+	klog.V(6).Infof("Successfully listed %d Application resources in namespace %s", len(items), namespace)
 	return appList, nil
 }
 
@@ -918,6 +937,10 @@ func (r *REST) ConvertHelmReleaseToApplication(hr *unstructured.Unstructured) (a
 		return appsv1alpha1.Application{}, err
 	}
 
+	if err := r.applySpecDefaults(&app); err != nil {
+		return app, fmt.Errorf("defaulting error: %w", err)
+	}
+
 	klog.V(6).Infof("Successfully converted HelmRelease %s to Application", hr.GetName())
 	return app, nil
 }
@@ -1015,6 +1038,19 @@ func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableO
 	case *appsv1alpha1.Application:
 		table = r.buildTableFromApplication(*obj)
 		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
+	case *unstructured.UnstructuredList:
+		apps := make([]appsv1alpha1.Application, 0, len(obj.Items))
+		for _, u := range obj.Items {
+			var a appsv1alpha1.Application
+			err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &a)
+			if err != nil {
+				klog.Errorf("Failed to convert Unstructured to Application: %v", err)
+				continue
+			}
+			apps = append(apps, a)
+		}
+		table = r.buildTableFromApplications(apps)
+		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
 	case *unstructured.Unstructured:
 		var app appsv1alpha1.Application
 		err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &app)
@@ -1046,7 +1082,6 @@ func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableO
 	}
 
 	klog.V(6).Infof("ConvertToTable: returning table with %d rows", len(table.Rows))
-
 	return &table, nil
 }
 
@@ -1169,4 +1204,29 @@ func (e errNotAcceptable) Status() metav1.Status {
 		Reason:  metav1.StatusReason("NotAcceptable"),
 		Message: e.Error(),
 	}
+}
+
+// applySpecDefaults applies default values to the Application spec based on the schema
+func (r *REST) applySpecDefaults(app *appsv1alpha1.Application) error {
+	if r.specSchema == nil {
+		return nil
+	}
+	var m map[string]any
+	if app.Spec != nil && len(app.Spec.Raw) > 0 {
+		if err := json.Unmarshal(app.Spec.Raw, &m); err != nil {
+			return err
+		}
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+
+	schemadefault.Default(m, r.specSchema)
+
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	app.Spec = &apiextv1.JSON{Raw: raw}
+	return nil
 }
