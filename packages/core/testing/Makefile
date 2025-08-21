@@ -30,7 +30,7 @@ image-e2e-sandbox:
 		yq -i '.e2e.image = strenv(IMAGE)' values.yaml
 	rm -f images/e2e-sandbox.json
 
-test: test-cluster test-apps ## Run the end-to-end tests in existing sandbox
+test: test-cluster test-openapi test-apps ## Run the end-to-end tests in existing sandbox
 
 copy-nocloud-image:
 	docker cp ../../../_out/assets/nocloud-amd64.raw.xz "${SANDBOX_NAME}":/workspace/_out/assets/nocloud-amd64.raw.xz
@@ -46,6 +46,9 @@ install-cozystack: copy-installer-manifest
 
 test-cluster: copy-nocloud-image copy-installer-manifest ## Run the end-to-end for creating a cluster
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-cluster.bats'
+
+test-openapi:
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'
 
 test-apps-%:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps/$*.bats'
