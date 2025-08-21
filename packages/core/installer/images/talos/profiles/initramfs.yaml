@@ -3,22 +3,25 @@
 arch: amd64
 platform: metal
 secureboot: false
-version: v1.10.5
+version: v1.10.6
 input:
   kernel:
     path: /usr/install/amd64/vmlinuz
   initramfs:
     path: /usr/install/amd64/initramfs.xz
   baseInstaller:
-    imageRef: "ghcr.io/siderolabs/installer:v1.10.5"
+    imageRef: "ghcr.io/siderolabs/installer:v1.10.6"
   systemExtensions:
-    - imageRef: ghcr.io/siderolabs/amd-ucode:20250708
-    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20250708
-    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20250708
-    - imageRef: ghcr.io/siderolabs/intel-ucode:20250512
-    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20250708
-    - imageRef: ghcr.io/siderolabs/drbd:9.2.14-v1.10.5
-    - imageRef: ghcr.io/siderolabs/zfs:2.3.3-v1.10.5
+    - imageRef: ghcr.io/siderolabs/amd-ucode:20250708@sha256:83fdaaf4a44e8574f792f2fb9d0dc5f1ff4817179cbba9ebcb4bc3249b732556
+    - imageRef: ghcr.io/siderolabs/amdgpu:20250708-v1.10.6@sha256:5e67db022f62ae9157d19cbcbcf8c96f19a040e26cfe7e0d5709a15b90413c43
+    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20250708@sha256:f0fc731f3ff1bf417e9bd4dd3f7281e25a6f4e849358a1b46eb41a15066c4bd3
+    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20250708@sha256:9f4c41baa3795fd1457bbb0826a3618e7425f465e99c4647a459217c8b723e6d
+    - imageRef: ghcr.io/siderolabs/i915:20250708-v1.10.6@sha256:c7d17f6e4e87c8d344f54a02af20631b6cea0f3053d182649b9977857100ce79
+    - imageRef: ghcr.io/siderolabs/intel-ucode:20250512@sha256:67a0e0de018229a0d44d950fb730f62311cf7fbf4e267978ebbbc42b5e6a32ae
+    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20250708@sha256:97124ee3594ab1529c8153b633f85f2d2de1252ee8222a77f81904dcabd76815
+    - imageRef: ghcr.io/siderolabs/drbd:9.2.14-v1.10.6@sha256:ca7fba878c5acb8fdfe130a39472a6c0a5c9dd74d65ba7507c09780a873b29c7
+    - imageRef: ghcr.io/siderolabs/zfs:2.3.3-v1.10.6@sha256:4952ef7306cf014823b6a66cf6d29840f4c6b7b362e36f9d6e853846c7dd0025
+    - imageRef: ghcr.io/siderolabs/lldpd:1.0.19@sha256:73caa3c3a6c325970d0f527963f982698154d5f39c8c045b0fc2eb51d7da7b85
 output:
   kind: initramfs
   imageOptions: {}
