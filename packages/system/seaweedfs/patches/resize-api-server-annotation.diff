@@ -1,7 +1,7 @@
-diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/volume-resize-hook.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/volume-resize-hook.yaml
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-resize-hook.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-resize-hook.yaml
 index 436a785..9f186ea 100644
---- a/packages/system/seaweedfs/charts/seaweedfs/templates/volume-resize-hook.yaml
-+++ b/packages/system/seaweedfs/charts/seaweedfs/templates/volume-resize-hook.yaml
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-resize-hook.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-resize-hook.yaml
 @@ -45,6 +45,9 @@ metadata:
      helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
  spec:

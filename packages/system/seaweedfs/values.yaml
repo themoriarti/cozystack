@@ -81,7 +81,7 @@ seaweedfs:
       auditLogConfig: {}
   s3:
     enabled: true
-    enableAuth: true
+    enableAuth: false
     readinessProbe:
       scheme: HTTPS
     logs:
