@@ -2,9 +2,10 @@
 set -e
 set -u
 
+TMPDIR=$(mktemp -d)
 PROFILES="initramfs kernel iso installer nocloud metal"
-FIRMWARES="amd-ucode amdgpu-firmware bnx2-bnx2x i915-ucode intel-ice-firmware intel-ucode qlogic-firmware"
-EXTENSIONS="drbd zfs"
+FIRMWARES="amd-ucode amdgpu bnx2-bnx2x i915 intel-ice-firmware intel-ucode qlogic-firmware"
+EXTENSIONS="drbd zfs lldpd"
 
 mkdir -p images/talos/profiles
 
@@ -14,20 +15,22 @@ echo "$talos_version"
 
 export "TALOS_VERSION=$talos_version"
 
+crane export ghcr.io/siderolabs/extensions:v1.10.6 | tar x -O image-digests > $TMPDIR/image-digests
+
 for firmware in $FIRMWARES; do
   printf "fetching %s version: " "$firmware"
-  firmware_var=$(echo "$firmware" | tr '[:lower:]' '[:upper:]' | tr - _)_VERSION
-  version=$(skopeo list-tags docker://ghcr.io/siderolabs/$firmware | jq -r '.Tags[]|select(length == 8)|select(startswith("20"))' | sort -V | tail -n 1)
-  echo "$version"
-  export "$firmware_var=$version"
+  firmware_var=$(echo "$firmware" | tr '[:lower:]' '[:upper:]' | tr - _)_IMAGE
+  image=$(grep $firmware $TMPDIR/image-digests)
+  echo "$image"
+  export "$firmware_var=$image"
 done
 
 for extension in $EXTENSIONS; do
   printf "fetching %s version: " "$extension"
-  extension_var=$(echo "$extension" | tr '[:lower:]' '[:upper:]' | tr - _)_VERSION
-  version=$(skopeo --override-os linux --override-arch amd64 list-tags docker://ghcr.io/siderolabs/$extension | jq -r '.Tags[]' | grep "\-${talos_version}$" | sort -V | tail -n1)
-  echo "$version"
-  export "$extension_var=$version"
+  extension_var=$(echo "$extension" | tr '[:lower:]' '[:upper:]' | tr - _)_IMAGE
+  image=$(grep $extension $TMPDIR/image-digests)
+  echo "$image"
+  export "$extension_var=$image"
 done
 
 for profile in $PROFILES; do
@@ -78,13 +81,16 @@ input:
   baseInstaller:
     imageRef: "ghcr.io/siderolabs/installer:${TALOS_VERSION}"
   systemExtensions:
-    - imageRef: ghcr.io/siderolabs/amd-ucode:${AMD_UCODE_VERSION}
-    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:${BNX2_BNX2X_VERSION}
-    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:${INTEL_ICE_FIRMWARE_VERSION}
-    - imageRef: ghcr.io/siderolabs/intel-ucode:${INTEL_UCODE_VERSION}
-    - imageRef: ghcr.io/siderolabs/qlogic-firmware:${QLOGIC_FIRMWARE_VERSION}
-    - imageRef: ghcr.io/siderolabs/drbd:${DRBD_VERSION}
-    - imageRef: ghcr.io/siderolabs/zfs:${ZFS_VERSION}
+    - imageRef: ${AMD_UCODE_IMAGE}
+    - imageRef: ${AMDGPU_IMAGE}
+    - imageRef: ${BNX2_BNX2X_IMAGE}
+    - imageRef: ${INTEL_ICE_FIRMWARE_IMAGE}
+    - imageRef: ${I915_IMAGE}
+    - imageRef: ${INTEL_UCODE_IMAGE}
+    - imageRef: ${QLOGIC_FIRMWARE_IMAGE}
+    - imageRef: ${DRBD_IMAGE}
+    - imageRef: ${ZFS_IMAGE}
+    - imageRef: ${LLDPD_IMAGE}
 output:
   kind: ${kind}
   imageOptions: ${image_options}
