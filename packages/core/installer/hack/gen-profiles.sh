@@ -15,12 +15,12 @@ echo "$talos_version"
 
 export "TALOS_VERSION=$talos_version"
 
-crane export ghcr.io/siderolabs/extensions:v1.10.6 | tar x -O image-digests > $TMPDIR/image-digests
+crane export ghcr.io/siderolabs/extensions:${TALOS_VERSION} | tar x -O image-digests > $TMPDIR/image-digests
 
 for firmware in $FIRMWARES; do
   printf "fetching %s version: " "$firmware"
   firmware_var=$(echo "$firmware" | tr '[:lower:]' '[:upper:]' | tr - _)_IMAGE
-  image=$(grep $firmware $TMPDIR/image-digests)
+  image=$(grep -F "/$firmware:" $TMPDIR/image-digests)
   echo "$image"
   export "$firmware_var=$image"
 done
@@ -28,7 +28,7 @@ done
 for extension in $EXTENSIONS; do
   printf "fetching %s version: " "$extension"
   extension_var=$(echo "$extension" | tr '[:lower:]' '[:upper:]' | tr - _)_IMAGE
-  image=$(grep $extension $TMPDIR/image-digests)
+  image=$(grep -F "/$extension:" $TMPDIR/image-digests)
   echo "$image"
   export "$extension_var=$image"
 done
