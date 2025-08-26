@@ -254,6 +254,11 @@ jobs:
           done
           echo "✅ The task completed successfully after $attempt attempts."
 
+      - name: Run OpenAPI tests
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+
   detect_test_matrix:
     name: "Detect e2e test matrix"
     runs-on: ubuntu-latest

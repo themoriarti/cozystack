@@ -65,7 +65,7 @@ func patchSpec(target *spec.Schema, raw string) error {
 			target.Properties = map[string]spec.Schema{}
 		}
 		prop := target.Properties["spec"]
-		prop.AdditionalProperties = &spec.SchemaOrBool{Allows: true, Schema: &spec.Schema{}}
+		prop.AdditionalProperties = &spec.SchemaOrBool{Allows: true}
 		target.Properties["spec"] = prop
 		return nil
 	}
@@ -75,7 +75,7 @@ func patchSpec(target *spec.Schema, raw string) error {
 		return err
 	}
 	if custom.AdditionalProperties == nil {
-		custom.AdditionalProperties = &spec.SchemaOrBool{Allows: true, Schema: &spec.Schema{}}
+		custom.AdditionalProperties = &spec.SchemaOrBool{Allows: true}
 	}
 	if target.Properties == nil {
 		target.Properties = map[string]spec.Schema{}
@@ -271,13 +271,70 @@ func buildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*sp
 	}
 }
 
+// hasIntAndStringAnyOf returns true if anyOf is exactly a combination of string and integer.
+func hasIntAndStringAnyOf(anyOf []spec.Schema) bool {
+	seen := map[string]bool{}
+	for i := range anyOf {
+		for _, t := range anyOf[i].Type {
+			seen[t] = true
+		}
+	}
+	return seen["string"] && seen["integer"] && len(seen) <= 2
+}
+
+// sanitizeForV2 removes unsupported constructs for Swagger v2 and normalizes common patterns.
+func sanitizeForV2(s *spec.Schema) {
+	if s == nil {
+		return
+	}
+
+	if len(s.AnyOf) > 0 {
+		if hasIntAndStringAnyOf(s.AnyOf) {
+			s.Type = spec.StringOrArray{"string"}
+			if s.Extensions == nil {
+				s.Extensions = map[string]interface{}{}
+			}
+			s.Extensions["x-kubernetes-int-or-string"] = true
+		}
+		s.AnyOf = nil
+	}
+
+	if len(s.OneOf) > 0 {
+		s.OneOf = nil
+	}
+
+	if s.AdditionalProperties != nil {
+		ap := s.AdditionalProperties
+		if ap.Schema != nil {
+			sanitizeForV2(ap.Schema)
+		}
+	}
+
+	for k := range s.Properties {
+		prop := s.Properties[k]
+		sanitizeForV2(&prop)
+		s.Properties[k] = prop
+	}
+
+	if s.Items != nil {
+		if s.Items.Schema != nil {
+			sanitizeForV2(s.Items.Schema)
+		}
+		for i := range s.Items.Schemas {
+			sanitizeForV2(&s.Items.Schemas[i])
+		}
+	}
+
+	for i := range s.AllOf {
+		sanitizeForV2(&s.AllOf[i])
+	}
+}
+
 // -----------------------------------------------------------------------------
 // OpenAPI **v2** (swagger) post-processor
 // -----------------------------------------------------------------------------
 func buildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spec.Swagger, error) {
 	return func(sw *spec.Swagger) (*spec.Swagger, error) {
-
-		// Get base schemas
 		defs := sw.Definitions
 		base, ok1 := defs[baseRef]
 		list, ok2 := defs[baseListRef]
@@ -286,28 +343,26 @@ func buildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spe
 			return sw, fmt.Errorf("base Application* schemas not found")
 		}
 
-		// Clone base schemas for each kind
 		for kind, raw := range kindSchemas {
 			ref := apiPrefix + "." + kind
 			statusRef := ref + "Status"
 			listRef := ref + "List"
 
-			obj, status, l := cloneKindSchemas(kind, &base, &stat, &list /*v3=*/, false)
-			defs[ref] = *obj
-			defs[statusRef] = *status
-			defs[listRef] = *l
+			obj, status, l := cloneKindSchemas(kind, &base, &stat, &list, false)
 
 			if err := patchSpec(obj, raw); err != nil {
 				return nil, fmt.Errorf("kind %s: %w", kind, err)
 			}
+
+			defs[ref] = *obj
+			defs[statusRef] = *status
+			defs[listRef] = *l
 		}
 
-		// Delete base schemas
 		delete(defs, baseRef)
 		delete(defs, baseListRef)
 		delete(defs, baseStatusRef)
 
-		// Disable strategic-merge-patch+json
 		for p, op := range sw.Paths.Paths {
 			if op.Patch != nil && len(op.Patch.Consumes) > 0 {
 				var out []string
@@ -321,11 +376,20 @@ func buildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spe
 			}
 		}
 
-		// Rewrite all $ref in the document
 		out, err := rewriteDocRefs(sw)
 		if err != nil {
 			return nil, err
 		}
-		return sw, json.Unmarshal(out, sw)
+		if err := json.Unmarshal(out, sw); err != nil {
+			return nil, err
+		}
+
+		for name := range sw.Definitions {
+			s := sw.Definitions[name]
+			sanitizeForV2(&s)
+			sw.Definitions[name] = s
+		}
+
+		return sw, nil
 	}
 }
