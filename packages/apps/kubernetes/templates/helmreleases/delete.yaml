@@ -41,6 +41,7 @@ spec:
                 {{ .Release.Name }}-fluxcd
                 {{ .Release.Name }}-gpu-operator
                 {{ .Release.Name }}-velero
+                {{ .Release.Name }}-coredns
                 -p '{"spec": {"suspend": true}}'
                 --type=merge --field-manager=flux-client-side-apply || true
 ---
@@ -81,6 +82,7 @@ rules:
       - {{ .Release.Name }}-fluxcd
       - {{ .Release.Name }}-gpu-operator
       - {{ .Release.Name }}-velero
+      - {{ .Release.Name }}-coredns
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1

@@ -122,6 +122,13 @@ addons:
     enabled: false
     valuesOverride: {}
 
+  ## @field addons.coredns {coredns} Coredns
+  ##
+  coredns:
+    ## @field coredns.valuesOverride {object} Custom values to override
+    ##
+    valuesOverride: {}
+
 ## @section Kubernetes Control Plane Configuration
 ##
 ## @param controlPlane {controlPlane} Control Plane Configuration

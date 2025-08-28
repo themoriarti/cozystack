@@ -13,6 +13,9 @@
         "cilium": {
           "valuesOverride": {}
         },
+        "coredns": {
+          "valuesOverride": {}
+        },
         "fluxcd": {
           "enabled": false,
           "valuesOverride": {}
@@ -45,6 +48,7 @@
       "required": [
         "certManager",
         "cilium",
+        "coredns",
         "fluxcd",
         "gatewayAPI",
         "gpuOperator",
@@ -81,6 +85,24 @@
         },
         "cilium": {
           "description": "Cilium CNI plugin",
+          "type": "object",
+          "default": {
+            "valuesOverride": {}
+          },
+          "required": [
+            "valuesOverride"
+          ],
+          "properties": {
+            "valuesOverride": {
+              "description": "Custom values to override",
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
+            }
+          }
+        },
+        "coredns": {
+          "description": "Coredns",
           "type": "object",
           "default": {
             "valuesOverride": {}
