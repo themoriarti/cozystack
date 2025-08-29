@@ -84,6 +84,8 @@ seaweedfs:
     enableAuth: false
     readinessProbe:
       scheme: HTTPS
+    livenessProbe:
+      scheme: HTTPS
     logs:
       type: ""
     ingress:
