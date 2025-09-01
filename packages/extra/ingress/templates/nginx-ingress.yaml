@@ -15,8 +15,14 @@ spec:
         name: cozystack-system
         namespace: cozy-system
       version: '>= 0.0.0-0'
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
   interval: 1m0s
-  timeout: 5m0s
+  timeout: 10m0s
   values:
     ingress-nginx:
       fullnameOverride: {{ trimPrefix "tenant-" .Release.Namespace }}-ingress
