@@ -51,7 +51,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: update-resources
-          image: bitnami/kubectl:latest
+          image: docker.io/alpine/k8s:1.33.4
           resources:
             requests:
               memory: "16Mi"

@@ -19,7 +19,7 @@ spec:
       backoffLimit: 1
       containers:
         - name: resize
-          image: bitnami/kubectl
+          image: docker.io/alpine/k8s:1.33.4
           command: ["sh", "-xec"]
           args:
             - |

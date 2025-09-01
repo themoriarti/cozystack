@@ -13,3 +13,7 @@ velero:
     volumeSnapshotLocation: null
     namespace: cozy-velero
     features: EnableCSI
+  kubectl:
+    image:
+      repository: docker.io/alpine/k8s
+      tag: 1.33.4

@@ -21,7 +21,18 @@ kubeapps:
       repository: dashboard
       tag: v0.36.0-alpha.1
       digest: "sha256:54906b3d2492c8603a347a5938b6db36e5ed5c4149111cae1804ac9110361947"
+  frontend:
+    image:
+      repository: bitnamilegacy/nginx
+  authProxy:
+    image:
+      repository: bitnamilegacy/oauth2-proxy
   redis:
+    image:
+      repository: bitnamilegacy/redis
+    kubectl:
+      image:
+        repository: bitnamilegacy/kubectl
     master:
       resourcesPreset: "none"
       resources:
