@@ -64,14 +64,14 @@ spec:
             - |
               {{- if $needUpdateType }}
               echo "Patching VirtualMachine for instancetype update..."
-              kubectl patch virtualmachine {{ $vmName }} -n {{ $namespace }} \
+              kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
                 --type merge \
                 -p '{"spec":{"instancetype":{"name": "{{ $instanceType }}", "revisionName": null}}}'
               {{- end }}
               
               {{- if $needUpdateProfile }}
               echo "Patching VirtualMachine for preference update..."
-              kubectl patch virtualmachine {{ $vmName }} -n {{ $namespace }} \
+              kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
                 --type merge \
                 -p '{"spec":{"preference":{"name": "{{ $instanceProfile }}", "revisionName": null}}}'
               {{- end }}
