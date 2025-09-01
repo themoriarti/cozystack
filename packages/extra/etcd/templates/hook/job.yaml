@@ -25,7 +25,7 @@ spec:
       serviceAccountName: etcd-hook
       containers:
         - name: kubectl
-          image: bitnami/kubectl:latest
+          image: docker.io/alpine/k8s:1.33.4
           command:
           - sh
           args:
