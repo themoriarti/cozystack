@@ -139,6 +139,7 @@ EOF
     kubectl wait hr/seaweedfs-system -n tenant-root --timeout=2m --for=condition=ready
   fi
 
+
   # Expose Cozystack services through ingress
   kubectl patch configmap/cozystack -n cozy-system --type merge -p '{"data":{"expose-services":"api,dashboard,cdi-uploadproxy,vm-exportproxy,keycloak"}}'
 
@@ -150,7 +151,7 @@ EOF
   kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=5m
 
   # VictoriaMetrics components
-  kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
+  kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m
   kubectl wait vlogs/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
   kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.clusterStatus}'=operational --timeout=5m
 
