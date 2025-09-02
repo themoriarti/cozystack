@@ -8,10 +8,10 @@ done
 
 # Upgrade virtualmachines.apps to new chart version
 kubectl get virtualmachines.apps.cozystack.io -A --no-headers --output=custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name' | while read NAMESPACE NAME; do
-  kubectl patch virtualmachines.apps.cozystack.io -n "$NAMESPACE" "$NAME" --type merge -p '{"appVersion":"1.14.0"}'
+  kubectl patch virtualmachines.apps.cozystack.io -n "$NAMESPACE" "$NAME" --type merge -p '{"appVersion":"0.14.0"}'
 done
 kubectl get vminstances.apps.cozystack.io -A --no-headers --output=custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name' | while read NAMESPACE NAME; do
-  kubectl patch vminstances.apps.cozystack.io -n "$NAMESPACE" "$NAME" --type merge -p '{"appVersion":"1.12.0"}'
+  kubectl patch vminstances.apps.cozystack.io -n "$NAMESPACE" "$NAME" --type merge -p '{"appVersion":"0.12.0"}'
 done
 
 # Write version to cozystack-version config
