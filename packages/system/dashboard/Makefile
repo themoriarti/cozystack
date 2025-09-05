@@ -28,16 +28,11 @@ update-dockerfiles:
 
 image-dashboard: update-version
 	docker buildx build images/dashboard \
-		--provenance false \
-		--builder=$(BUILDER) \
-		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/dashboard:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/dashboard:latest \
 		--cache-to type=inline \
 		--metadata-file images/dashboard.json \
-		--push=$(PUSH) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
-		--load=$(LOAD)
+		$(BUILDX_ARGS)
 	REGISTRY="$(REGISTRY)" \
 		yq -i '.kubeapps.dashboard.image.registry = strenv(REGISTRY)' values.yaml
 	REPOSITORY="dashboard" \
@@ -50,16 +45,11 @@ image-dashboard: update-version
 
 image-kubeapps-apis: update-version
 	docker buildx build images/kubeapps-apis \
-		--provenance false \
-		--builder=$(BUILDER) \
-		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/kubeapps-apis:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/kubeapps-apis:latest \
 		--cache-to type=inline \
 		--metadata-file images/kubeapps-apis.json \
-		--push=$(PUSH) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
-		--load=$(LOAD)
+		$(BUILDX_ARGS)
 	REGISTRY="$(REGISTRY)" \
 		yq -i '.kubeapps.kubeappsapis.image.registry = strenv(REGISTRY)' values.yaml
 	REPOSITORY="kubeapps-apis" \
