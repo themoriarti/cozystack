@@ -720,7 +720,7 @@
     "version": {
       "description": "Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.",
       "type": "string",
-      "default": "v1.32",
+      "default": "v1.33",
       "enum": [
         "v1.28",
         "v1.29",
