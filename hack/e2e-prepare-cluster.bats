@@ -132,6 +132,7 @@ machine:
         - usermode_helper=disabled
     - name: zfs
     - name: spl
+    - name: lldpd
   registries:
     mirrors:
       docker.io:

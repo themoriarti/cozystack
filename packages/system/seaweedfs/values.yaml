@@ -21,6 +21,8 @@ seaweedfs:
       type: ""
   volume:
     replicas: 2
+    resizeHook:
+      image: docker.io/alpine/k8s:1.33.4
     # minimum free disk space(in percents). If free disk space lower this value - all volumes marks as ReadOnly
     minFreeSpacePercent: 5
     dataDirs:
@@ -81,8 +83,10 @@ seaweedfs:
       auditLogConfig: {}
   s3:
     enabled: true
-    enableAuth: true
+    enableAuth: false
     readinessProbe:
+      scheme: HTTPS
+    livenessProbe:
       scheme: HTTPS
     logs:
       type: ""
@@ -95,6 +99,10 @@ seaweedfs:
         nginx.ingress.kubernetes.io/proxy-buffering: "off"
         nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
         nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+        nginx.ingress.kubernetes.io/client-body-timeout: "3600"
+        nginx.ingress.kubernetes.io/client-header-timeout: "120"
         acme.cert-manager.io/http01-ingress-class: tenant-root
         cert-manager.io/cluster-issuer: letsencrypt-prod
       tls:
@@ -116,7 +124,7 @@ seaweedfs:
     bucketClassName: "seaweedfs"
     region: ""
     sidecar:
-      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v0.35.1@sha256:70827477305985aa461752d0110604d5b876799bc42a9dc5e71ae2367d57e2a1"
+      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v0.36.0-beta.2@sha256:e550053503a8aaef2b3611e660d2686b2746adc3114853d73dd1753450dee3ce"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []

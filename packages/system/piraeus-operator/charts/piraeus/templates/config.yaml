@@ -17,10 +17,10 @@ data:
     #   quay.io/piraeusdatastore/piraeus-server:v1.24.2
     components:
       linstor-controller:
-        tag: v1.31.2
+        tag: v1.31.3
         image: piraeus-server
       linstor-satellite:
-        tag: v1.31.2
+        tag: v1.31.3
         image: piraeus-server
       linstor-csi:
         tag: v1.8.0

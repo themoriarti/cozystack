@@ -358,7 +358,7 @@ volume:
   # This will automatically create a job for patching Kubernetes resources if the dataDirs type is 'persistentVolumeClaim' and the size has changed.
   resizeHook:
     enabled: true
-    image: bitnami/kubectl
+    image: alpine/k8s:1.28.4
 
   # idx can be defined by:
   #
@@ -1088,7 +1088,6 @@ allInOne:
   enabled: false
   imageOverride: null
   restartPolicy: Always
-  replicas: 1
 
   # Core configuration
   idleTimeout: 30  # Connection idle seconds
@@ -1231,7 +1230,7 @@ cosi:
   region: ""
 
   sidecar:
-    image: gcr.io/k8s-staging-sig-storage/objectstorage-sidecar/objectstorage-sidecar:v20230130-v0.1.0-24-gc0cf995
+    image: gcr.io/k8s-staging-sig-storage/objectstorage-sidecar:v20250711-controllerv0.2.0-rc1-80-gc2f6e65
     # Resource requests, limits, etc. for the server cluster placement. This
     # should map directly to the value of the resources field for a PodSpec,
     # formatted as a multi-line string. By default no direct resource request

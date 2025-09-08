@@ -4,6 +4,11 @@ vertical-pod-autoscaler:
   crds:
     enabled: false
 
+    image:
+      registry: docker.io
+      repository: alpine/k8s
+      tag: 1.33.4
+
   updater:
     resources:
       limits:

@@ -2,7 +2,7 @@
 {{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace "seaweedfs-deployed-version" }}
 {{- if $configMap }}
   {{- $deployedVersion := dig "data" "version" "0" $configMap }}
-  {{- if ge $deployedVersion "1" }}
+  {{- if ge $deployedVersion "2" }}
     {{- $shouldRunUpdateHook = false }}
   {{- end }}
 {{- end }}
@@ -26,7 +26,7 @@ spec:
       serviceAccountName: seaweedfs-hook
       containers:
         - name: kubectl
-          image: bitnami/kubectl:latest
+          image: docker.io/alpine/k8s:1.33.4
           command:
           - sh
           args:

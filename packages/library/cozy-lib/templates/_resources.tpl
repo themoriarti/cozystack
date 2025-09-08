@@ -172,3 +172,15 @@
 {{-   $xmsMi := min (div $memoryLimitInt 4194304) (div $memoryRequestInt 1048576) }}
 {{-   printf `-Xms%dm -Xmx%dm` $xmsMi $xmxMi }}
 {{- end }}
+
+{{- define "cozy-lib.resources.flatten" -}}
+{{- $out := dict -}}
+{{- $res := include "cozy-lib.resources.sanitize" . | fromYaml -}}
+{{- range $section, $values := $res }}
+  {{- range $k, $v := $values }}
+    {{- $key := printf "%s.%s" $section $k }}
+    {{- $_ := set $out $key $v }}
+  {{- end }}
+{{- end }}
+{{- dict "resourceQuotas" $out | toYaml }}
+{{- end }}

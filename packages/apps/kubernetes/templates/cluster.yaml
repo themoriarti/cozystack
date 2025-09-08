@@ -127,9 +127,6 @@ spec:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.scheduler.resourcesPreset .Values.controlPlane.scheduler.resources $) | nindent 6 }}
   dataStoreName: "{{ $etcd }}"
   addons:
-    coreDNS:
-      dnsServiceIPs:
-      - 10.95.0.10
     konnectivity:
       server:
         port: 8132
