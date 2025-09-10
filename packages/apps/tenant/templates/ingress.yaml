@@ -20,5 +20,7 @@ spec:
       version: "*"
   interval: 1m0s
   timeout: 5m0s
+  upgrade:
+    force: true
   values: {}
 {{- end }}
