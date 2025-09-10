@@ -2,7 +2,7 @@
 name: Bug report
 about: Create a report to help us improve
 title: "[Bug]"
-labels: ''
+labels: 'bug'
 assignees: ''
 
 ---
@@ -10,7 +10,7 @@ assignees: ''
 **Describe the bug**
 A clear and concise description of what the bug is.
 
-** Environment**
+**Environment**
 - Cozystack version
 - Provider: on-prem, Hetzner or else
 
@@ -27,7 +27,7 @@ A clear and concise description of what you expected to happen.
 
 **Logs**
 ```
-Paste any relevant logs here
+Paste any relevant logs here. Please redact tokens, passwords, private keys.
 ```
 
 **Screenshots**
