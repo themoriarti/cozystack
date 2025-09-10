@@ -16,7 +16,8 @@ etcd 2.7.0 632224a3
 etcd 2.8.0 4369b031
 etcd 2.9.0 8ddbe32e
 etcd 2.9.1 c02a3818
-etcd 2.10.0 HEAD
+etcd 2.10.0 7f477eec
+etcd 2.10.1 HEAD
 info 1.0.0 93bdf411
 info 1.0.1 632224a3
 info 1.1.0 c02a3818
