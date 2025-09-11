@@ -1,0 +1,4 @@
+coredns:
+  image:
+    repository: registry.k8s.io/coredns/coredns
+  replicaCount: 2
