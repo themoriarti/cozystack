@@ -1,18 +1,21 @@
 ---
 name: Bug report
 about: Create a report to help us improve
-title: "[Bug]"
 labels: 'bug'
 assignees: ''
 
 ---
+<!--
+Thank you for submitting a bug report!
+Please fill in the fields below to help us investigate the problem.
+-->
 
 **Describe the bug**
 A clear and concise description of what the bug is.
 
 **Environment**
 - Cozystack version
-- Provider: on-prem, Hetzner or else
+- Provider: on-prem, Hetzner, and so on
 
 **To Reproduce**
 Steps to reproduce the behavior:
@@ -21,8 +24,8 @@ Steps to reproduce the behavior:
 3. Scroll down to '....'
 4. See error
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+**Actual behaviour**
+A clear and concise description of what happens when the bug occurs. Explain how the system currently behaves, including error messages, unexpected results, or incorrect functionality observed during execution.
 
 
 **Logs**
@@ -31,7 +34,7 @@ Paste any relevant logs here. Please redact tokens, passwords, private keys.
 ```
 
 **Screenshots**
-If applicable, add screenshots to help explain your problem.
+If applicable, add screenshots to help explain the problem.
 
 **Additional context**
 Add any other context about the problem here.
