@@ -70,6 +70,12 @@ releases:
   privileged: true
   dependsOn: [cilium,kubeovn,cert-manager]
 
+- name: kubeovn-plunger
+  releaseName: kubeovn-plunger
+  chart: cozy-kubeovn-plunger
+  namespace: cozy-kubeovn
+  dependsOn: [cilium,kubeovn]
+
 - name: cozy-proxy
   releaseName: cozystack
   chart: cozy-cozy-proxy
