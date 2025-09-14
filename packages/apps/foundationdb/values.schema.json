@@ -196,6 +196,23 @@
           "default": true,
           "title": "Automatic replacements",
           "description": "Enable automatic pod replacements"
+        },
+        "securityContext": {
+          "type": "object",
+          "title": "Security context",
+          "description": "Security context for containers",
+          "properties": {
+            "runAsUser": {
+              "type": "integer",
+              "title": "Run as user",
+              "description": "User ID to run the container"
+            },
+            "runAsGroup": {
+              "type": "integer",
+              "title": "Run as group",
+              "description": "Group ID to run the container"
+            }
+          }
         }
       }
     }
