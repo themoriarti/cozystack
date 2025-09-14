@@ -19,14 +19,13 @@ replicas: 3
 cluster:
   processCounts:
     stateless: -1  # Automatically calculated
-    storage: 3     # Storage processes
     cluster_controller: 1
 
   version: "7.3.63"
 
   faultDomain:
-    key: "foundationdb.org/none"
-    valueFrom: "$FDB_ZONE_ID"
+    key: "kubernetes.io/hostname"
+    valueFrom: "spec.nodeName"
 
 ## @param storage {storage} Storage configuration
 ## @field storage.size {quantity} Size of persistent volumes for each instance
@@ -85,8 +84,8 @@ imageType: "split"
 ## @field securityContext.runAsUser {int} User ID to run the container
 ## @field securityContext.runAsGroup {int} Group ID to run the container
 securityContext:
-  runAsUser: 0
-  runAsGroup: 0
+  runAsUser: 4059
+  runAsGroup: 4059
 
 ## @param automaticReplacements {bool} Enable automatic pod replacements
 automaticReplacements: true

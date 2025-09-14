@@ -102,13 +102,12 @@
       "type": "object",
       "default": {
         "faultDomain": {
-          "key": "foundationdb.org/none",
-          "valueFrom": "$FDB_ZONE_ID"
+          "key": "kubernetes.io/hostname",
+          "valueFrom": "spec.nodeName"
         },
         "processCounts": {
           "cluster_controller": 1,
-          "stateless": -1,
-          "storage": 3
+          "stateless": -1
         },
         "version": "7.3.63"
       },
@@ -122,8 +121,8 @@
           "description": "Fault domain configuration",
           "type": "object",
           "default": {
-            "key": "foundationdb.org/none",
-            "valueFrom": "$FDB_ZONE_ID"
+            "key": "kubernetes.io/hostname",
+            "valueFrom": "spec.nodeName"
           },
           "required": [
             "key",
@@ -133,12 +132,12 @@
             "key": {
               "description": "Fault domain key",
               "type": "string",
-              "default": "foundationdb.org/none"
+              "default": "kubernetes.io/hostname"
             },
             "valueFrom": {
               "description": "Fault domain value source",
               "type": "string",
-              "default": "$FDB_ZONE_ID"
+              "default": "spec.nodeName"
             }
           }
         },
@@ -147,8 +146,7 @@
           "type": "object",
           "default": {
             "cluster_controller": 1,
-            "stateless": -1,
-            "storage": 3
+            "stateless": -1
           },
           "required": [
             "cluster_controller",
@@ -168,8 +166,7 @@
             },
             "storage": {
               "description": "Number of storage processes",
-              "type": "integer",
-              "default": 3
+              "type": "integer"
             }
           }
         },
@@ -268,8 +265,8 @@
       "description": "Security context for containers",
       "type": "object",
       "default": {
-        "runAsGroup": 0,
-        "runAsUser": 0
+        "runAsGroup": 4059,
+        "runAsUser": 4059
       },
       "required": [
         "runAsGroup",
@@ -279,12 +276,12 @@
         "runAsGroup": {
           "description": "Group ID to run the container",
           "type": "integer",
-          "default": 0
+          "default": 4059
         },
         "runAsUser": {
           "description": "User ID to run the container",
           "type": "integer",
-          "default": 0
+          "default": 4059
         }
       }
     },
