@@ -110,7 +110,7 @@
           "stateless": -1,
           "storage": 3
         },
-        "version": "7.4.1"
+        "version": "7.3.63"
       },
       "required": [
         "faultDomain",
@@ -176,7 +176,7 @@
         "version": {
           "description": "Version of FoundationDB to use",
           "type": "string",
-          "default": "7.4.1"
+          "default": "7.3.63"
         }
       }
     },

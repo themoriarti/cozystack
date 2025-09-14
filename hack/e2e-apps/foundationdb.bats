@@ -11,7 +11,7 @@ metadata:
 spec:
   replicas: 3
   cluster:
-    version: "7.4.1"
+    version: "7.3.63"
     processCounts:
       storage: 3
       stateless: -1

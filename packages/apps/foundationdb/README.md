@@ -27,7 +27,7 @@ replicas: 3
 
 # Cluster process configuration
 cluster:
-  version: "7.4.1"
+  version: "7.3.63"
   processCounts:
     storage: 3           # Storage processes
     stateless: -1        # Automatically calculated
@@ -147,7 +147,7 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 | `cluster.processCounts.stateless`          | Number of stateless processes (-1 for automatic)                                                                                           | `int`       | `-1`                    |
 | `cluster.processCounts.storage`            | Number of storage processes                                                                                                                | `int`       | `3`                     |
 | `cluster.processCounts.cluster_controller` | Number of cluster controller processes                                                                                                     | `int`       | `1`                     |
-| `cluster.version`                          | Version of FoundationDB to use                                                                                                             | `string`    | `7.4.1`                 |
+| `cluster.version`                          | Version of FoundationDB to use                                                                                                             | `string`    | `7.3.63`                |
 | `cluster.faultDomain`                      | Fault domain configuration                                                                                                                 | `object`    | `{}`                    |
 | `cluster.faultDomain.key`                  | Fault domain key                                                                                                                           | `string`    | `foundationdb.org/none` |
 | `cluster.faultDomain.valueFrom`            | Fault domain value source                                                                                                                  | `string`    | `$FDB_ZONE_ID`          |
