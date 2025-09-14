@@ -15,13 +15,13 @@ spec:
   
   automationOptions:
     replacements:
-      enabled: {{ .Values.advanced.automaticReplacements }}
+      enabled: {{ .Values.automaticReplacements }}
     faultDomain:
       key: {{ .Values.cluster.faultDomain.key }}
       {{- if .Values.cluster.faultDomain.valueFrom }}
       valueFrom: {{ .Values.cluster.faultDomain.valueFrom }}
       {{- end }}
-    imageType: {{ .Values.advanced.imageType }}
+    imageType: {{ .Values.imageType }}
     labels:
       filterOnOwnerReference: false
       matchLabels:
@@ -34,9 +34,9 @@ spec:
   
   processes:
     general:
-      {{- if .Values.advanced.customParameters }}
+      {{- if .Values.customParameters }}
       customParameters:
-        {{- range .Values.advanced.customParameters }}
+        {{- range .Values.customParameters }}
         - {{ . }}
         {{- end }}
       {{- end }}
@@ -44,9 +44,9 @@ spec:
         spec:
           containers:
             - name: foundationdb
-              resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resources.preset .Values.resources $) | nindent 16 }}
+              resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 16 }}
               securityContext:
-                {{- toYaml .Values.advanced.securityContext | nindent 16 }}
+                {{- toYaml .Values.securityContext | nindent 16 }}
             - name: foundationdb-kubernetes-sidecar
               resources:
                 limits:
@@ -56,7 +56,7 @@ spec:
                   cpu: 100m
                   memory: 128Mi
               securityContext:
-                {{- toYaml .Values.advanced.securityContext | nindent 16 }}
+                {{- toYaml .Values.securityContext | nindent 16 }}
           initContainers:
             - name: foundationdb-kubernetes-init
               resources:
@@ -67,7 +67,7 @@ spec:
                   cpu: 100m
                   memory: 128Mi
               securityContext:
-                {{- toYaml .Values.advanced.securityContext | nindent 16 }}
+                {{- toYaml .Values.securityContext | nindent 16 }}
   
   volumeClaimTemplate:
     spec:

@@ -2,44 +2,61 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# Number of replicas (total instances)
+## @section Common parameters
+##
+## @param replicas {int} Number of FoundationDB replicas (total instances)
 replicas: 3
 
-# Cluster configuration
+## @param cluster {cluster} Cluster configuration
+## @field cluster.processCounts {clusterProcessCounts} Process counts for different roles
+## @field clusterProcessCounts.stateless {int} Number of stateless processes (-1 for automatic)
+## @field clusterProcessCounts.storage {int} Number of storage processes
+## @field clusterProcessCounts.cluster_controller {int} Number of cluster controller processes
+## @field cluster.version {string} Version of FoundationDB to use
+## @field cluster.faultDomain {clusterFaultDomain} Fault domain configuration
+## @field clusterFaultDomain.key {string} Fault domain key
+## @field clusterFaultDomain.valueFrom {string} Fault domain value source
 cluster:
-  # Process counts for different roles
   processCounts:
     stateless: -1  # Automatically calculated
     storage: 3     # Storage processes
     cluster_controller: 1
-  
-  # Version of FoundationDB to use
+
   version: "7.4.1"
-  
-  # Fault domain configuration
+
   faultDomain:
     key: "foundationdb.org/none"
     valueFrom: "$FDB_ZONE_ID"
 
-# Storage configuration
+## @param storage {storage} Storage configuration
+## @field storage.size {quantity} Size of persistent volumes for each instance
+## @field storage.storageClass {string} Storage class (if not set, uses cluster default)
 storage:
-  # Size of persistent volumes
   size: "16Gi"
-  # Storage class (if not set, uses cluster default)
   storageClass: ""
 
-# Resource configuration
-resources:
-  # Resource preset (will be used by cozy-lib)
-  preset: "medium"
-  # Custom resource overrides
-  limits: {}
-  requests: {}
+## @param resources {*resources} Explicit CPU and memory configuration for each FoundationDB instance. When left empty, the preset defined in `resourcesPreset` is applied.
+## @field resources.cpu {*quantity} CPU available to each instance
+## @field resources.memory {*quantity} Memory (RAM) available to each instance
+resources: {}
+  # resources:
+  #   cpu: 2000m
+  #   memory: 4Gi
+## @param resourcesPreset {string enum:"small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+resourcesPreset: "medium"
 
-# Backup configuration
+## @param backup {backup} Backup configuration
+## @field backup.enabled {bool} Enable backups
+## @field backup.s3 {backupS3} S3 configuration for backups
+## @field backupS3.bucket {string} S3 bucket name
+## @field backupS3.endpoint {string} S3 endpoint URL
+## @field backupS3.region {string} S3 region
+## @field backupS3.credentials {backupS3Credentials} S3 credentials
+## @field backupS3Credentials.accessKeyId {string} S3 access key ID
+## @field backupS3Credentials.secretAccessKey {string} S3 secret access key
+## @field backup.retentionPolicy {string} Retention policy for backups
 backup:
   enabled: false
-  # S3 configuration for backups
   s3:
     bucket: ""
     endpoint: ""
@@ -47,27 +64,29 @@ backup:
     credentials:
       accessKeyId: ""
       secretAccessKey: ""
-  # Retention policy for backups
   retentionPolicy: "7d"
 
-# Monitoring
+## @param monitoring {monitoring} Monitoring configuration
+## @field monitoring.enabled {bool} Enable WorkloadMonitor integration
 monitoring:
   enabled: true
 
-# Advanced configuration
-advanced:
-  # Custom parameters to pass to FoundationDB
-  customParameters: []
-  # Example:
-  # - knob_disable_posix_kernel_aio=1
-  
-  # Image type (split recommended for production)
-  imageType: "split"
-  
-  # Security context for containers
-  securityContext:
-    runAsUser: 0
-    runAsGroup: 0
-  
-  # Enable automatic replacements
-  automaticReplacements: true
+## @section FoundationDB configuration
+##
+## @param customParameters {[]string} Custom parameters to pass to FoundationDB
+customParameters: []
+# Example:
+# - knob_disable_posix_kernel_aio=1
+
+## @param imageType {string enum:"unified,split"} Container image deployment type (split recommended for production)
+imageType: "split"
+
+## @param securityContext {securityContext} Security context for containers
+## @field securityContext.runAsUser {int} User ID to run the container
+## @field securityContext.runAsGroup {int} Group ID to run the container
+securityContext:
+  runAsUser: 0
+  runAsGroup: 0
+
+## @param automaticReplacements {bool} Enable automatic pod replacements
+automaticReplacements: true

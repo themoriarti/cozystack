@@ -1,218 +1,322 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Chart Values",
   "type": "object",
   "properties": {
-    "replicas": {
-      "type": "integer",
-      "minimum": 1,
-      "default": 3,
-      "title": "Number of replicas",
-      "description": "Total number of FoundationDB instances"
+    "automaticReplacements": {
+      "description": "Enable automatic pod replacements",
+      "type": "boolean",
+      "default": true
+    },
+    "backup": {
+      "description": "Backup configuration",
+      "type": "object",
+      "default": {
+        "enabled": false,
+        "retentionPolicy": "7d",
+        "s3": {
+          "bucket": "",
+          "credentials": {
+            "accessKeyId": "",
+            "secretAccessKey": ""
+          },
+          "endpoint": "",
+          "region": "us-east-1"
+        }
+      },
+      "required": [
+        "enabled",
+        "retentionPolicy",
+        "s3"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Enable backups",
+          "type": "boolean",
+          "default": false
+        },
+        "retentionPolicy": {
+          "description": "Retention policy for backups",
+          "type": "string",
+          "default": "7d"
+        },
+        "s3": {
+          "description": "S3 configuration for backups",
+          "type": "object",
+          "default": {
+            "bucket": "",
+            "credentials": {
+              "accessKeyId": "",
+              "secretAccessKey": ""
+            },
+            "endpoint": "",
+            "region": "us-east-1"
+          },
+          "required": [
+            "bucket",
+            "credentials",
+            "endpoint",
+            "region"
+          ],
+          "properties": {
+            "bucket": {
+              "description": "S3 bucket name",
+              "type": "string"
+            },
+            "credentials": {
+              "description": "S3 credentials",
+              "type": "object",
+              "default": {
+                "accessKeyId": "",
+                "secretAccessKey": ""
+              },
+              "required": [
+                "accessKeyId",
+                "secretAccessKey"
+              ],
+              "properties": {
+                "accessKeyId": {
+                  "description": "S3 access key ID",
+                  "type": "string"
+                },
+                "secretAccessKey": {
+                  "description": "S3 secret access key",
+                  "type": "string"
+                }
+              }
+            },
+            "endpoint": {
+              "description": "S3 endpoint URL",
+              "type": "string"
+            },
+            "region": {
+              "description": "S3 region",
+              "type": "string",
+              "default": "us-east-1"
+            }
+          }
+        }
+      }
     },
     "cluster": {
+      "description": "Cluster configuration",
       "type": "object",
-      "title": "Cluster Configuration",
-      "properties": {
+      "default": {
+        "faultDomain": {
+          "key": "foundationdb.org/none",
+          "valueFrom": "$FDB_ZONE_ID"
+        },
         "processCounts": {
+          "cluster_controller": 1,
+          "stateless": -1,
+          "storage": 3
+        },
+        "version": "7.4.1"
+      },
+      "required": [
+        "faultDomain",
+        "processCounts",
+        "version"
+      ],
+      "properties": {
+        "faultDomain": {
+          "description": "Fault domain configuration",
           "type": "object",
-          "title": "Process Counts",
+          "default": {
+            "key": "foundationdb.org/none",
+            "valueFrom": "$FDB_ZONE_ID"
+          },
+          "required": [
+            "key",
+            "valueFrom"
+          ],
           "properties": {
-            "stateless": {
+            "key": {
+              "description": "Fault domain key",
+              "type": "string",
+              "default": "foundationdb.org/none"
+            },
+            "valueFrom": {
+              "description": "Fault domain value source",
+              "type": "string",
+              "default": "$FDB_ZONE_ID"
+            }
+          }
+        },
+        "processCounts": {
+          "description": "Process counts for different roles",
+          "type": "object",
+          "default": {
+            "cluster_controller": 1,
+            "stateless": -1,
+            "storage": 3
+          },
+          "required": [
+            "cluster_controller",
+            "stateless",
+            "storage"
+          ],
+          "properties": {
+            "cluster_controller": {
+              "description": "Number of cluster controller processes",
               "type": "integer",
-              "default": -1,
-              "title": "Stateless processes",
-              "description": "Number of stateless processes (-1 for automatic)"
+              "default": 1
+            },
+            "stateless": {
+              "description": "Number of stateless processes (-1 for automatic)",
+              "type": "integer",
+              "default": -1
             },
             "storage": {
+              "description": "Number of storage processes",
               "type": "integer",
-              "minimum": 1,
-              "default": 3,
-              "title": "Storage processes",
-              "description": "Number of storage processes"
-            },
-            "cluster_controller": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 1,
-              "title": "Cluster controllers",
-              "description": "Number of cluster controller processes"
+              "default": 3
             }
           }
         },
         "version": {
+          "description": "Version of FoundationDB to use",
           "type": "string",
-          "default": "7.4.1",
-          "title": "FoundationDB Version",
-          "description": "Version of FoundationDB to deploy"
-        },
-        "faultDomain": {
-          "type": "object",
-          "title": "Fault Domain",
-          "properties": {
-            "key": {
-              "type": "string",
-              "default": "foundationdb.org/none",
-              "title": "Fault domain key"
+          "default": "7.4.1"
+        }
+      }
+    },
+    "customParameters": {
+      "description": "Custom parameters to pass to FoundationDB",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "imageType": {
+      "description": "Container image deployment type (split recommended for production)",
+      "type": "string",
+      "default": "split",
+      "enum": [
+        "unified",
+        "split"
+      ]
+    },
+    "monitoring": {
+      "description": "Monitoring configuration",
+      "type": "object",
+      "default": {
+        "enabled": true
+      },
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Enable WorkloadMonitor integration",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "replicas": {
+      "description": "Number of FoundationDB replicas (total instances)",
+      "type": "integer",
+      "default": 3
+    },
+    "resources": {
+      "description": "Explicit CPU and memory configuration for each FoundationDB instance. When left empty, the preset defined in `resourcesPreset` is applied.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "cpu": {
+          "description": "CPU available to each instance",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
             },
-            "valueFrom": {
-              "type": "string",
-              "default": "$FDB_ZONE_ID",
-              "title": "Fault domain value source"
+            {
+              "type": "string"
             }
-          }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
+        "memory": {
+          "description": "Memory (RAM) available to each instance",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "resourcesPreset": {
+      "description": "Default sizing preset used when `resources` is omitted. Allowed values: `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
+      "type": "string",
+      "default": "medium",
+      "enum": [
+        "small",
+        "medium",
+        "large",
+        "xlarge",
+        "2xlarge"
+      ]
+    },
+    "securityContext": {
+      "description": "Security context for containers",
+      "type": "object",
+      "default": {
+        "runAsGroup": 0,
+        "runAsUser": 0
+      },
+      "required": [
+        "runAsGroup",
+        "runAsUser"
+      ],
+      "properties": {
+        "runAsGroup": {
+          "description": "Group ID to run the container",
+          "type": "integer",
+          "default": 0
+        },
+        "runAsUser": {
+          "description": "User ID to run the container",
+          "type": "integer",
+          "default": 0
         }
       }
     },
     "storage": {
+      "description": "Storage configuration",
       "type": "object",
-      "title": "Storage Configuration",
+      "default": {
+        "size": "16Gi",
+        "storageClass": ""
+      },
+      "required": [
+        "size",
+        "storageClass"
+      ],
       "properties": {
         "size": {
-          "type": "string",
+          "description": "Size of persistent volumes for each instance",
           "default": "16Gi",
-          "title": "Storage size",
-          "description": "Size of persistent volumes for each instance"
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
         },
         "storageClass": {
-          "type": "string",
-          "title": "Storage class",
-          "description": "Kubernetes storage class to use (optional)"
-        }
-      }
-    },
-    "resources": {
-      "type": "object",
-      "title": "Resource Configuration",
-      "properties": {
-        "preset": {
-          "type": "string",
-          "enum": ["small", "medium", "large", "xlarge"],
-          "default": "medium",
-          "title": "Resource preset",
-          "description": "Predefined resource configuration"
-        },
-        "limits": {
-          "type": "object",
-          "title": "Resource limits",
-          "properties": {
-            "cpu": {"type": "string"},
-            "memory": {"type": "string"}
-          }
-        },
-        "requests": {
-          "type": "object", 
-          "title": "Resource requests",
-          "properties": {
-            "cpu": {"type": "string"},
-            "memory": {"type": "string"}
-          }
-        }
-      }
-    },
-    "backup": {
-      "type": "object",
-      "title": "Backup Configuration",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false,
-          "title": "Enable backups",
-          "description": "Enable automatic backups to S3"
-        },
-        "s3": {
-          "type": "object",
-          "title": "S3 Configuration",
-          "properties": {
-            "bucket": {
-              "type": "string",
-              "title": "S3 bucket name"
-            },
-            "endpoint": {
-              "type": "string",
-              "title": "S3 endpoint URL"
-            },
-            "region": {
-              "type": "string",
-              "default": "us-east-1",
-              "title": "S3 region"
-            },
-            "credentials": {
-              "type": "object",
-              "title": "S3 credentials",
-              "properties": {
-                "accessKeyId": {
-                  "type": "string",
-                  "title": "Access key ID"
-                },
-                "secretAccessKey": {
-                  "type": "string",
-                  "title": "Secret access key"
-                }
-              }
-            }
-          }
-        },
-        "retentionPolicy": {
-          "type": "string",
-          "default": "7d",
-          "title": "Retention policy",
-          "description": "How long to keep backups"
-        }
-      }
-    },
-    "monitoring": {
-      "type": "object",
-      "title": "Monitoring",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "title": "Enable monitoring",
-          "description": "Enable WorkloadMonitor integration"
-        }
-      }
-    },
-    "advanced": {
-      "type": "object",
-      "title": "Advanced Configuration",
-      "properties": {
-        "customParameters": {
-          "type": "array",
-          "title": "Custom parameters",
-          "description": "Custom FoundationDB parameters",
-          "items": {
-            "type": "string"
-          }
-        },
-        "imageType": {
-          "type": "string",
-          "enum": ["unified", "split"],
-          "default": "split",
-          "title": "Image type",
-          "description": "Container image deployment type"
-        },
-        "automaticReplacements": {
-          "type": "boolean",
-          "default": true,
-          "title": "Automatic replacements",
-          "description": "Enable automatic pod replacements"
-        },
-        "securityContext": {
-          "type": "object",
-          "title": "Security context",
-          "description": "Security context for containers",
-          "properties": {
-            "runAsUser": {
-              "type": "integer",
-              "title": "Run as user",
-              "description": "User ID to run the container"
-            },
-            "runAsGroup": {
-              "type": "integer",
-              "title": "Run as group",
-              "description": "Group ID to run the container"
-            }
-          }
+          "description": "Storage class (if not set, uses cluster default)",
+          "type": "string"
         }
       }
     }
