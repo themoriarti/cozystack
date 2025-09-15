@@ -77,8 +77,8 @@ customParameters: []
 # Example:
 # - knob_disable_posix_kernel_aio=1
 
-## @param imageType {string enum:"unified,split"} Container image deployment type (split recommended for production)
-imageType: "split"
+## @param imageType {string enum:"unified,split"} Container image deployment type
+imageType: "unified"
 
 ## @param securityContext {securityContext} Security context for containers
 ## @field securityContext.runAsUser {int} User ID to run the container

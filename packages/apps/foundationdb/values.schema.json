@@ -186,9 +186,9 @@
       }
     },
     "imageType": {
-      "description": "Container image deployment type (split recommended for production)",
+      "description": "Container image deployment type",
       "type": "string",
-      "default": "split",
+      "default": "unified",
       "enum": [
         "unified",
         "split"
