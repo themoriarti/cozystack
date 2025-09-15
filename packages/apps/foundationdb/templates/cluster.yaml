@@ -1,3 +1,5 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" | default (dict "data" (dict)) }}
+{{- $clusterDomain := index $cozyConfig.data "cluster-domain" | default "cozy.local" }}
 ---
 apiVersion: apps.foundationdb.org/v1beta2
 kind: FoundationDBCluster
@@ -41,7 +43,13 @@ spec:
         {{- end }}
       {{- end }}
       podTemplate:
+        metadata:
+          labels:
+            policy.cozystack.io/allow-to-apiserver: "true"
         spec:
+          serviceAccountName: {{ .Release.Name }}-foundationdb
+          securityContext:
+            fsGroup: {{ .Values.securityContext.runAsGroup }}
           containers:
             - name: foundationdb
               resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 16 }}
@@ -79,6 +87,7 @@ spec:
           storage: {{ .Values.storage.size }}
   
   routing:
+    dnsDomain: {{ $clusterDomain }}
     defineDNSLocalityFields: true
   
   sidecarContainer:
