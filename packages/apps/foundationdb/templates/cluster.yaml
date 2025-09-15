@@ -11,7 +11,11 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
   version: {{ .Values.cluster.version | quote }}
-  
+
+  databaseConfiguration:
+    redundancy_mode: {{ .Values.cluster.redundancyMode }}
+    storage_engine: {{ .Values.cluster.storageEngine }}
+
   processCounts:
     {{- toYaml .Values.cluster.processCounts | nindent 4 }}
   
@@ -76,15 +80,14 @@ spec:
                   memory: 128Mi
               securityContext:
                 {{- toYaml .Values.securityContext | nindent 16 }}
-  
-  volumeClaimTemplate:
-    spec:
-      {{- if .Values.storage.storageClass }}
-      storageClassName: {{ .Values.storage.storageClass }}
-      {{- end }}
-      resources:
-        requests:
-          storage: {{ .Values.storage.size }}
+      volumeClaimTemplate:
+        spec:
+          {{- if .Values.storage.storageClass }}
+          storageClassName: {{ .Values.storage.storageClass }}
+          {{- end }}
+          resources:
+            requests:
+              storage: {{ .Values.storage.size }}
   
   routing:
     dnsDomain: {{ $clusterDomain }}

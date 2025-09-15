@@ -9,13 +9,14 @@ metadata:
   name: $name
   namespace: tenant-test
 spec:
-  replicas: 3
   cluster:
     version: "7.3.63"
     processCounts:
       storage: 3
       stateless: -1
       cluster_controller: 1
+    redundancyMode: "double"
+    storageEngine: "ssd-2"
     faultDomain:
       key: "foundationdb.org/none"
       valueFrom: "\$FDB_ZONE_ID"
@@ -26,18 +27,18 @@ spec:
   backup:
     enabled: false
     s3:
-      bucket: "s3.example.org/fdb-backups"
+      bucket: ""
       endpoint: ""
-      region: "us-east-1"
+      region: ""
       credentials:
-        accessKeyId: "oobaiRus9pah8PhohL1ThaeTa4UVa7gu"
-        secretAccessKey: "ju3eum4dekeich9ahM1te8waeGai0oog"
+        accessKeyId: ""
+        secretAccessKey: ""
     retentionPolicy: "7d"
   monitoring:
     enabled: true
   customParameters:
     - "knob_disable_posix_kernel_aio=1"
-  imageType: "split"
+  imageType: "unified"
   automaticReplacements: true
 EOF
   sleep 15
@@ -101,6 +102,16 @@ EOF
   storage_pod=$(kubectl -n tenant-test get pods -l foundationdb.org/fdb-cluster-name=foundationdb-$name,foundationdb.org/fdb-process-class=storage --no-headers | head -n1 | awk '{print $1}')
   kubectl -n tenant-test get pod "$storage_pod" -o jsonpath='{.spec.containers[0].securityContext.runAsUser}' | grep -q '4059'
   kubectl -n tenant-test get pod "$storage_pod" -o jsonpath='{.spec.containers[0].securityContext.runAsGroup}' | grep -q '4059'
+
+  # Verify volumeClaimTemplate is properly configured in FoundationDBCluster CRD
+  timeout 60 sh -ec "until kubectl -n tenant-test get foundationdbclusters.apps.foundationdb.org foundationdb-$name -o jsonpath='{.spec.processes.general.volumeClaimTemplate.spec.resources.requests.storage}' | grep -q '1Gi'; do sleep 10; done"
+
+  # Verify PVCs are created with correct storage size (1Gi as specified in test)
+  timeout 120 sh -ec "until [ \$(kubectl -n tenant-test get pvc -l foundationdb.org/fdb-cluster-name=foundationdb-$name --no-headers | wc -l) -ge 3 ]; do sleep 10; done"
+  kubectl -n tenant-test get pvc -l foundationdb.org/fdb-cluster-name=foundationdb-$name -o jsonpath='{.items[*].spec.resources.requests.storage}' | grep -q '1Gi'
+
+  # Verify actual PVC storage capacity matches requested size
+  kubectl -n tenant-test get pvc -l foundationdb.org/fdb-cluster-name=foundationdb-$name -o jsonpath='{.items[*].status.capacity.storage}' | grep -q '1Gi'
 
   # Clean up
   kubectl -n tenant-test delete foundationdb $name

@@ -110,11 +110,15 @@
           "stateless": -1,
           "storage": 3
         },
+        "redundancyMode": "double",
+        "storageEngine": "ssd-2",
         "version": "7.3.63"
       },
       "required": [
         "faultDomain",
         "processCounts",
+        "redundancyMode",
+        "storageEngine",
         "version"
       ],
       "properties": {
@@ -172,6 +176,16 @@
               "default": 3
             }
           }
+        },
+        "redundancyMode": {
+          "description": "Database redundancy mode (single, double, triple, three_datacenter, three_datacenter_fallback)",
+          "type": "string",
+          "default": "double"
+        },
+        "storageEngine": {
+          "description": "Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory)",
+          "type": "string",
+          "default": "ssd-2"
         },
         "version": {
           "description": "Version of FoundationDB to use",

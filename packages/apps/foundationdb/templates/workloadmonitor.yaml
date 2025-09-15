@@ -9,12 +9,12 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
-  replicas: {{ .Values.replicas }}
-  minReplicas: 1
+  replicas: {{ .Values.cluster.processCounts.storage }}
+  minReplicas: {{ include "foundationdb.minReplicas" . }}
   kind: foundationdb
   type: foundationdb
   selector:
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/name: foundationdb
+    foundationdb.org/fdb-cluster-name: {{ .Release.Name }}
+    foundationdb.org/fdb-process-class: storage
   version: {{ .Chart.Version }}
 {{- end }}

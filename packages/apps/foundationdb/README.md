@@ -124,6 +124,13 @@ FoundationDB is designed for high availability:
 - Configurable fault domains for rack/zone awareness
 - Transaction log redundancy
 
+The included `WorkloadMonitor` is automatically configured based on the `cluster.redundancyMode` value. It sets the `minReplicas` property on the `WorkloadMonitor` resource to ensure the cluster's health status accurately reflects its fault tolerance level. The number of tolerated failures is as follows:
+- `single`: 0 failures
+- `double`: 1 failure
+- `triple` and datacenter-aware modes: 2 failures
+
+For example, with the default configuration (`redundancyMode: double` and 3 storage pods), `minReplicas` will be set to 2.
+
 ## Performance Considerations
 
 - Use SSD storage for better performance
@@ -149,6 +156,8 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 | `cluster.processCounts.storage`            | Number of storage processes (determines cluster size)                                                                                      | `int`       | `3`                      |
 | `cluster.processCounts.cluster_controller` | Number of cluster controller processes                                                                                                     | `int`       | `1`                      |
 | `cluster.version`                          | Version of FoundationDB to use                                                                                                             | `string`    | `7.3.63`                 |
+| `cluster.redundancyMode`                   | Database redundancy mode (single, double, triple, three_datacenter, three_datacenter_fallback)                                             | `string`    | `double`                 |
+| `cluster.storageEngine`                    | Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory)                                                                             | `string`    | `ssd-2`                  |
 | `cluster.faultDomain`                      | Fault domain configuration                                                                                                                 | `object`    | `{}`                     |
 | `cluster.faultDomain.key`                  | Fault domain key                                                                                                                           | `string`    | `kubernetes.io/hostname` |
 | `cluster.faultDomain.valueFrom`            | Fault domain value source                                                                                                                  | `string`    | `spec.nodeName`          |
