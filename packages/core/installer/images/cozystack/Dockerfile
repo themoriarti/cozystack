@@ -34,7 +34,7 @@ FROM alpine:3.22
 
 RUN wget -O- https://github.com/cozystack/cozypkg/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.1.0
 
-RUN apk add --no-cache make kubectl coreutils
+RUN apk add --no-cache make kubectl coreutils git jq
 
 COPY --from=builder /src/scripts /cozystack/scripts
 COPY --from=builder /src/packages/core /cozystack/packages/core
