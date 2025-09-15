@@ -4,13 +4,10 @@
 
 ## @section Common parameters
 ##
-## @param replicas {int} Number of FoundationDB replicas (total instances)
-replicas: 3
-
 ## @param cluster {cluster} Cluster configuration
 ## @field cluster.processCounts {clusterProcessCounts} Process counts for different roles
 ## @field clusterProcessCounts.stateless {int} Number of stateless processes (-1 for automatic)
-## @field clusterProcessCounts.storage {int} Number of storage processes
+## @field clusterProcessCounts.storage {int} Number of storage processes (determines cluster size)
 ## @field clusterProcessCounts.cluster_controller {int} Number of cluster controller processes
 ## @field cluster.version {string} Version of FoundationDB to use
 ## @field cluster.faultDomain {clusterFaultDomain} Fault domain configuration
@@ -19,6 +16,7 @@ replicas: 3
 cluster:
   processCounts:
     stateless: -1  # Automatically calculated
+    storage: 3     # Number of storage processes (determines cluster size)
     cluster_controller: 1
 
   version: "7.3.63"

@@ -22,16 +22,16 @@ This package provides a managed FoundationDB cluster deployment using the Founda
 ### Basic Configuration
 
 ```yaml
-# Number of total instances
-replicas: 3
-
 # Cluster process configuration
 cluster:
   version: "7.3.63"
   processCounts:
-    storage: 3           # Storage processes
+    storage: 3           # Number of storage processes (determines cluster size)
     stateless: -1        # Automatically calculated
     cluster_controller: 1
+  faultDomain:
+    key: "kubernetes.io/hostname"
+    valueFrom: "spec.nodeName"
 ```
 
 ### Storage
@@ -45,15 +45,13 @@ storage:
 ### Resources
 
 ```yaml
+# Use preset sizing
+resourcesPreset: "medium"  # small, medium, large, xlarge, 2xlarge
+
+# Or custom resource configuration
 resources:
-  preset: "medium"       # small, medium, large, xlarge
-  # Custom overrides
-  limits:
-    cpu: "2000m"
-    memory: "4Gi"
-  requests:
-    cpu: "1000m"
-    memory: "2Gi"
+  cpu: "2000m"
+  memory: "4Gi"
 ```
 
 ### Backup (Optional)
@@ -74,16 +72,20 @@ backup:
 ### Advanced Configuration
 
 ```yaml
-advanced:
-  # Custom FoundationDB parameters
-  customParameters:
-    - "knob_disable_posix_kernel_aio=1"
-  
-  # Image type (split recommended for production)
-  imageType: "split"
-  
-  # Enable automatic pod replacements
-  automaticReplacements: true
+# Custom FoundationDB parameters
+customParameters:
+  - "knob_disable_posix_kernel_aio=1"
+
+# Image type (unified is default and recommended for new deployments)
+imageType: "unified"
+
+# Enable automatic pod replacements
+automaticReplacements: true
+
+# Security context configuration
+securityContext:
+  runAsUser: 4059
+  runAsGroup: 4059
 ```
 
 ## Prerequisites
@@ -141,11 +143,10 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 
 | Name                                       | Description                                                                                                                                | Type        | Value                    |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------- | ------------------------ |
-| `replicas`                                 | Number of FoundationDB replicas (total instances)                                                                                          | `int`       | `3`                      |
 | `cluster`                                  | Cluster configuration                                                                                                                      | `object`    | `{}`                     |
 | `cluster.processCounts`                    | Process counts for different roles                                                                                                         | `object`    | `{}`                     |
 | `cluster.processCounts.stateless`          | Number of stateless processes (-1 for automatic)                                                                                           | `int`       | `-1`                     |
-| `cluster.processCounts.storage`            | Number of storage processes                                                                                                                | `int`       | `0`                      |
+| `cluster.processCounts.storage`            | Number of storage processes (determines cluster size)                                                                                      | `int`       | `3`                      |
 | `cluster.processCounts.cluster_controller` | Number of cluster controller processes                                                                                                     | `int`       | `1`                      |
 | `cluster.version`                          | Version of FoundationDB to use                                                                                                             | `string`    | `7.3.63`                 |
 | `cluster.faultDomain`                      | Fault domain configuration                                                                                                                 | `object`    | `{}`                     |

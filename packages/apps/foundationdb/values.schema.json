@@ -107,7 +107,8 @@
         },
         "processCounts": {
           "cluster_controller": 1,
-          "stateless": -1
+          "stateless": -1,
+          "storage": 3
         },
         "version": "7.3.63"
       },
@@ -146,7 +147,8 @@
           "type": "object",
           "default": {
             "cluster_controller": 1,
-            "stateless": -1
+            "stateless": -1,
+            "storage": 3
           },
           "required": [
             "cluster_controller",
@@ -165,8 +167,9 @@
               "default": -1
             },
             "storage": {
-              "description": "Number of storage processes",
-              "type": "integer"
+              "description": "Number of storage processes (determines cluster size)",
+              "type": "integer",
+              "default": 3
             }
           }
         },
@@ -210,11 +213,6 @@
           "default": true
         }
       }
-    },
-    "replicas": {
-      "description": "Number of FoundationDB replicas (total instances)",
-      "type": "integer",
-      "default": 3
     },
     "resources": {
       "description": "Explicit CPU and memory configuration for each FoundationDB instance. When left empty, the preset defined in `resourcesPreset` is applied.",
