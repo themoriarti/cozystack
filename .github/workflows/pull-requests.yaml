@@ -1,7 +1,7 @@
 name: Pull Request
 
 env:
-  REGISTRY: ${{ secrets.OCIR_REPO }}
+  REGISTRY: ${{ vars.OCIR_REPO }}
 on:
   pull_request:
     types: [opened, synchronize, reopened]
