@@ -45,7 +45,6 @@ import (
 	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
-	schemadefault "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
 
 	// Importing API errors package to construct appropriate error responses
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -89,12 +88,24 @@ type REST struct {
 // NewREST creates a new REST storage for Application with specific configuration
 func NewREST(dynamicClient dynamic.Interface, config *config.Resource) *REST {
 	var specSchema *structuralschema.Structural
+
 	if raw := strings.TrimSpace(config.Application.OpenAPISchema); raw != "" {
-		var js internalapiext.JSONSchemaProps
-		if err := json.Unmarshal([]byte(raw), &js); err != nil {
-			klog.Errorf("Failed to unmarshal OpenAPI schema: %v", err)
-		} else if specSchema, err = structuralschema.NewStructural(&js); err != nil {
-			klog.Errorf("Failed to create structural schema: %v", err)
+		var v1js apiextv1.JSONSchemaProps
+		if err := json.Unmarshal([]byte(raw), &v1js); err != nil {
+			klog.Errorf("Failed to unmarshal v1 OpenAPI schema: %v", err)
+		} else {
+			scheme := runtime.NewScheme()
+			_ = internalapiext.AddToScheme(scheme)
+			_ = apiextv1.AddToScheme(scheme)
+
+			var ijs internalapiext.JSONSchemaProps
+			if err := scheme.Convert(&v1js, &ijs, nil); err != nil {
+				klog.Errorf("Failed to convert v1->internal JSONSchemaProps: %v", err)
+			} else if s, err := structuralschema.NewStructural(&ijs); err != nil {
+				klog.Errorf("Failed to create structural schema: %v", err)
+			} else {
+				specSchema = s
+			}
 		}
 	}
 
@@ -1204,29 +1215,4 @@ func (e errNotAcceptable) Status() metav1.Status {
 		Reason:  metav1.StatusReason("NotAcceptable"),
 		Message: e.Error(),
 	}
-}
-
-// applySpecDefaults applies default values to the Application spec based on the schema
-func (r *REST) applySpecDefaults(app *appsv1alpha1.Application) error {
-	if r.specSchema == nil {
-		return nil
-	}
-	var m map[string]any
-	if app.Spec != nil && len(app.Spec.Raw) > 0 {
-		if err := json.Unmarshal(app.Spec.Raw, &m); err != nil {
-			return err
-		}
-	}
-	if m == nil {
-		m = map[string]any{}
-	}
-
-	schemadefault.Default(m, r.specSchema)
-
-	raw, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-	app.Spec = &apiextv1.JSON{Raw: raw}
-	return nil
 }
