@@ -1,4 +1,4 @@
-FROM bitnami/node:20.15.1 AS build
+FROM bitnamilegacy/node:20.15.1 AS build
 WORKDIR /app
 
 ARG COMMIT_REF=4926bc68fabb0914afab574006643c85a597b371
@@ -26,5 +26,5 @@ RUN sed -i \
     -e 's/#1b2b32/#2a2d2f/g' \
     $(grep -rl "#2d4048\|#25333d\|#fcfdfd\|#f1f6f8\|#e3eaed\|#cbd4d8\|#aeb8bc\|#859399\|#6a7a81\|#4f6169\|#3a4d55\|#2d4048\|#21333b\|#1b2b32")
 
-FROM bitnami/nginx:1.25.2
+FROM bitnamilegacy/nginx:1.25.2
 COPY --from=build /app/build /app

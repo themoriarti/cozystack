@@ -9,7 +9,7 @@ RUN apk add --no-cache patch
 WORKDIR /source
 RUN wget -O- https://github.com/cozystack/kubeapps/archive/${COMMIT_REF}.tar.gz | tar xzf - --strip-components=1
 
-FROM bitnami/golang:1.23.4 AS builder
+FROM bitnamilegacy/golang:1.23.4 AS builder
 WORKDIR /go/src/github.com/vmware-tanzu/kubeapps
 COPY --from=source /source/go.mod /source/go.sum ./
 ARG TARGETOS
