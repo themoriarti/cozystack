@@ -10,10 +10,7 @@
     "resources": {
       "description": "Resource configuration for etcd",
       "type": "object",
-      "default": {
-        "cpu": 4,
-        "memory": "1Gi"
-      },
+      "default": {},
       "properties": {
         "cpu": {
           "description": "The number of CPU cores allocated",
