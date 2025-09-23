@@ -4,6 +4,8 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Release.Name }}-backup-script
+  labels:
+    apps.cozystack.io/tenantresource: "false"
 stringData:
   backup.sh: |
     #!/bin/sh
