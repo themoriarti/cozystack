@@ -17,7 +17,8 @@ clickhouse 0.10.1 4369b031
 clickhouse 0.11.0 08cb7c0f
 clickhouse 0.11.1 0e47e1e8
 clickhouse 0.12.0 c02a3818
-clickhouse 0.13.0 HEAD
+clickhouse 0.13.0 53fbe7c2
+clickhouse 0.13.1 HEAD
 ferretdb 0.1.0 e9716091
 ferretdb 0.1.1 91b0499a
 ferretdb 0.2.0 6c5cf5bf
@@ -89,7 +90,8 @@ mysql 0.8.0 62cb694d
 mysql 0.8.1 4369b031
 mysql 0.9.0 08cb7c0f
 mysql 0.9.1 c02a3818
-mysql 0.10.0 HEAD
+mysql 0.10.0 53fbe7c2
+mysql 0.10.1 HEAD
 nats 0.1.0 e9716091
 nats 0.2.0 6c5cf5bf
 nats 0.3.0 78366f19
@@ -128,7 +130,8 @@ postgres 0.16.0 70f82667
 postgres 0.17.0 acd4663a
 postgres 0.17.1 08cb7c0f
 postgres 0.17.3 c02a3818
-postgres 0.18.0 HEAD
+postgres 0.18.0 53fbe7c2
+postgres 0.18.1 HEAD
 rabbitmq 0.1.0 263e47be
 rabbitmq 0.2.0 53f2365e
 rabbitmq 0.3.0 6c5cf5bf
@@ -168,7 +171,8 @@ tcp-balancer 0.5.0 08cb7c0f
 tcp-balancer 0.5.1 c02a3818
 tcp-balancer 0.6.0 HEAD
 tenant 1.13.0 8f1975d1
-tenant 1.14.0 HEAD
+tenant 1.14.0 53fbe7c2
+tenant 1.14.1 HEAD
 virtual-machine 0.14.0 HEAD
 vm-disk 0.1.0 d971f2ff
 vm-disk 0.1.1 6130f43d
@@ -188,4 +192,5 @@ vpn 0.6.1 62cb694d
 vpn 0.6.2 4369b031
 vpn 0.7.0 08cb7c0f
 vpn 0.7.1 c02a3818
-vpn 0.8.0 HEAD
+vpn 0.8.0 53fbe7c2
+vpn 0.8.1 HEAD

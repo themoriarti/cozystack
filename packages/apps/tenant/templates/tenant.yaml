@@ -5,17 +5,7 @@ metadata:
   name: {{ include "tenant.name" . }}
   namespace: {{ include "tenant.name" . }}
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ include "tenant.name" . }}
-  namespace: {{ include "tenant.name" . }}
-  annotations:
-    kubernetes.io/service-account.name: {{ include "tenant.name" . }}
-type: kubernetes.io/service-account-token
----
 # == default role ==
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
