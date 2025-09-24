@@ -21,6 +21,7 @@ import (
 )
 
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Cluster
 
 // CozystackResourceDefinition is the Schema for the cozystackresourcedefinitions API
 type CozystackResourceDefinition struct {
@@ -48,8 +49,12 @@ type CozystackResourceDefinitionSpec struct {
 	Application CozystackResourceDefinitionApplication `json:"application"`
 	// Release configuration
 	Release CozystackResourceDefinitionRelease `json:"release"`
+
 	// Secret selectors
 	Secrets CozystackResourceDefinitionSecrets `json:"secrets,omitempty"`
+
+	// Dashboard configuration for this resource
+	Dashboard *CozystackResourceDefinitionDashboard `json:"dashboard,omitempty"`
 }
 
 type CozystackResourceDefinitionChart struct {
@@ -100,4 +105,52 @@ type CozystackResourceDefinitionSecrets struct {
 	// matches none of the selectors in the exclude array that secret is marked
 	// as a tenant secret and is visible to users.
 	Include []*metav1.LabelSelector `json:"include,omitempty"`
+}
+
+// ---- Dashboard types ----
+
+// DashboardTab enumerates allowed UI tabs.
+// +kubebuilder:validation:Enum=workloads;ingresses;services;secrets;yaml
+type DashboardTab string
+
+const (
+	DashboardTabWorkloads DashboardTab = "workloads"
+	DashboardTabIngresses DashboardTab = "ingresses"
+	DashboardTabServices  DashboardTab = "services"
+	DashboardTabSecrets   DashboardTab = "secrets"
+	DashboardTabYAML      DashboardTab = "yaml"
+)
+
+// CozystackResourceDefinitionDashboard describes how this resource appears in the UI.
+type CozystackResourceDefinitionDashboard struct {
+	// Human-readable name shown in the UI (e.g., "Bucket")
+	Singular string `json:"singular"`
+	// Plural human-readable name (e.g., "Buckets")
+	Plural string `json:"plural"`
+	// Hard-coded name used in the UI (e.g., "bucket")
+	// +optional
+	Name string `json:"name,omitempty"`
+	// Whether this resource is singular (not a collection) in the UI
+	// +optional
+	SingularResource bool `json:"singularResource,omitempty"`
+	// Order weight for sorting resources in the UI (lower first)
+	// +optional
+	Weight int `json:"weight,omitempty"`
+	// Short description shown in catalogs or headers (e.g., "S3 compatible storage")
+	// +optional
+	Description string `json:"description,omitempty"`
+	// Icon encoded as a string (e.g., inline SVG, base64, or data URI)
+	// +optional
+	Icon string `json:"icon,omitempty"`
+	// Category used to group resources in the UI (e.g., "Storage", "Networking")
+	Category string `json:"category"`
+	// Free-form tags for search and filtering
+	// +optional
+	Tags []string `json:"tags,omitempty"`
+	// Which tabs to show for this resource
+	// +optional
+	Tabs []DashboardTab `json:"tabs,omitempty"`
+	// Order of keys in the YAML view
+	// +optional
+	KeysOrder [][]string `json:"keysOrder,omitempty"`
 }

@@ -5,7 +5,7 @@ repos:
       name: Run 'make generate' in all app directories
       entry: |
         flock -x .git/pre-commit.lock sh -c '
-          for dir in ./packages/apps/*/ ./packages/extra/*/ ./packages/system/cozystack-api/; do
+          for dir in ./packages/apps/*/ ./packages/extra/*/; do
             if [ -d "$dir" ]; then
               echo "Running make generate in $dir"
               make generate -C "$dir" || exit $?
