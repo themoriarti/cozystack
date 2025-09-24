@@ -21,9 +21,13 @@ webhooks:
         apiVersions: ["v1"]
         resources: ["pods","secrets", "services", "persistentvolumeclaims"]
       - operations: ["CREATE", "UPDATE"]
-        apiGroups: ["operator.victoriametrics.com"]
-        apiVersions: ["v1beta1"]
-        resources: ["vmclusters"]
+        apiGroups: ["cozystack.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["workloadmonitors"]
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        resources: ["ingresses"]
     failurePolicy: Fail
     namespaceSelector:
       matchExpressions:
