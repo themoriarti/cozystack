@@ -30,14 +30,9 @@ build: build-deps
 
 repos:
 	rm -rf _out
-	make -C packages/apps check-version-map
-	make -C packages/extra check-version-map
 	make -C packages/system repo
 	make -C packages/apps repo
 	make -C packages/extra repo
-	mkdir -p _out/logos
-	cp ./packages/apps/*/logos/*.svg ./packages/extra/*/logos/*.svg _out/logos/
-
 
 manifests:
 	mkdir -p _out/assets
