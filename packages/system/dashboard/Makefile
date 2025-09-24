@@ -5,7 +5,7 @@ include ../../../scripts/common-envs.mk
 include ../../../scripts/package.mk
 
 update: update-crd update-dockerfiles
-image: image-openapi-ui image-openapi-ui-k8s-bff image-token-proxy
+image: image-openapi-ui image-openapi-ui-k8s-bff image-token-proxy update-tenant-text
 
 
 update-dockerfiles:
@@ -65,3 +65,6 @@ image-token-proxy:
 	IMAGE="$(REGISTRY)/token-proxy:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/token-proxy.json -r)" \
 		yq -i '.tokenProxy.image = strenv(IMAGE)' values.yaml
 	rm -f images/token-proxy.json
+
+update-tenant-text:
+	yq -i '.data.TENANT_TEXT = "$(TAG)"' ./templates/configmap.yaml

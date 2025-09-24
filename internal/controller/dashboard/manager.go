@@ -2,23 +2,33 @@ package dashboard
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"reflect"
-	"regexp"
 	"strings"
 
 	dashv1alpha1 "github.com/cozystack/cozystack/api/dashboard/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 
-	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+)
+
+const (
+	// Label keys for dashboard resource management
+	LabelManagedBy    = "dashboard.cozystack.io/managed-by"
+	LabelResourceType = "dashboard.cozystack.io/resource-type"
+	LabelCRDName      = "dashboard.cozystack.io/crd-name"
+	LabelCRDGroup     = "dashboard.cozystack.io/crd-group"
+	LabelCRDVersion   = "dashboard.cozystack.io/crd-version"
+	LabelCRDKind      = "dashboard.cozystack.io/crd-kind"
+	LabelCRDPlural    = "dashboard.cozystack.io/crd-plural"
+
+	// Label values
+	ManagedByValue      = "cozystack-dashboard-controller"
+	ResourceTypeStatic  = "static"
+	ResourceTypeDynamic = "dynamic"
 )
 
 // AddToScheme exposes dashboard types registration for controller setup.
@@ -63,281 +73,376 @@ func NewManager(c client.Client, scheme *runtime.Scheme, opts ...Option) *Manage
 //   - ensureSidebar               (implemented)
 //   - ensureTableUriMapping 	     (implemented)
 func (m *Manager) EnsureForCRD(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) (reconcile.Result, error) {
+	// Early return if crd.Spec.Dashboard is nil to prevent oscillation
+	if crd.Spec.Dashboard == nil {
+		return reconcile.Result{}, nil
+	}
+
 	// MarketplacePanel
 	if res, err := m.ensureMarketplacePanel(ctx, crd); err != nil || res.Requeue || res.RequeueAfter > 0 {
 		return res, err
 	}
+
 	// CustomFormsPrefill
 	if res, err := m.ensureCustomFormsPrefill(ctx, crd); err != nil || res.Requeue || res.RequeueAfter > 0 {
 		return res, err
 	}
+
 	// CustomColumnsOverride
 	if _, err := m.ensureCustomColumnsOverride(ctx, crd); err != nil {
 		return reconcile.Result{}, err
 	}
+
 	if err := m.ensureTableUriMapping(ctx, crd); err != nil {
 		return reconcile.Result{}, err
 	}
+
 	if err := m.ensureBreadcrumb(ctx, crd); err != nil {
 		return reconcile.Result{}, err
 	}
+
 	if err := m.ensureCustomFormsOverride(ctx, crd); err != nil {
 		return reconcile.Result{}, err
 	}
+
 	if err := m.ensureSidebar(ctx, crd); err != nil {
 		return reconcile.Result{}, err
 	}
+
 	if err := m.ensureFactory(ctx, crd); err != nil {
 		return reconcile.Result{}, err
 	}
-
 	return reconcile.Result{}, nil
 }
 
-// ----------------------- MarketplacePanel -----------------------
+// InitializeStaticResources creates all static dashboard resources once during controller startup
+func (m *Manager) InitializeStaticResources(ctx context.Context) error {
+	return m.ensureStaticResources(ctx)
+}
 
-func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) (reconcile.Result, error) {
-	logger := log.FromContext(ctx)
+// addDashboardLabels adds standard dashboard management labels to a resource
+func (m *Manager) addDashboardLabels(obj client.Object, crd *cozyv1alpha1.CozystackResourceDefinition, resourceType string) {
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
+	}
 
-	mp := &dashv1alpha1.MarketplacePanel{}
-	mp.Name = crd.Name // cluster-scoped resource, name mirrors CRD name
+	labels[LabelManagedBy] = ManagedByValue
+	labels[LabelResourceType] = resourceType
 
-	// If dashboard is not set, delete the panel if it exists.
-	if crd.Spec.Dashboard == nil {
-		err := m.client.Get(ctx, client.ObjectKey{Name: mp.Name}, mp)
-		if apierrors.IsNotFound(err) {
-			return reconcile.Result{}, nil
-		}
+	if crd != nil {
+		g, v, kind := pickGVK(crd)
+		plural := pickPlural(kind, crd)
+
+		labels[LabelCRDName] = crd.Name
+		labels[LabelCRDGroup] = g
+		labels[LabelCRDVersion] = v
+		labels[LabelCRDKind] = kind
+		labels[LabelCRDPlural] = plural
+	}
+
+	obj.SetLabels(labels)
+}
+
+// getDashboardResourceSelector returns a label selector for dashboard-managed resources
+func (m *Manager) getDashboardResourceSelector() client.MatchingLabels {
+	return client.MatchingLabels{
+		LabelManagedBy: ManagedByValue,
+	}
+}
+
+// getDynamicResourceSelector returns a label selector for dynamic dashboard resources
+func (m *Manager) getDynamicResourceSelector() client.MatchingLabels {
+	return client.MatchingLabels{
+		LabelManagedBy:    ManagedByValue,
+		LabelResourceType: ResourceTypeDynamic,
+	}
+}
+
+// getStaticResourceSelector returns a label selector for static dashboard resources
+func (m *Manager) getStaticResourceSelector() client.MatchingLabels {
+	return client.MatchingLabels{
+		LabelManagedBy:    ManagedByValue,
+		LabelResourceType: ResourceTypeStatic,
+	}
+}
+
+// CleanupOrphanedResources removes dashboard resources that are no longer needed
+// This should be called after cache warming to ensure all current resources are known
+func (m *Manager) CleanupOrphanedResources(ctx context.Context) error {
+	// Get all current CRDs to determine which resources should exist
+	var allCRDs []cozyv1alpha1.CozystackResourceDefinition
+	if m.crdListFn != nil {
+		s, err := m.crdListFn(ctx)
 		if err != nil {
-			return reconcile.Result{}, err
-		}
-		if err := m.client.Delete(ctx, mp); err != nil && !apierrors.IsNotFound(err) {
-			return reconcile.Result{}, err
-		}
-		logger.Info("Deleted MarketplacePanel because dashboard is not set", "name", mp.Name)
-		return reconcile.Result{}, nil
-	}
-
-	// Skip resources with non-empty spec.dashboard.name
-	if strings.TrimSpace(crd.Spec.Dashboard.Name) != "" {
-		err := m.client.Get(ctx, client.ObjectKey{Name: mp.Name}, mp)
-		if apierrors.IsNotFound(err) {
-			return reconcile.Result{}, nil
-		}
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		if err := m.client.Delete(ctx, mp); err != nil && !apierrors.IsNotFound(err) {
-			return reconcile.Result{}, err
-		}
-		logger.Info("Deleted MarketplacePanel because spec.dashboard.name is set", "name", mp.Name)
-		return reconcile.Result{}, nil
-	}
-
-	// Build desired spec from CRD fields
-	d := crd.Spec.Dashboard
-	app := crd.Spec.Application
-
-	displayName := d.Singular
-	if displayName == "" {
-		displayName = app.Kind
-	}
-
-	tags := make([]any, len(d.Tags))
-	for i, t := range d.Tags {
-		tags[i] = t
-	}
-
-	specMap := map[string]any{
-		"description": d.Description,
-		"name":        displayName,
-		"type":        "nonCrd",
-		"apiGroup":    "apps.cozystack.io",
-		"apiVersion":  "v1alpha1",
-		"typeName":    app.Plural, // e.g., "buckets"
-		"disabled":    false,
-		"hidden":      false,
-		"tags":        tags,
-		"icon":        d.Icon,
-	}
-
-	specBytes, err := json.Marshal(specMap)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-
-	mutate := func() error {
-		if err := controllerutil.SetOwnerReference(crd, mp, m.scheme); err != nil {
 			return err
 		}
-		// Inline JSON payload (the ArbitrarySpec type inlines apiextv1.JSON)
-		mp.Spec = dashv1alpha1.ArbitrarySpec{
-			JSON: apiextv1.JSON{Raw: specBytes},
+		allCRDs = s
+	} else {
+		var crdList cozyv1alpha1.CozystackResourceDefinitionList
+		if err := m.client.List(ctx, &crdList, &client.ListOptions{}); err != nil {
+			return err
 		}
-		return nil
+		allCRDs = crdList.Items
 	}
 
-	op, err := controllerutil.CreateOrUpdate(ctx, m.client, mp, mutate)
-	if err != nil {
-		return reconcile.Result{}, err
+	// Build a set of expected resource names for each type
+	expectedResources := m.buildExpectedResourceSet(allCRDs)
+
+	// Clean up each resource type
+	resourceTypes := []client.Object{
+		&dashv1alpha1.CustomColumnsOverride{},
+		&dashv1alpha1.CustomFormsOverride{},
+		&dashv1alpha1.CustomFormsPrefill{},
+		&dashv1alpha1.MarketplacePanel{},
+		&dashv1alpha1.Sidebar{},
+		&dashv1alpha1.TableUriMapping{},
+		&dashv1alpha1.Breadcrumb{},
+		&dashv1alpha1.Factory{},
 	}
-	switch op {
-	case controllerutil.OperationResultCreated:
-		logger.Info("Created MarketplacePanel", "name", mp.Name)
-	case controllerutil.OperationResultUpdated:
-		logger.Info("Updated MarketplacePanel", "name", mp.Name)
+
+	for _, resourceType := range resourceTypes {
+		if err := m.cleanupResourceType(ctx, resourceType, expectedResources); err != nil {
+			return err
+		}
 	}
-	return reconcile.Result{}, nil
+
+	return nil
 }
 
-// ----------------------- Helpers (OpenAPI → values) -----------------------
+// buildExpectedResourceSet creates a map of expected resource names by type
+func (m *Manager) buildExpectedResourceSet(crds []cozyv1alpha1.CozystackResourceDefinition) map[string]map[string]bool {
+	expected := make(map[string]map[string]bool)
 
-// defaultOrZero returns the schema default if present; otherwise a reasonable zero value.
-func defaultOrZero(sub map[string]interface{}) interface{} {
-	if v, ok := sub["default"]; ok {
-		return v
-	}
-	typ, _ := sub["type"].(string)
-	switch typ {
-	case "string":
-		return ""
-	case "boolean":
-		return false
-	case "array":
-		return []interface{}{}
-	case "integer", "number":
-		return 0
-	case "object":
-		return map[string]interface{}{}
-	default:
-		return nil
-	}
-}
-
-// toIfaceSlice converts []string -> []interface{}.
-func toIfaceSlice(ss []string) []interface{} {
-	out := make([]interface{}, len(ss))
-	for i, s := range ss {
-		out[i] = s
-	}
-	return out
-}
-
-// buildPrefillValues converts an OpenAPI schema (JSON string) into a []interface{} "values" list
-// suitable for CustomFormsPrefill.spec.values.
-// Rules:
-//   - For top-level primitive/array fields: emit an entry, using default if present, otherwise zero.
-//   - For top-level objects: recursively process nested objects and emit entries for all default values
-//     found at any nesting level.
-func buildPrefillValues(openAPISchema string) ([]interface{}, error) {
-	var root map[string]interface{}
-	if err := json.Unmarshal([]byte(openAPISchema), &root); err != nil {
-		return nil, fmt.Errorf("cannot parse openAPISchema: %w", err)
-	}
-	props, _ := root["properties"].(map[string]interface{})
-	if props == nil {
-		return []interface{}{}, nil
+	// Initialize maps for each resource type
+	resourceTypes := []string{
+		"CustomColumnsOverride",
+		"CustomFormsOverride",
+		"CustomFormsPrefill",
+		"MarketplacePanel",
+		"Sidebar",
+		"TableUriMapping",
+		"Breadcrumb",
+		"Factory",
 	}
 
-	var values []interface{}
-	processSchemaProperties(props, []string{"spec"}, &values)
-	return values, nil
-}
+	for _, rt := range resourceTypes {
+		expected[rt] = make(map[string]bool)
+	}
 
-// processSchemaProperties recursively processes OpenAPI schema properties and extracts default values
-func processSchemaProperties(props map[string]interface{}, path []string, values *[]interface{}) {
-	for pname, raw := range props {
-		sub, _ := raw.(map[string]interface{})
-		if sub == nil {
+	// Add static resources (these should always exist)
+	staticResources := CreateAllStaticResources()
+	for _, resource := range staticResources {
+		resourceType := resource.GetObjectKind().GroupVersionKind().Kind
+		if expected[resourceType] != nil {
+			expected[resourceType][resource.GetName()] = true
+		}
+	}
+
+	// Add dynamic resources based on current CRDs
+	for _, crd := range crds {
+		if crd.Spec.Dashboard == nil {
 			continue
 		}
 
-		typ, _ := sub["type"].(string)
-		currentPath := append(path, pname)
-
-		switch typ {
-		case "object":
-			// Check if this object has a default value
-			if objDefault, ok := sub["default"].(map[string]interface{}); ok {
-				// Process the default object recursively
-				processDefaultObject(objDefault, currentPath, values)
-			}
-
-			// Also process child properties for their individual defaults
-			if childProps, ok := sub["properties"].(map[string]interface{}); ok {
-				processSchemaProperties(childProps, currentPath, values)
-			}
-		default:
-			// For primitive types, use default if present, otherwise zero value
-			val := defaultOrZero(sub)
-			if val != nil {
-				entry := map[string]interface{}{
-					"path":  toIfaceSlice(currentPath),
-					"value": val,
-				}
-				*values = append(*values, entry)
-			}
+		// Skip resources with non-empty spec.dashboard.name (tenant modules)
+		if strings.TrimSpace(crd.Spec.Dashboard.Name) != "" {
+			continue
 		}
+
+		g, v, kind := pickGVK(&crd)
+		plural := pickPlural(kind, &crd)
+
+		// CustomColumnsOverride
+		name := fmt.Sprintf("stock-namespace-%s.%s.%s", g, v, plural)
+		expected["CustomColumnsOverride"][name] = true
+
+		// CustomFormsOverride
+		name = fmt.Sprintf("%s.%s.%s", g, v, plural)
+		expected["CustomFormsOverride"][name] = true
+
+		// CustomFormsPrefill
+		expected["CustomFormsPrefill"][name] = true
+
+		// MarketplacePanel (name matches CRD name)
+		expected["MarketplacePanel"][crd.Name] = true
+
+		// Sidebar resources (multiple per CRD)
+		lowerKind := strings.ToLower(kind)
+		detailsID := fmt.Sprintf("stock-project-factory-%s-details", lowerKind)
+		expected["Sidebar"][detailsID] = true
+
+		// Add other stock sidebars that are created for each CRD
+		stockSidebars := []string{
+			"stock-instance-api-form",
+			"stock-instance-api-table",
+			"stock-instance-builtin-form",
+			"stock-instance-builtin-table",
+			"stock-project-factory-marketplace",
+			"stock-project-factory-workloadmonitor-details",
+			"stock-project-api-form",
+			"stock-project-api-table",
+			"stock-project-builtin-form",
+			"stock-project-builtin-table",
+			"stock-project-crd-form",
+			"stock-project-crd-table",
+		}
+		for _, sidebarID := range stockSidebars {
+			expected["Sidebar"][sidebarID] = true
+		}
+
+		// TableUriMapping
+		name = fmt.Sprintf("stock-namespace-%s.%s.%s", g, v, plural)
+		expected["TableUriMapping"][name] = true
+
+		// Breadcrumb
+		detailID := fmt.Sprintf("stock-project-factory-%s-details", lowerKind)
+		expected["Breadcrumb"][detailID] = true
+
+		// Factory
+		factoryName := fmt.Sprintf("%s-details", lowerKind)
+		expected["Factory"][factoryName] = true
 	}
+
+	return expected
 }
 
-// processDefaultObject recursively processes a default object and creates entries for all nested values
-func processDefaultObject(obj map[string]interface{}, path []string, values *[]interface{}) {
-	for key, value := range obj {
-		currentPath := append(path, key)
-
-		// If the value is a map, process it recursively
-		if nestedObj, ok := value.(map[string]interface{}); ok {
-			processDefaultObject(nestedObj, currentPath, values)
-		} else {
-			// For primitive values, create an entry
-			entry := map[string]interface{}{
-				"path":  toIfaceSlice(currentPath),
-				"value": value,
-			}
-			*values = append(*values, entry)
-		}
-	}
-}
-
-// normalizeJSON makes maps/slices JSON-safe for k8s Unstructured:
-// - converts all int/int32/... to float64
-// - leaves strings, bools, nil as-is
-func normalizeJSON(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, val := range t {
-			out[k] = normalizeJSON(val)
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i := range t {
-			out[i] = normalizeJSON(t[i])
-		}
-		return out
-	case int:
-		return float64(t)
-	case int8:
-		return float64(t)
-	case int16:
-		return float64(t)
-	case int32:
-		return float64(t)
-	case int64:
-		return float64(t)
-	case uint, uint8, uint16, uint32, uint64:
-		return float64(reflect.ValueOf(t).Convert(reflect.TypeOf(uint64(0))).Uint())
-	case float32:
-		return float64(t)
+// cleanupResourceType removes orphaned resources of a specific type
+func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.Object, expectedResources map[string]map[string]bool) error {
+	var (
+		list         client.ObjectList
+		resourceKind string
+	)
+	switch resourceType.(type) {
+	case *dashv1alpha1.CustomColumnsOverride:
+		list = &dashv1alpha1.CustomColumnsOverrideList{}
+		resourceKind = "CustomColumnsOverride"
+	case *dashv1alpha1.CustomFormsOverride:
+		list = &dashv1alpha1.CustomFormsOverrideList{}
+		resourceKind = "CustomFormsOverride"
+	case *dashv1alpha1.CustomFormsPrefill:
+		list = &dashv1alpha1.CustomFormsPrefillList{}
+		resourceKind = "CustomFormsPrefill"
+	case *dashv1alpha1.MarketplacePanel:
+		list = &dashv1alpha1.MarketplacePanelList{}
+		resourceKind = "MarketplacePanel"
+	case *dashv1alpha1.Sidebar:
+		list = &dashv1alpha1.SidebarList{}
+		resourceKind = "Sidebar"
+	case *dashv1alpha1.TableUriMapping:
+		list = &dashv1alpha1.TableUriMappingList{}
+		resourceKind = "TableUriMapping"
+	case *dashv1alpha1.Breadcrumb:
+		list = &dashv1alpha1.BreadcrumbList{}
+		resourceKind = "Breadcrumb"
+	case *dashv1alpha1.Factory:
+		list = &dashv1alpha1.FactoryList{}
+		resourceKind = "Factory"
 	default:
-		return v
+		return nil // Unknown type
 	}
-}
 
-var camelSplitter = regexp.MustCompile(`(?m)([A-Z]+[a-z0-9]*|[a-z0-9]+)`)
+	expected := expectedResources[resourceKind]
+	if expected == nil {
+		return nil // No expected resources for this type
+	}
 
-func splitCamel(s string) []string {
-	return camelSplitter.FindAllString(s, -1)
+	// List with dashboard labels
+	if err := m.client.List(ctx, list, m.getDashboardResourceSelector()); err != nil {
+		return err
+	}
+
+	// Delete resources that are not in the expected set
+	switch l := list.(type) {
+	case *dashv1alpha1.CustomColumnsOverrideList:
+		for _, item := range l.Items {
+			if !expected[item.Name] {
+				if err := m.client.Delete(ctx, &item); err != nil {
+					if !apierrors.IsNotFound(err) {
+						return err
+					}
+					// Resource already deleted, continue
+				}
+			}
+		}
+	case *dashv1alpha1.CustomFormsOverrideList:
+		for _, item := range l.Items {
+			if !expected[item.Name] {
+				if err := m.client.Delete(ctx, &item); err != nil {
+					if !apierrors.IsNotFound(err) {
+						return err
+					}
+					// Resource already deleted, continue
+				}
+			}
+		}
+	case *dashv1alpha1.CustomFormsPrefillList:
+		for _, item := range l.Items {
+			if !expected[item.Name] {
+				if err := m.client.Delete(ctx, &item); err != nil {
+					if !apierrors.IsNotFound(err) {
+						return err
+					}
+					// Resource already deleted, continue
+				}
+			}
+		}
+	case *dashv1alpha1.MarketplacePanelList:
+		for _, item := range l.Items {
+			if !expected[item.Name] {
+				if err := m.client.Delete(ctx, &item); err != nil {
+					if !apierrors.IsNotFound(err) {
+						return err
+					}
+					// Resource already deleted, continue
+				}
+			}
+		}
+	case *dashv1alpha1.SidebarList:
+		for _, item := range l.Items {
+			if !expected[item.Name] {
+				if err := m.client.Delete(ctx, &item); err != nil {
+					if !apierrors.IsNotFound(err) {
+						return err
+					}
+					// Resource already deleted, continue
+				}
+			}
+		}
+	case *dashv1alpha1.TableUriMappingList:
+		for _, item := range l.Items {
+			if !expected[item.Name] {
+				if err := m.client.Delete(ctx, &item); err != nil {
+					if !apierrors.IsNotFound(err) {
+						return err
+					}
+					// Resource already deleted, continue
+				}
+			}
+		}
+	case *dashv1alpha1.BreadcrumbList:
+		for _, item := range l.Items {
+			if !expected[item.Name] {
+				if err := m.client.Delete(ctx, &item); err != nil {
+					if !apierrors.IsNotFound(err) {
+						return err
+					}
+					// Resource already deleted, continue
+				}
+			}
+		}
+	case *dashv1alpha1.FactoryList:
+		for _, item := range l.Items {
+			if !expected[item.Name] {
+				if err := m.client.Delete(ctx, &item); err != nil {
+					if !apierrors.IsNotFound(err) {
+						return err
+					}
+					// Resource already deleted, continue
+				}
+			}
+		}
+	}
+
+	return nil
 }

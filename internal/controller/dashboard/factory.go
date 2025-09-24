@@ -11,20 +11,10 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
-// ---------------- Types used by OpenAPI parsing ----------------
-
-type fieldInfo struct {
-	JSONPathSpec string // dotted path under .spec (e.g., "systemDisk.image")
-	Label        string // "System Disk / Image" or "systemDisk.image"
-	Description  string
-}
-
-// ---------------- Public entry: ensure Factory ------------------
-
+// ensureFactory creates or updates a Factory resource for the given CRD
 func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
 	g, v, kind := pickGVK(crd)
 	plural := pickPlural(kind, crd)
@@ -56,85 +46,37 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	}
 	tabs = append(tabs, yamlTab(plural))
 
-	badgeText := initialsFromKind(kind)
-	badgeColor := hexColorForKind(kind)
-	header := map[string]any{
-		"type": "antdFlex",
-		"data": map[string]any{
-			"id":    "header-row",
-			"align": "center",
-			"gap":   float64(6),
-			"style": map[string]any{"marginBottom": float64(24)},
-		},
-		"children": []any{
-			map[string]any{
-				"type": "antdText",
-				"data": map[string]any{
-					"id":    "badge-" + lowerKind,
-					"text":  badgeText,
-					"title": strings.ToLower(plural),
-					"style": map[string]any{
-						"backgroundColor": badgeColor,
-						"borderRadius":    "20px",
-						"color":           "#fff",
-						"display":         "inline-block",
-						"fontFamily":      "RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif",
-						"fontSize":        float64(20),
-						"fontWeight":      float64(400),
-						"lineHeight":      "24px",
-						"minWidth":        float64(24),
-						"padding":         "0 9px",
-						"textAlign":       "center",
-						"whiteSpace":      "nowrap",
-					},
-				},
-			},
-			map[string]any{
-				"type": "parsedText",
-				"data": map[string]any{
-					"id":   lowerKind + "-name",
-					"text": "{reqsJsonPath[0]['.metadata.name']['-']}",
-					"style": map[string]any{
-						"fontFamily": "RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif",
-						"fontSize":   float64(20),
-						"lineHeight": "24px",
-					},
-				},
-			},
-		},
+	// Use unified factory creation
+	config := UnifiedResourceConfig{
+		Name:         factoryName,
+		ResourceType: "factory",
+		Kind:         kind,
+		Plural:       plural,
+		Title:        strings.ToLower(plural),
+		Size:         BadgeSizeLarge,
 	}
 
-	spec := map[string]any{
-		"key":                           factoryName,
-		"sidebarTags":                   []any{fmt.Sprintf("%s-sidebar", lowerKind)},
-		"withScrollableMainContentCard": true,
-		"urlsToFetch":                   []any{resourceFetch},
-		"data": []any{
-			header,
-			map[string]any{
-				"type": "antdTabs",
-				"data": map[string]any{
-					"id":               lowerKind + "-tabs",
-					"defaultActiveKey": "details",
-					"items":            tabs,
-				},
-			},
-		},
-	}
+	spec := createUnifiedFactory(config, tabs, []any{resourceFetch})
 
 	obj := &dashv1alpha1.Factory{}
-	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "dashboard.cozystack.io", Version: "v1alpha1", Kind: "Factory"})
 	obj.SetName(factoryName)
 
 	_, err := controllerutil.CreateOrUpdate(ctx, m.client, obj, func() error {
 		if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
 			return err
 		}
+		// Add dashboard labels to dynamic resources
+		m.addDashboardLabels(obj, crd, ResourceTypeDynamic)
 		b, err := json.Marshal(spec)
 		if err != nil {
 			return err
 		}
-		obj.Spec = dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
+
+		// Only update spec if it's different to avoid unnecessary updates
+		newSpec := dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
+		if !compareArbitrarySpecs(obj.Spec, newSpec) {
+			obj.Spec = newSpec
+		}
 		return nil
 	})
 	return err
@@ -173,30 +115,10 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 					"gap":   float64(6),
 				},
 				"children": []any{
-					map[string]any{
-						"type": "antdText",
-						"data": map[string]any{
-							"id":   "ns-badge",
-							"text": "NS",
-							"style": map[string]any{
-								"backgroundColor": "#a25792ff",
-								"borderRadius":    "20px",
-								"color":           "#fff",
-								"display":         "inline-block",
-								"fontFamily":      "RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif",
-								"fontSize":        float64(15),
-								"fontWeight":      float64(400),
-								"lineHeight":      "24px",
-								"minWidth":        float64(24),
-								"padding":         "0 9px",
-								"textAlign":       "center",
-								"whiteSpace":      "nowrap",
-							},
-						},
-					},
+					createUnifiedBadgeFromKind("ns-badge", "Namespace", "namespace", BadgeSizeMedium),
 					antdLink("namespace-link",
 						"{reqsJsonPath[0]['.metadata.namespace']['-']}",
-						"/openapi-ui/{2}/factory/namespace-details/{reqsJsonPath[0]['.metadata.namespace']['-']}",
+						"/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace",
 					),
 				},
 			},
@@ -407,131 +329,6 @@ func yamlTab(plural string) map[string]any {
 	}
 }
 
-// ---------------- UI helpers (use float64 for numeric fields) ----------------
-
-func contentCard(id string, style map[string]any, children []any) map[string]any {
-	return map[string]any{
-		"type": "ContentCard",
-		"data": map[string]any{
-			"id":    id,
-			"style": style,
-		},
-		"children": children,
-	}
-}
-
-func antdText(id string, strong bool, text string, style map[string]any) map[string]any {
-	data := map[string]any{
-		"id":     id,
-		"text":   text,
-		"strong": strong,
-	}
-	if style != nil {
-		data["style"] = style
-	}
-	return map[string]any{"type": "antdText", "data": data}
-}
-
-func parsedText(id, text string, style map[string]any) map[string]any {
-	data := map[string]any{
-		"id":   id,
-		"text": text,
-	}
-	if style != nil {
-		data["style"] = style
-	}
-	return map[string]any{"type": "parsedText", "data": data}
-}
-
-func parsedTextWithFormatter(id, text, formatter string) map[string]any {
-	return map[string]any{
-		"type": "parsedText",
-		"data": map[string]any{
-			"id":        id,
-			"text":      text,
-			"formatter": formatter,
-		},
-	}
-}
-
-func spacer(id string, space float64) map[string]any {
-	return map[string]any{
-		"type": "Spacer",
-		"data": map[string]any{
-			"id":     id,
-			"$space": space,
-		},
-	}
-}
-
-func antdFlex(id string, gap float64, children []any) map[string]any {
-	return map[string]any{
-		"type": "antdFlex",
-		"data": map[string]any{
-			"id":    id,
-			"align": "center",
-			"gap":   gap,
-		},
-		"children": children,
-	}
-}
-
-func antdFlexVertical(id string, gap float64, children []any) map[string]any {
-	return map[string]any{
-		"type": "antdFlex",
-		"data": map[string]any{
-			"id":       id,
-			"vertical": true,
-			"gap":      gap,
-		},
-		"children": children,
-	}
-}
-
-func antdRow(id string, gutter []any, children []any) map[string]any {
-	return map[string]any{
-		"type": "antdRow",
-		"data": map[string]any{
-			"id":     id,
-			"gutter": gutter,
-		},
-		"children": children,
-	}
-}
-
-func antdCol(id string, span float64, children []any) map[string]any {
-	return map[string]any{
-		"type": "antdCol",
-		"data": map[string]any{
-			"id":   id,
-			"span": span,
-		},
-		"children": children,
-	}
-}
-
-func antdColWithStyle(id string, style map[string]any, children []any) map[string]any {
-	return map[string]any{
-		"type": "antdCol",
-		"data": map[string]any{
-			"id":    id,
-			"style": style,
-		},
-		"children": children,
-	}
-}
-
-func antdLink(id, text, href string) map[string]any {
-	return map[string]any{
-		"type": "antdLink",
-		"data": map[string]any{
-			"id":   id,
-			"text": text,
-			"href": href,
-		},
-	}
-}
-
 // ---------------- OpenAPI → Right column ----------------
 
 func buildOpenAPIParamsBlocks(schemaJSON string, keysOrder [][]string) []any {
@@ -576,7 +373,7 @@ func sortFieldsByKeysOrder(fields []fieldInfo, keysOrder [][]string) []fieldInfo
 	sort.Slice(fields, func(i, j int) bool {
 		posI, existsI := orderMap[fields[i].JSONPathSpec]
 		posJ, existsJ := orderMap[fields[j].JSONPathSpec]
-		
+
 		// If both exist in orderMap, sort by position
 		if existsI && existsJ {
 			return posI < posJ
@@ -666,7 +463,7 @@ func collectOpenAPILeafFields(schemaJSON string, maxDepth, maxFields int) []fiel
 			}
 			return
 		}
-		// Arrays: try to render item if it’s scalar and depth limit allows
+		// Arrays: try to render item if it's scalar and depth limit allows
 		if n["type"] == "array" {
 			if items, ok := n["items"].(node); ok && (isScalarType(items) || isIntOrString(items) || hasEnum(items)) {
 				addField(prefix, items)
@@ -691,74 +488,6 @@ func collectOpenAPILeafFields(schemaJSON string, maxDepth, maxFields int) []fiel
 		}
 	}
 	return out
-}
-
-// --- helpers for schema inspection ---
-
-func isScalarType(n map[string]any) bool {
-	switch getString(n, "type") {
-	case "string", "integer", "number", "boolean":
-		return true
-	default:
-		return false
-	}
-}
-
-func isIntOrString(n map[string]any) bool {
-	// Kubernetes extension: x-kubernetes-int-or-string: true
-	if v, ok := n["x-kubernetes-int-or-string"]; ok {
-		if b, ok := v.(bool); ok && b {
-			return true
-		}
-	}
-	// anyOf: integer|string
-	if anyOf, ok := n["anyOf"].([]any); ok {
-		hasInt := false
-		hasStr := false
-		for _, it := range anyOf {
-			if m, ok := it.(map[string]any); ok {
-				switch getString(m, "type") {
-				case "integer":
-					hasInt = true
-				case "string":
-					hasStr = true
-				}
-			}
-		}
-		return hasInt && hasStr
-	}
-	return false
-}
-
-func hasEnum(n map[string]any) bool {
-	_, ok := n["enum"]
-	return ok
-}
-
-func getString(n map[string]any, key string) string {
-	if v, ok := n[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
-// shouldExcludeParamPath returns true if any part of the path contains
-// backup / bootstrap / password (case-insensitive)
-func shouldExcludeParamPath(parts []string) bool {
-	for _, p := range parts {
-		lp := strings.ToLower(p)
-		if strings.Contains(lp, "backup") || strings.Contains(lp, "bootstrap") || strings.Contains(lp, "password") || strings.Contains(lp, "cloudInit") {
-			return true
-		}
-	}
-	return false
-}
-
-func humanizePath(parts []string) string {
-	// "systemDisk.image" -> "System Disk / Image"
-	return strings.Join(parts, " / ")
 }
 
 // ---------------- Feature flags ----------------
