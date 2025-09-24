@@ -997,6 +997,12 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 		}
 	}
 	app.SetConditions(conditions)
+
+	// Add namespace field for Tenant applications
+	if r.kindName == "Tenant" {
+		app.Status.Namespace = r.computeTenantNamespace(hr.Namespace, app.Name)
+	}
+
 	return app, nil
 }
 
@@ -1181,6 +1187,25 @@ func getReadyStatus(conditions []metav1.Condition) string {
 		}
 	}
 	return "Unknown"
+}
+
+// computeTenantNamespace computes the namespace for a Tenant application based on the specified logic
+func (r *REST) computeTenantNamespace(currentNamespace, tenantName string) string {
+	hrName := r.releaseConfig.Prefix + tenantName
+
+	switch {
+	case currentNamespace == "tenant-root" && hrName == "tenant-root":
+		// 1) root tenant inside root namespace
+		return "tenant-root"
+
+	case currentNamespace == "tenant-root":
+		// 2) any other tenant in root namespace
+		return fmt.Sprintf("tenant-%s", tenantName)
+
+	default:
+		// 3) tenant in a dedicated namespace
+		return fmt.Sprintf("%s-%s", currentNamespace, tenantName)
+	}
 }
 
 // Destroy releases resources associated with REST
