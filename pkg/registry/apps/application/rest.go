@@ -968,7 +968,6 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 			APIVersion: "apps.cozystack.io/v1alpha1",
 			Kind:       r.kindName,
 		},
-		AppVersion: hr.Spec.Chart.Spec.Version,
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              strings.TrimPrefix(hr.Name, r.releaseConfig.Prefix),
 			Namespace:         hr.Namespace,
@@ -1020,13 +1019,24 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			Chart: &helmv2.HelmChartTemplate{
 				Spec: helmv2.HelmChartTemplateSpec{
 					Chart:             r.releaseConfig.Chart.Name,
-					Version:           app.AppVersion,
+					Version:           ">= 0.0.0-0",
 					ReconcileStrategy: "Revision",
 					SourceRef: helmv2.CrossNamespaceObjectReference{
 						Kind:      r.releaseConfig.Chart.SourceRef.Kind,
 						Name:      r.releaseConfig.Chart.SourceRef.Name,
 						Namespace: r.releaseConfig.Chart.SourceRef.Namespace,
 					},
+				},
+			},
+			Interval: metav1.Duration{Duration: 5 * time.Minute},
+			Install: &helmv2.Install{
+				Remediation: &helmv2.InstallRemediation{
+					Retries: -1,
+				},
+			},
+			Upgrade: &helmv2.Upgrade{
+				Remediation: &helmv2.UpgradeRemediation{
+					Retries: -1,
 				},
 			},
 			Values: app.Spec,
