@@ -5,11 +5,10 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// +kubebuilder:rbac:groups=cozystack.io,resources=cozystackresourcedefinitions,verbs=list;watch
+// +kubebuilder:rbac:groups=cozystack.io,resources=cozystackresourcedefinitions,verbs=list;watch;get
 
 func (c *LineageControllerWebhook) SetupWithManagerAsController(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -20,7 +19,7 @@ func (c *LineageControllerWebhook) SetupWithManagerAsController(mgr ctrl.Manager
 func (c *LineageControllerWebhook) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 	crds := &cozyv1alpha1.CozystackResourceDefinitionList{}
-	if err := c.List(ctx, crds, &client.ListOptions{Namespace: "cozy-system"}); err != nil {
+	if err := c.List(ctx, crds); err != nil {
 		l.Error(err, "failed reading CozystackResourceDefinitions")
 		return ctrl.Result{}, err
 	}

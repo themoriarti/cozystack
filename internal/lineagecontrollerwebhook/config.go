@@ -25,7 +25,10 @@ type runtimeConfig struct {
 func (l *LineageControllerWebhook) initConfig() {
 	l.initOnce.Do(func() {
 		if l.config.Load() == nil {
-			l.config.Store(&runtimeConfig{chartAppMap: make(map[chartRef]*cozyv1alpha1.CozystackResourceDefinition)})
+			l.config.Store(&runtimeConfig{
+				chartAppMap: make(map[chartRef]*cozyv1alpha1.CozystackResourceDefinition),
+				appCRDMap:   make(map[appRef]*cozyv1alpha1.CozystackResourceDefinition),
+			})
 		}
 	})
 }
