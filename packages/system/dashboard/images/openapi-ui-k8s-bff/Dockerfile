@@ -7,6 +7,9 @@ WORKDIR /src
 ARG COMMIT_REF=22f9143f5109fb90332651c857d70b51bffccd9b
 RUN wget -O- https://github.com/PRO-Robotech/openapi-ui-k8s-bff/archive/${COMMIT_REF}.tar.gz | tar xzf - --strip-components=1
 
+COPY patches /patches
+RUN git apply /patches/*.diff
+
 ENV PATH=/src/node_modules/.bin:$PATH
 RUN npm install
 RUN npm run build
