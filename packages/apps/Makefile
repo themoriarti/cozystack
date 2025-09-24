@@ -1,4 +1,4 @@
-OUT=../_out/repos/apps
+OUT=../../_out/repos/apps
 CHARTS := $(shell find . -maxdepth 2 -name Chart.yaml | awk -F/ '{print $$2}')
 
 include ../../scripts/common-envs.mk

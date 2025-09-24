@@ -18,9 +18,13 @@ spec:
         name: cozystack-extra
         namespace: cozy-public
       version: '>= 0.0.0-0'
-  interval: 1m0s
-  timeout: 5m0s
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
   upgrade:
     force: true
-  values: {}
+    remediation:
+      retries: -1
 {{- end }}

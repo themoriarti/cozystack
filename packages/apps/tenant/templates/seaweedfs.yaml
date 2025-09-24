@@ -17,12 +17,14 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
+      version: '>= 0.0.0-0'
+  interval: 5m
+  timeout: 10m
   install:
     remediation:
       retries: -1
   upgrade:
+    force: true
     remediation:
       retries: -1
-  interval: 1m0s
-  timeout: 10m0s
 {{- end }}
