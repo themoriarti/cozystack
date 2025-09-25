@@ -67,4 +67,4 @@ image-token-proxy:
 	rm -f images/token-proxy.json
 
 update-tenant-text:
-	yq -i '.data.TENANT_TEXT = "$(TAG)"' ./templates/configmap.yaml
+	sed -i 's|\($$tenantText := "\)[^"]\+|\1$(TAG)|' templates/configmap.yaml
