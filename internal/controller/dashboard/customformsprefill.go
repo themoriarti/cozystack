@@ -31,15 +31,17 @@ func (m *Manager) ensureCustomFormsPrefill(ctx context.Context, crd *cozyv1alpha
 		return reconcile.Result{}, err
 	}
 
-	// If Name is set, prefill metadata.name
-	if crd.Spec.Dashboard != nil && strings.TrimSpace(crd.Spec.Dashboard.Name) != "" {
-		values = append([]interface{}{
-			map[string]interface{}{
-				"path":  toIfaceSlice([]string{"metadata", "name"}),
-				"value": crd.Spec.Dashboard.Name,
-			},
-		}, values...)
+	// Always prefill metadata.name (empty string if not specified in CRD)
+	var nameValue string
+	if crd.Spec.Dashboard != nil {
+		nameValue = strings.TrimSpace(crd.Spec.Dashboard.Name)
 	}
+	values = append([]interface{}{
+		map[string]interface{}{
+			"path":  toIfaceSlice([]string{"metadata", "name"}),
+			"value": nameValue,
+		},
+	}, values...)
 
 	cfp := &dashv1alpha1.CustomFormsPrefill{}
 	cfp.Name = name // cluster-scoped
