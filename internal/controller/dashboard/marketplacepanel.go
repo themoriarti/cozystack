@@ -3,7 +3,6 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
 	dashv1alpha1 "github.com/cozystack/cozystack/api/dashboard/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -39,8 +38,8 @@ func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.
 		return reconcile.Result{}, nil
 	}
 
-	// Skip resources with non-empty spec.dashboard.name
-	if strings.TrimSpace(crd.Spec.Dashboard.Name) != "" {
+	// Skip module resources (they don't need MarketplacePanel)
+	if crd.Spec.Dashboard.Module {
 		err := m.client.Get(ctx, client.ObjectKey{Name: mp.Name}, mp)
 		if apierrors.IsNotFound(err) {
 			return reconcile.Result{}, nil
@@ -51,7 +50,7 @@ func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.
 		if err := m.client.Delete(ctx, mp); err != nil && !apierrors.IsNotFound(err) {
 			return reconcile.Result{}, err
 		}
-		logger.Info("Deleted MarketplacePanel because spec.dashboard.name is set", "name", mp.Name)
+		logger.Info("Deleted MarketplacePanel because resource is a module", "name", mp.Name)
 		return reconcile.Result{}, nil
 	}
 

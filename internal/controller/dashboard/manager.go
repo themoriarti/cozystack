@@ -246,7 +246,7 @@ func (m *Manager) buildExpectedResourceSet(crds []cozyv1alpha1.CozystackResource
 			continue
 		}
 
-		// Note: We include ALL resources with dashboard config, regardless of dashboard.name
+		// Note: We include ALL resources with dashboard config, regardless of module flag
 		// because ensureFactory and ensureBreadcrumb create resources for all CRDs with dashboard config
 
 		g, v, kind := pickGVK(&crd)
@@ -263,8 +263,8 @@ func (m *Manager) buildExpectedResourceSet(crds []cozyv1alpha1.CozystackResource
 		// CustomFormsPrefill - created for ALL CRDs with dashboard config
 		expected["CustomFormsPrefill"][name] = true
 
-		// MarketplacePanel - only created for CRDs WITHOUT dashboard.name
-		if strings.TrimSpace(crd.Spec.Dashboard.Name) == "" {
+		// MarketplacePanel - only created for non-module CRDs
+		if !crd.Spec.Dashboard.Module {
 			expected["MarketplacePanel"][crd.Name] = true
 		}
 

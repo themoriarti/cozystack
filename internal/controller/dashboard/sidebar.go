@@ -57,7 +57,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	categories := map[string][]item{} // category label -> children
 	keysAndTags := map[string]any{}   // plural -> []string{ "<lower(kind)>-sidebar" }
 
-	// Collect sidebar names for resources with dashboard.name
+	// Collect sidebar names for module resources
 	var moduleSidebars []any
 
 	for i := range all {
@@ -72,17 +72,17 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		plural := pickPlural(kind, def)
 		lowerKind := strings.ToLower(kind)
 
-		// Check if this resource has dashboard.name set
-		if strings.TrimSpace(def.Spec.Dashboard.Name) != "" {
+		// Check if this resource is a module
+		if def.Spec.Dashboard.Module {
 			// Add to modules sidebar list
 			moduleSidebars = append(moduleSidebars, fmt.Sprintf("%s-sidebar", lowerKind))
 		} else {
-			// Add to keysAndTags for resources without dashboard.name
+			// Add to keysAndTags for non-module resources
 			keysAndTags[plural] = []any{fmt.Sprintf("%s-sidebar", lowerKind)}
 		}
 
-		// Only add to menu categories if dashboard.name is empty
-		if strings.TrimSpace(def.Spec.Dashboard.Name) == "" {
+		// Only add to menu categories if not a module
+		if !def.Spec.Dashboard.Module {
 			cat := safeCategory(def) // falls back to "Resources" if empty
 
 			// Label: prefer dashboard.Plural if provided

@@ -84,6 +84,9 @@ spec:
                         type: string
                       type: array
                     type: array
+                  module:
+                    description: Whether this resource is a module (tenant module)
+                    type: boolean
                   name:
                     description: Hard-coded name used in the UI (e.g., "bucket")
                     type: string
