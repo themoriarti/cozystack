@@ -115,6 +115,11 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		keysAndTags["modules"] = moduleSidebars
 	}
 
+	// Add sidebars for built-in Kubernetes resources
+	keysAndTags["services"] = []any{"service-sidebar"}
+	keysAndTags["secrets"] = []any{"secret-sidebar"}
+	keysAndTags["ingresses"] = []any{"ingress-sidebar"}
+
 	// 3) Sort items within each category by Weight (desc), then Label (A→Z)
 	for cat := range categories {
 		sort.Slice(categories[cat], func(i, j int) bool {
@@ -201,6 +206,9 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		// stock-project sidebars
 		"stock-project-factory-marketplace",
 		"stock-project-factory-workloadmonitor-details",
+		"stock-project-factory-kube-service-details",
+		"stock-project-factory-kube-secret-details",
+		"stock-project-factory-kube-ingress-details",
 		"stock-project-api-form",
 		"stock-project-api-table",
 		"stock-project-builtin-form",

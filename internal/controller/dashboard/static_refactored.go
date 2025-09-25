@@ -40,15 +40,21 @@ func CreateAllBreadcrumbs() []*dashboardv1alpha1.Breadcrumb {
 		}),
 
 		// Stock project factory secret details
-		createBreadcrumb("stock-project-factory-secret-details", []map[string]any{
+		createBreadcrumb("stock-project-factory-kube-secret-details", []map[string]any{
 			createBreadcrumbItem("secrets", "v1/secrets", "/openapi-ui/{clusterName}/{namespace}/builtin-table/secrets"),
 			createBreadcrumbItem("secret", "{6}"),
 		}),
 
 		// Stock project factory service details
-		createBreadcrumb("stock-project-factory-service-details", []map[string]any{
+		createBreadcrumb("stock-project-factory-kube-service-details", []map[string]any{
 			createBreadcrumbItem("services", "v1/services", "/openapi-ui/{clusterName}/{namespace}/builtin-table/services"),
 			createBreadcrumbItem("service", "{6}"),
+		}),
+
+		// Stock project factory ingress details
+		createBreadcrumb("stock-project-factory-kube-ingress-details", []map[string]any{
+			createBreadcrumbItem("ingresses", "networking.k8s.io/v1/ingresses", "/openapi-ui/{clusterName}/{namespace}/builtin-table/ingresses"),
+			createBreadcrumbItem("ingress", "{6}"),
 		}),
 
 		// Stock cluster api table
@@ -126,7 +132,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 	return []*dashboardv1alpha1.CustomColumnsOverride{
 		// Factory details v1 services
 		createCustomColumnsOverride("factory-details-v1.services", []any{
-			createCustomColumnWithSpecificColor("Name", "Service", "service", getColorForType("service"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithSpecificColor("Name", "Service", "service", getColorForType("service"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("ClusterIP", ".spec.clusterIP"),
 			createStringColumn("LoadbalancerIP", ".spec.loadBalancerIP"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
@@ -134,7 +140,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Stock namespace v1 services
 		createCustomColumnsOverride("stock-namespace-/v1/services", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "service", getColorForType("service"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "service", getColorForType("service"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("ClusterIP", ".spec.clusterIP"),
 			createStringColumn("LoadbalancerIP", ".spec.loadBalancerIP"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
@@ -149,7 +155,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 		}),
 
 		// Factory service details port mapping
-		createCustomColumnsOverride("factory-service-details-port-mapping", []any{
+		createCustomColumnsOverride("factory-kube-service-details-port-mapping", []any{
 			createStringColumn("Name", ".name"),
 			createStringColumn("Port", ".port"),
 			createStringColumn("Protocol", ".protocol"),
@@ -169,16 +175,16 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Factory details v1alpha1 core cozystack io tenantsecretstables
 		createCustomColumnsOverride("factory-details-v1alpha1.core.cozystack.io.tenantsecretstables", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "secret", getColorForType("secret"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "secret", getColorForType("secret"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("Key", ".data.key"),
 			createSecretBase64Column("Value", ".data.value"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
 		// Factory ingress details rules
-		createCustomColumnsOverride("factory-ingress-details-rules", []any{
+		createCustomColumnsOverride("factory-kube-ingress-details-rules", []any{
 			createStringColumn("Host", ".host"),
-			createCustomColumnWithJsonPath("Service", ".http.paths[0].backend.service.name", "S", "service", getColorForType("service"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/service-details/{reqsJsonPath[0]['.http.paths[0].backend.service.name']['-']}"),
+			createCustomColumnWithJsonPath("Service", ".http.paths[0].backend.service.name", "S", "service", getColorForType("service"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.http.paths[0].backend.service.name']['-']}"),
 			createStringColumn("Port", ".http.paths[0].backend.service.port.number"),
 			createStringColumn("Path", ".http.paths[0].path"),
 		}),
@@ -244,7 +250,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Factory details networking k8s io v1 ingresses
 		createCustomColumnsOverride("factory-details-networking.k8s.io.v1.ingresses", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "I", "ingress", getColorForType("ingress"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/ingress-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "I", "ingress", getColorForType("ingress"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-ingress-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("Hosts", ".spec.rules[*].host"),
 			createStringColumn("Address", ".status.loadBalancer.ingress[0].ip"),
 			createStringColumn("Port", ".spec.defaultBackend.service.port.number"),
@@ -253,7 +259,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Stock namespace networking k8s io v1 ingresses
 		createCustomColumnsOverride("stock-namespace-/networking.k8s.io/v1/ingresses", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "I", "ingress", getColorForType("ingress"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/ingress-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "I", "ingress", getColorForType("ingress"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-ingress-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("Hosts", ".spec.rules[*].host"),
 			createStringColumn("Address", ".status.loadBalancer.ingress[0].ip"),
 			createStringColumn("Port", ".spec.defaultBackend.service.port.number"),
@@ -309,7 +315,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 		// Stock cluster v1 pods
 		createCustomColumnsOverride("stock-cluster-/v1/pods", []any{
 			createCustomColumnWithJsonPath("Name", ".metadata.name", "P", "pod", "#009596", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/pod-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "NS", "namespace", "#a25792ff", "/openapi-ui/{2}/factory/namespace-details/{reqsJsonPath[0]['.metadata.namespace']['-']}"),
+			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "NS", "namespace", "#a25792ff", "/openapi-ui/{2}/factory/tenantnamespace/{reqsJsonPath[0]['.metadata.namespace']['-']}"),
 			createCustomColumnWithJsonPath("Node", ".spec.nodeName", "N", "node", "#8476d1", "/openapi-ui/{2}/factory/node-details/{reqsJsonPath[0]['.spec.nodeName']['-']}"),
 			createStringColumn("Restart Policy", ".spec.restartPolicy"),
 			createStringColumn("Pod IP", ".status.podIP"),
@@ -329,15 +335,15 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Stock cluster v1 secrets
 		createCustomColumnsOverride("stock-cluster-/v1/secrets", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "secret", "#c46100", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "NS", "namespace", "#a25792ff", "/openapi-ui/{2}/factory/namespace-details/{reqsJsonPath[0]['.metadata.namespace']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "secret", "#c46100", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "NS", "namespace", "#a25792ff", "/openapi-ui/{2}/factory/tenantnamespace/{reqsJsonPath[0]['.metadata.namespace']['-']}"),
 			createStringColumn("Type", ".type"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
 		// Stock namespace v1 secrets
 		createCustomColumnsOverride("stock-namespace-/v1/secrets", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "secret", "#c46100", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "secret", "#c46100", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("Type", ".type"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
@@ -789,7 +795,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 			},
 		},
 	}
-	secretSpec := createFactorySpec("secret-details", []any{"secret-sidebar"}, []any{"/api/clusters/{2}/k8s/api/v1/namespaces/{3}/secrets/{6}"}, secretHeader, secretTabs)
+	secretSpec := createFactorySpec("kube-secret-details", []any{"secret-sidebar"}, []any{"/api/clusters/{2}/k8s/api/v1/namespaces/{3}/secrets/{6}"}, secretHeader, secretTabs)
 
 	// Service details factory
 	serviceHeader := map[string]any{
@@ -1015,7 +1021,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 											"id":                   "service-port-mapping-table",
 											"baseprefix":           "/openapi-ui",
 											"clusterNamePartOfUrl": "{2}",
-											"customizationId":      "factory-service-details-port-mapping",
+											"customizationId":      "factory-kube-service-details-port-mapping",
 											"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services/{6}",
 											"pathToItems":          ".spec.ports",
 											"withoutControls":      true,
@@ -1041,7 +1047,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 													"id":                   "service-pod-serving-table",
 													"baseprefix":           "/openapi-ui",
 													"clusterNamePartOfUrl": "{2}",
-													"customizationId":      "factory-service-details-endpointslice",
+													"customizationId":      "factory-kube-service-details-endpointslice",
 													"fetchUrl":             "/api/clusters/{2}/k8s/apis/discovery.k8s.io/v1/namespaces/{3}/endpointslices",
 													"labelsSelector": map[string]any{
 														"kubernetes.io/service-name": "{reqsJsonPath[0]['.metadata.name']['-']}",
@@ -1113,7 +1119,152 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 			},
 		},
 	}
-	serviceSpec := createFactorySpec("service-details", []any{"service-sidebar"}, []any{"/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services/{6}"}, serviceHeader, serviceTabs)
+	serviceSpec := createFactorySpec("kube-service-details", []any{"service-sidebar"}, []any{"/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services/{6}"}, serviceHeader, serviceTabs)
+
+	// Ingress details factory
+	ingressHeader := map[string]any{
+		"type": "antdFlex",
+		"data": map[string]any{
+			"id":    "header-row",
+			"align": "center",
+			"gap":   6,
+			"style": map[string]any{
+				"marginBottom": float64(24),
+			},
+		},
+		"children": []any{
+			map[string]any{
+				"type": "antdText",
+				"data": map[string]any{
+					"id":    "badge-ingress",
+					"text":  "I",
+					"title": "ingresses",
+					"style": map[string]any{
+						"backgroundColor": "#2e7dff",
+						"borderRadius":    "20px",
+						"color":           "#fff",
+						"display":         "inline-block",
+						"fontFamily":      "RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif",
+						"fontSize":        float64(20),
+						"fontWeight":      float64(400),
+						"lineHeight":      "24px",
+						"minWidth":        float64(24),
+						"padding":         "0 9px",
+						"textAlign":       "center",
+						"whiteSpace":      "nowrap",
+					},
+				},
+			},
+			map[string]any{
+				"type": "parsedText",
+				"data": map[string]any{
+					"id":   "ingress-name",
+					"text": "{reqsJsonPath[0]['.metadata.name']['-']}",
+					"style": map[string]any{
+						"fontFamily": "RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif",
+						"fontSize":   float64(20),
+						"lineHeight": "24px",
+					},
+				},
+			},
+		},
+	}
+
+	ingressTabs := []any{
+		map[string]any{
+			"key":   "details",
+			"label": "Details",
+			"children": []any{
+				contentCard("details-card", map[string]any{
+					"marginBottom": float64(24),
+				}, []any{
+					antdRow("details-grid", []any{48, 12}, []any{
+						antdCol("col-left", 12, []any{
+							antdFlexVertical("col-left-stack", 24, []any{
+								antdFlexVertical("meta-name-block", 4, []any{
+									antdText("meta-name-label", true, "Name", nil),
+									parsedText("meta-name-value", "{reqsJsonPath[0]['.metadata.name']['-']}", nil),
+								}),
+								antdFlexVertical("meta-namespace-block", 8, []any{
+									antdText("meta-namespace-label", true, "Namespace", nil),
+									map[string]any{
+										"type": "antdFlex",
+										"data": map[string]any{
+											"id":    "namespace-row",
+											"align": "center",
+											"gap":   6,
+										},
+										"children": []any{
+											createUnifiedBadgeFromKind("ns-badge", "Namespace", "namespace", BadgeSizeMedium),
+											antdLink("namespace-link",
+												"{reqsJsonPath[0]['.metadata.namespace']['-']}",
+												"/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace",
+											),
+										},
+									},
+								}),
+								antdFlexVertical("meta-created-block", 4, []any{
+									antdText("time-label", true, "Created", nil),
+									antdFlex("time-block", 6, []any{
+										antdText("time-icon", false, "🌐", nil),
+										parsedTextWithFormatter("time-value", "{reqsJsonPath[0]['.metadata.creationTimestamp']['-']}", "timestamp"),
+									}),
+								}),
+							}),
+						}),
+						antdCol("col-right", 12, []any{
+							antdFlexVertical("col-right-stack", 24, []any{
+								antdFlexVertical("status-ingress-ip", 4, []any{
+									antdText("status-ingress-ip-label", true, "LoadBalancer IP", nil),
+									parsedText("status-ingress-ip-value", "{reqsJsonPath[0]['.status.loadBalancer.ingress[0].ip']['-']}", nil),
+								}),
+								antdFlexVertical("status-ingress-hostname", 4, []any{
+									antdText("status-ingress-hostname-label", true, "LoadBalancer Hostname", nil),
+									parsedText("status-ingress-hostname-value", "{reqsJsonPath[0]['.status.loadBalancer.ingress[0].hostname']['-']}", nil),
+								}),
+							}),
+						}),
+					}),
+					spacer("rules-title-spacer", float64(16)),
+					antdText("rules-title", true, "Rules", map[string]any{
+						"fontSize": float64(20),
+					}),
+					spacer("rules-spacer", float64(8)),
+					map[string]any{
+						"type": "EnrichedTable",
+						"data": map[string]any{
+							"id":                   "rules-table",
+							"fetchUrl":             "/api/clusters/{2}/k8s/apis/networking.k8s.io/v1/namespaces/{3}/ingresses/{6}",
+							"clusterNamePartOfUrl": "{2}",
+							"customizationId":      "factory-kube-ingress-details-rules",
+							"baseprefix":           "/openapi-ui",
+							"withoutControls":      true,
+							"pathToItems":          []any{"spec", "rules"},
+						},
+					},
+				}),
+			},
+		},
+		map[string]any{
+			"key":   "yaml",
+			"label": "YAML",
+			"children": []any{
+				map[string]any{
+					"type": "YamlEditorSingleton",
+					"data": map[string]any{
+						"id":                        "yaml-editor",
+						"cluster":                   "{2}",
+						"isNameSpaced":              true,
+						"type":                      "builtin",
+						"typeName":                  "ingresses",
+						"prefillValuesRequestIndex": float64(0),
+						"substractHeight":           float64(400),
+					},
+				},
+			},
+		},
+	}
+	ingressSpec := createFactorySpec("kube-ingress-details", []any{"ingress-sidebar"}, []any{"/api/clusters/{2}/k8s/apis/networking.k8s.io/v1/namespaces/{3}/ingresses/{6}"}, ingressHeader, ingressTabs)
 
 	// Workloadmonitor details factory
 	workloadmonitorHeader := createWorkloadmonitorHeader()
@@ -1273,8 +1424,9 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 		createFactory("namespace-details", namespaceSpec),
 		createFactory("node-details", nodeSpec),
 		createFactory("pod-details", podSpec),
-		createFactory("secret-details", secretSpec),
-		createFactory("service-details", serviceSpec),
+		createFactory("kube-secret-details", secretSpec),
+		createFactory("kube-service-details", serviceSpec),
+		createFactory("kube-ingress-details", ingressSpec),
 		createFactory("workloadmonitor-details", workloadmonitorSpec),
 	}
 }
@@ -1312,7 +1464,7 @@ func CreateAllTableUriMappings() []*dashboardv1alpha1.TableUriMapping {
 			"keysToParse":       ".metadata.name",
 			"keysToParseSecond": ".metadata.namespace",
 			"id":                "stock-cluster-/networking.k8s.io/v1/ingresses",
-			"pathToNavigate":    "/openapi-ui/{clusterName}/~recordValueSecond~/factory/ingress-details/~recordValue~",
+			"pathToNavigate":    "/openapi-ui/{clusterName}/~recordValueSecond~/factory/kube-ingress-details/~recordValue~",
 		}),
 
 		// Stock namespace networking k8s io v1 ingress details
@@ -1320,7 +1472,7 @@ func CreateAllTableUriMappings() []*dashboardv1alpha1.TableUriMapping {
 			"keysToParse":       ".metadata.name",
 			"keysToParseSecond": ".metadata.namespace",
 			"id":                "stock-namespace-/networking.k8s.io/v1/ingresses",
-			"pathToNavigate":    "/openapi-ui/{clusterName}/~recordValueSecond~/factory/ingress-details/~recordValue~",
+			"pathToNavigate":    "/openapi-ui/{clusterName}/~recordValueSecond~/factory/kube-ingress-details/~recordValue~",
 		}),
 	}
 }
