@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -245,29 +246,29 @@ func (m *Manager) buildExpectedResourceSet(crds []cozyv1alpha1.CozystackResource
 			continue
 		}
 
-		// Skip resources with non-empty spec.dashboard.name (tenant modules)
-		if strings.TrimSpace(crd.Spec.Dashboard.Name) != "" {
-			continue
-		}
+		// Note: We include ALL resources with dashboard config, regardless of dashboard.name
+		// because ensureFactory and ensureBreadcrumb create resources for all CRDs with dashboard config
 
 		g, v, kind := pickGVK(&crd)
 		plural := pickPlural(kind, &crd)
 
-		// CustomColumnsOverride
+		// CustomColumnsOverride - created for ALL CRDs with dashboard config
 		name := fmt.Sprintf("stock-namespace-%s.%s.%s", g, v, plural)
 		expected["CustomColumnsOverride"][name] = true
 
-		// CustomFormsOverride
+		// CustomFormsOverride - created for ALL CRDs with dashboard config
 		name = fmt.Sprintf("%s.%s.%s", g, v, plural)
 		expected["CustomFormsOverride"][name] = true
 
-		// CustomFormsPrefill
+		// CustomFormsPrefill - created for ALL CRDs with dashboard config
 		expected["CustomFormsPrefill"][name] = true
 
-		// MarketplacePanel (name matches CRD name)
-		expected["MarketplacePanel"][crd.Name] = true
+		// MarketplacePanel - only created for CRDs WITHOUT dashboard.name
+		if strings.TrimSpace(crd.Spec.Dashboard.Name) == "" {
+			expected["MarketplacePanel"][crd.Name] = true
+		}
 
-		// Sidebar resources (multiple per CRD)
+		// Sidebar resources - created for ALL CRDs with dashboard config
 		lowerKind := strings.ToLower(kind)
 		detailsID := fmt.Sprintf("stock-project-factory-%s-details", lowerKind)
 		expected["Sidebar"][detailsID] = true
@@ -291,15 +292,15 @@ func (m *Manager) buildExpectedResourceSet(crds []cozyv1alpha1.CozystackResource
 			expected["Sidebar"][sidebarID] = true
 		}
 
-		// TableUriMapping
+		// TableUriMapping - created for ALL CRDs with dashboard config
 		name = fmt.Sprintf("stock-namespace-%s.%s.%s", g, v, plural)
 		expected["TableUriMapping"][name] = true
 
-		// Breadcrumb
+		// Breadcrumb - created for ALL CRDs with dashboard config
 		detailID := fmt.Sprintf("stock-project-factory-%s-details", lowerKind)
 		expected["Breadcrumb"][detailID] = true
 
-		// Factory
+		// Factory - created for ALL CRDs with dashboard config
 		factoryName := fmt.Sprintf("%s-details", lowerKind)
 		expected["Factory"][factoryName] = true
 	}
@@ -423,22 +424,24 @@ func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.O
 	case *dashv1alpha1.BreadcrumbList:
 		for _, item := range l.Items {
 			if !expected[item.Name] {
+				logger := log.FromContext(ctx)
+				logger.Info("Deleting orphaned Breadcrumb resource", "name", item.Name)
 				if err := m.client.Delete(ctx, &item); err != nil {
 					if !apierrors.IsNotFound(err) {
 						return err
 					}
-					// Resource already deleted, continue
 				}
 			}
 		}
 	case *dashv1alpha1.FactoryList:
 		for _, item := range l.Items {
 			if !expected[item.Name] {
+				logger := log.FromContext(ctx)
+				logger.Info("Deleting orphaned Factory resource", "name", item.Name)
 				if err := m.client.Delete(ctx, &item); err != nil {
 					if !apierrors.IsNotFound(err) {
 						return err
 					}
-					// Resource already deleted, continue
 				}
 			}
 		}
