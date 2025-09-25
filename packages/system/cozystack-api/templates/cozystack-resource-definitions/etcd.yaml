@@ -13,6 +13,7 @@ spec:
     prefix: ""
     labels:
       cozystack.io/ui: "true"
+      internal.cozystack.io/tenantmodule: "true"
     chart:
       name: etcd
       sourceRef:
