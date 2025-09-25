@@ -55,12 +55,12 @@ data:
           proxy_pass http://incloud-web-web.{{ .Release.Namespace }}.svc:64231;
       }
 
-      location = / {
-          return 301 https://dashboard.{{ $host }}/openapi-ui;
-      }
-
       location = /docs {
           return 301 https://cozystack.io/docs/;
+      }
+
+      location = / {
+          return 301 https://dashboard.{{ $host }}/openapi-ui;
       }
 
       location / {
