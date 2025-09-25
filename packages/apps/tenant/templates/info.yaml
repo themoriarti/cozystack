@@ -8,6 +8,7 @@ metadata:
   namespace: {{ include "tenant.name" . }}
   labels:
     cozystack.io/ui: "true"
+    internal.cozystack.io/tenantmodule: "true"
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
