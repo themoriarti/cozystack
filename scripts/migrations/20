@@ -9,13 +9,10 @@ kubectl delete crd cozystackresourcedefinitions.cozystack.io --ignore-not-found
 
 timestamp=$(date --rfc-3339=ns)
 # Make sure webhook is upgraded first, then run migration
-if kubectl get helmrelease cozystack-controller -n cozy-system; then
-  kubectl annotate helmrelease cozystack-controller -n cozy-system \
-    reconcile.fluxcd.io/forceAt="$timestamp" \
-    reconcile.fluxcd.io/requestedAt="$timestamp" \
-    --overwrite
-  kubectl wait hr/cozystack-controller -n cozy-system --timeout=4m --for=condition=ready || exit 1
-fi
+cozypkg -C packages/system/cozystack-controller -n cozy-system reconcile cozystack-controller --force --with-source
+kubectl wait hr/cozystack-controller -n cozy-system --timeout=4m --for=condition=ready || exit 1
+cozypkg -C packages/system/cozystack-api -n cozy-system reconcile cozystack-api --force --with-source
+kubectl wait hr/cozystack-api -n cozy-system --timeout=4m --for=condition=ready || exit 1
 kubectl get namespace -o custom-columns=NAME:.metadata.name --no-headers |
   grep '^tenant-' |
   while read namespace ; do

@@ -32,7 +32,7 @@ RUN make repos
 
 FROM alpine:3.22
 
-RUN wget -O- https://github.com/cozystack/cozypkg/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.1.0
+RUN wget -O- https://github.com/cozystack/cozypkg/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.2.0
 
 RUN apk add --no-cache make kubectl coreutils git jq
 
