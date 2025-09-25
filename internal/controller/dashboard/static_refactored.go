@@ -357,6 +357,12 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createStringColumn("Memory", ".status.resources.memory"),
 			createStringColumn("Operational", ".status.operational"),
 		}),
+
+		// Stock cluster core cozystack io v1alpha1 tenantnamespaces
+		createCustomColumnsOverride("stock-cluster-/core.cozystack.io/v1alpha1/tenantnamespaces", []any{
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "TN", "tenantnamespace", getColorForType("tenantnamespace"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.name']['-']}/factory/marketplace"),
+			createTimestampColumn("Created", ".metadata.creationTimestamp"),
+		}),
 	}
 }
 
@@ -1445,36 +1451,8 @@ func CreateAllNavigations() []*dashboardv1alpha1.Navigation {
 
 // CreateAllTableUriMappings creates all table URI mapping resources using helper functions
 func CreateAllTableUriMappings() []*dashboardv1alpha1.TableUriMapping {
-	return []*dashboardv1alpha1.TableUriMapping{
-		// Stock namespace default apps cozystack io v1alpha1 virtualmachines yaml
-		createTableUriMapping("virtualmachine-details", map[string]any{
-			"tableUri":    "/openapi-ui/{clusterName}/{namespace}/builtin-table/virtualmachines",
-			"resourceUri": "/openapi-ui/{clusterName}/{namespace}/builtin-table/virtualmachines",
-		}),
-
-		// Namespaces
-		createTableUriMapping("namespaces", map[string]any{
-			"id":             "stock-cluster-/core.cozystack.io/v1alpha1/tenantnamespaces",
-			"keysToParse":    []any{"metadata", "name"},
-			"pathToNavigate": "/openapi-ui/{clusterName}/~recordValue~/factory/marketplace",
-		}),
-
-		// Stock cluster networking k8s io v1 ingress details
-		createTableUriMapping("stock-cluster-networking.k8s.io.v1.ingress-details", map[string]any{
-			"keysToParse":       ".metadata.name",
-			"keysToParseSecond": ".metadata.namespace",
-			"id":                "stock-cluster-/networking.k8s.io/v1/ingresses",
-			"pathToNavigate":    "/openapi-ui/{clusterName}/~recordValueSecond~/factory/kube-ingress-details/~recordValue~",
-		}),
-
-		// Stock namespace networking k8s io v1 ingress details
-		createTableUriMapping("stock-namespace-networking.k8s.io.v1.ingress-details", map[string]any{
-			"keysToParse":       ".metadata.name",
-			"keysToParseSecond": ".metadata.namespace",
-			"id":                "stock-namespace-/networking.k8s.io/v1/ingresses",
-			"pathToNavigate":    "/openapi-ui/{clusterName}/~recordValueSecond~/factory/kube-ingress-details/~recordValue~",
-		}),
-	}
+	// links are now handled through CustomFormsPrefills
+	return []*dashboardv1alpha1.TableUriMapping{}
 }
 
 // ---------------- Additional helper functions for missing resource types ----------------
