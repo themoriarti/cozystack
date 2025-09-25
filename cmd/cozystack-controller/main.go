@@ -153,7 +153,12 @@ func main() {
 		// this setup is not recommended for production.
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	// Configure rate limiting for the Kubernetes client
+	config := ctrl.GetConfigOrDie()
+	config.QPS = 50.0  // Increased from default 5.0
+	config.Burst = 100 // Increased from default 10
+
+	mgr, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,

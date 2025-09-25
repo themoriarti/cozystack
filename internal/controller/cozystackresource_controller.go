@@ -23,8 +23,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -39,6 +41,10 @@ type CozystackResourceDefinitionReconciler struct {
 	lastHandled time.Time
 
 	mem *crdmem.Memory
+
+	// Track static resources initialization
+	staticResourcesInitialized bool
+	staticResourcesMutex       sync.Mutex
 }
 
 func (r *CozystackResourceDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -70,21 +76,65 @@ func (r *CozystackResourceDefinitionReconciler) Reconcile(ctx context.Context, r
 			return res, derr
 		}
 
+		// After processing CRD, perform cleanup of orphaned resources
+		// This should be done after cache warming to ensure all current resources are known
+		if cleanupErr := mgr.CleanupOrphanedResources(ctx); cleanupErr != nil {
+			logger.Error(cleanupErr, "Failed to cleanup orphaned dashboard resources")
+			// Don't fail the reconciliation, just log the error
+		}
+
 		r.mu.Lock()
 		r.lastEvent = time.Now()
 		r.mu.Unlock()
 		return ctrl.Result{}, nil
 	}
-	if err != nil && !apierrors.IsNotFound(err) {
+
+	// Handle error cases (err is guaranteed to be non-nil here)
+	if !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
-	if apierrors.IsNotFound(err) && r.mem != nil {
+	// If resource is not found, clean up from memory
+	if r.mem != nil {
 		r.mem.Delete(req.Name)
 	}
 	if req.Namespace == "cozy-system" && req.Name == "cozystack-api" {
 		return r.debouncedRestart(ctx, logger)
 	}
 	return ctrl.Result{}, nil
+}
+
+// initializeStaticResourcesOnce ensures static resources are created only once
+func (r *CozystackResourceDefinitionReconciler) initializeStaticResourcesOnce(ctx context.Context) error {
+	r.staticResourcesMutex.Lock()
+	defer r.staticResourcesMutex.Unlock()
+
+	if r.staticResourcesInitialized {
+		return nil // Already initialized
+	}
+
+	// Create dashboard manager and initialize static resources
+	mgr := dashboard.NewManager(
+		r.Client,
+		r.Scheme,
+		dashboard.WithCRDListFunc(func(c context.Context) ([]cozyv1alpha1.CozystackResourceDefinition, error) {
+			if r.mem != nil {
+				return r.mem.ListFromCacheOrAPI(c, r.Client)
+			}
+			var list cozyv1alpha1.CozystackResourceDefinitionList
+			if err := r.Client.List(c, &list); err != nil {
+				return nil, err
+			}
+			return list.Items, nil
+		}),
+	)
+
+	if err := mgr.InitializeStaticResources(ctx); err != nil {
+		return err
+	}
+
+	r.staticResourcesInitialized = true
+	log.FromContext(ctx).Info("Static dashboard resources initialized successfully")
+	return nil
 }
 
 func (r *CozystackResourceDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -97,6 +147,18 @@ func (r *CozystackResourceDefinitionReconciler) SetupWithManager(mgr ctrl.Manage
 	if err := r.mem.EnsurePrimingWithManager(mgr); err != nil {
 		return err
 	}
+
+	// Initialize static resources once during controller startup using manager.Runnable
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		if err := r.initializeStaticResourcesOnce(ctx); err != nil {
+			log.FromContext(ctx).Error(err, "Failed to initialize static resources")
+			return err
+		}
+		return nil
+	})); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("cozystackresource-controller").
 		For(&cozyv1alpha1.CozystackResourceDefinition{}, builder.WithPredicates()).
@@ -114,6 +176,9 @@ func (r *CozystackResourceDefinitionReconciler) SetupWithManager(mgr ctrl.Manage
 				}}
 			}),
 		).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: 5, // Allow more concurrent reconciles with proper rate limiting
+		}).
 		Complete(r)
 }
 

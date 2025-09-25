@@ -11,7 +11,6 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -217,22 +216,24 @@ func (m *Manager) upsertMultipleSidebars(
 		}
 
 		obj := &dashv1alpha1.Sidebar{}
-		obj.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   "dashboard.cozystack.io",
-			Version: "v1alpha1",
-			Kind:    "Sidebar",
-		})
 		obj.SetName(id)
 
 		if _, err := controllerutil.CreateOrUpdate(ctx, m.client, obj, func() error {
 			if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
 				return err
 			}
+			// Add dashboard labels to dynamic resources
+			m.addDashboardLabels(obj, crd, ResourceTypeDynamic)
 			b, err := json.Marshal(spec)
 			if err != nil {
 				return err
 			}
-			obj.Spec = dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
+
+			// Only update spec if it's different to avoid unnecessary updates
+			newSpec := dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
+			if !compareArbitrarySpecs(obj.Spec, newSpec) {
+				obj.Spec = newSpec
+			}
 			return nil
 		}); err != nil {
 			return err
