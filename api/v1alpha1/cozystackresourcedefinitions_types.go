@@ -153,4 +153,7 @@ type CozystackResourceDefinitionDashboard struct {
 	// Order of keys in the YAML view
 	// +optional
 	KeysOrder [][]string `json:"keysOrder,omitempty"`
+	// Whether this resource is a module (tenant module)
+	// +optional
+	Module bool `json:"module,omitempty"`
 }

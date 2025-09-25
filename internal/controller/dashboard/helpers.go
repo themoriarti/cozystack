@@ -32,22 +32,11 @@ func pickGVK(crd *cozyv1alpha1.CozystackResourceDefinition) (group, version, kin
 		kind = crd.Spec.Application.Kind
 	}
 
-	// Parse crd.APIVersion to get group and version (format: "group/version")
-	if crd.APIVersion != "" {
-		parts := strings.Split(crd.APIVersion, "/")
-		if len(parts) == 2 {
-			group = parts[0]
-			version = parts[1]
-		}
-	}
+	// For applications, always use apps.cozystack.io group, not the CRD's own group
+	group = "apps.cozystack.io"
+	version = "v1alpha1"
 
 	// Reasonable fallbacks if any are empty:
-	if group == "" {
-		group = "apps.cozystack.io"
-	}
-	if version == "" {
-		version = "v1alpha1"
-	}
 	if kind == "" {
 		kind = "Resource"
 	}

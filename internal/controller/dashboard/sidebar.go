@@ -57,6 +57,9 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	categories := map[string][]item{} // category label -> children
 	keysAndTags := map[string]any{}   // plural -> []string{ "<lower(kind)>-sidebar" }
 
+	// Collect sidebar names for module resources
+	var moduleSidebars []any
+
 	for i := range all {
 		def := &all[i]
 
@@ -65,36 +68,57 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 			continue
 		}
 
-		// Skip resources with non-empty spec.dashboard.name
-		if strings.TrimSpace(def.Spec.Dashboard.Name) != "" {
-			continue
-		}
-
 		g, v, kind := pickGVK(def)
 		plural := pickPlural(kind, def)
-		cat := safeCategory(def) // falls back to "Resources" if empty
+		lowerKind := strings.ToLower(kind)
 
-		// Label: prefer dashboard.Plural if provided
-		label := titleFromKindPlural(kind, plural)
-		if def.Spec.Dashboard.Plural != "" {
-			label = def.Spec.Dashboard.Plural
+		// Check if this resource is a module
+		if def.Spec.Dashboard.Module {
+			// Special case: info should have its own keysAndTags, not be in modules
+			if lowerKind == "info" {
+				keysAndTags[plural] = []any{fmt.Sprintf("%s-sidebar", lowerKind)}
+			} else {
+				// Add to modules sidebar list
+				moduleSidebars = append(moduleSidebars, fmt.Sprintf("%s-sidebar", lowerKind))
+			}
+		} else {
+			// Add to keysAndTags for non-module resources
+			keysAndTags[plural] = []any{fmt.Sprintf("%s-sidebar", lowerKind)}
 		}
 
-		// Weight (default 0)
-		weight := def.Spec.Dashboard.Weight
+		// Only add to menu categories if not a module
+		if !def.Spec.Dashboard.Module {
+			cat := safeCategory(def) // falls back to "Resources" if empty
 
-		link := fmt.Sprintf("/openapi-ui/{clusterName}/{namespace}/api-table/%s/%s/%s", g, v, plural)
+			// Label: prefer dashboard.Plural if provided
+			label := titleFromKindPlural(kind, plural)
+			if def.Spec.Dashboard.Plural != "" {
+				label = def.Spec.Dashboard.Plural
+			}
 
-		categories[cat] = append(categories[cat], item{
-			Key:    plural,
-			Label:  label,
-			Link:   link,
-			Weight: weight,
-		})
+			// Weight (default 0)
+			weight := def.Spec.Dashboard.Weight
 
-		// keysAndTags: plural -> [ "<lower(kind)>-sidebar" ]
-		keysAndTags[plural] = []any{fmt.Sprintf("%s-sidebar", strings.ToLower(kind))}
+			link := fmt.Sprintf("/openapi-ui/{clusterName}/{namespace}/api-table/%s/%s/%s", g, v, plural)
+
+			categories[cat] = append(categories[cat], item{
+				Key:    plural,
+				Label:  label,
+				Link:   link,
+				Weight: weight,
+			})
+		}
 	}
+
+	// Add modules to keysAndTags if we have any module sidebars
+	if len(moduleSidebars) > 0 {
+		keysAndTags["modules"] = moduleSidebars
+	}
+
+	// Add sidebars for built-in Kubernetes resources
+	keysAndTags["services"] = []any{"service-sidebar"}
+	keysAndTags["secrets"] = []any{"secret-sidebar"}
+	keysAndTags["ingresses"] = []any{"ingress-sidebar"}
 
 	// 3) Sort items within each category by Weight (desc), then Label (A→Z)
 	for cat := range categories {
@@ -171,14 +195,8 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	})
 
 	// 6) Prepare the list of Sidebar IDs to upsert with the SAME content
-	_, _, thisKind := pickGVK(crd)
-	lowerThisKind := strings.ToLower(thisKind)
-	detailsID := fmt.Sprintf("stock-project-factory-%s-details", lowerThisKind)
-
+	// Create sidebars for ALL CRDs with dashboard config
 	targetIDs := []string{
-		// original details sidebar
-		detailsID,
-
 		// stock-instance sidebars
 		"stock-instance-api-form",
 		"stock-instance-api-table",
@@ -188,12 +206,27 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		// stock-project sidebars
 		"stock-project-factory-marketplace",
 		"stock-project-factory-workloadmonitor-details",
+		"stock-project-factory-kube-service-details",
+		"stock-project-factory-kube-secret-details",
+		"stock-project-factory-kube-ingress-details",
 		"stock-project-api-form",
 		"stock-project-api-table",
 		"stock-project-builtin-form",
 		"stock-project-builtin-table",
 		"stock-project-crd-form",
 		"stock-project-crd-table",
+	}
+
+	// Add details sidebars for all CRDs with dashboard config
+	for i := range all {
+		def := &all[i]
+		if def.Spec.Dashboard == nil {
+			continue
+		}
+		_, _, kind := pickGVK(def)
+		lowerKind := strings.ToLower(kind)
+		detailsID := fmt.Sprintf("stock-project-factory-%s-details", lowerKind)
+		targetIDs = append(targetIDs, detailsID)
 	}
 
 	// 7) Upsert all target sidebars with identical menuItems and keysAndTags
@@ -219,11 +252,35 @@ func (m *Manager) upsertMultipleSidebars(
 		obj.SetName(id)
 
 		if _, err := controllerutil.CreateOrUpdate(ctx, m.client, obj, func() error {
-			if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
-				return err
+			// Only set owner reference for dynamic sidebars (stock-project-factory-{kind}-details)
+			// Static sidebars (stock-instance-*, stock-project-*) should not have owner references
+			if strings.HasPrefix(id, "stock-project-factory-") && strings.HasSuffix(id, "-details") {
+				// This is a dynamic sidebar, set owner reference only if it matches the current CRD
+				_, _, kind := pickGVK(crd)
+				lowerKind := strings.ToLower(kind)
+				expectedID := fmt.Sprintf("stock-project-factory-%s-details", lowerKind)
+				if id == expectedID {
+					if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
+						return err
+					}
+					// Add dashboard labels to dynamic resources
+					m.addDashboardLabels(obj, crd, ResourceTypeDynamic)
+				} else {
+					// This is a different CRD's sidebar, don't modify owner references or labels
+					// Just update the spec
+				}
+			} else {
+				// This is a static sidebar, don't set owner references
+				// Add static labels
+				labels := obj.GetLabels()
+				if labels == nil {
+					labels = make(map[string]string)
+				}
+				labels[LabelManagedBy] = ManagedByValue
+				labels[LabelResourceType] = ResourceTypeStatic
+				obj.SetLabels(labels)
 			}
-			// Add dashboard labels to dynamic resources
-			m.addDashboardLabels(obj, crd, ResourceTypeDynamic)
+
 			b, err := json.Marshal(spec)
 			if err != nil {
 				return err

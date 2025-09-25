@@ -172,7 +172,7 @@ func createCustomColumnsOverride(id string, additionalPrinterColumns []any) *das
 		}
 	}
 
-	if name == "factory-ingress-details-rules" {
+	if name == "factory-kube-ingress-details-rules" {
 		data["additionalPrinterColumnsUndefinedValues"] = []any{
 			map[string]any{
 				"key":   "Service",
@@ -687,10 +687,10 @@ func getTabsId(key string) string {
 	if key == "workloadmonitor-details" {
 		return "workloadmonitor-tabs"
 	}
-	if key == "secret-details" {
+	if key == "kube-secret-details" {
 		return "secret-tabs"
 	}
-	if key == "service-details" {
+	if key == "kube-service-details" {
 		return "service-tabs"
 	}
 	return strings.ToLower(key) + "-tabs"
