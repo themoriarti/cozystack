@@ -21,13 +21,13 @@ webhooks:
         apiVersions: ["v1"]
         resources: ["pods","secrets", "services", "persistentvolumeclaims"]
       - operations: ["CREATE", "UPDATE"]
-        apiGroups: ["cozystack.io"]
-        apiVersions: ["v1alpha1"]
-        resources: ["workloadmonitors"]
-      - operations: ["CREATE", "UPDATE"]
         apiGroups: ["networking.k8s.io"]
         apiVersions: ["v1"]
         resources: ["ingresses"]
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["cozystack.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["workloadmonitors"]
     failurePolicy: Fail
     namespaceSelector:
       matchExpressions:

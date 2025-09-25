@@ -135,18 +135,18 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 	}
 	cfg := h.config.Load().(*runtimeConfig)
 	crd := cfg.appCRDMap[appRef{gv.Group, obj.GetKind()}]
-	if matchLabelsToExcludeInclude(o.GetLabels(), crd.Spec.Secrets.Exclude, crd.Spec.Secrets.Include) {
-		labels["internal.cozystack.io/tenantsecret"] = ""
-	}
+
+	// TODO: expand this to work with other resources than Secrets
+	labels["apps.cozystack.io/tenantresource"] = func(b bool) string {
+		if b {
+			return "true"
+		}
+		return "false"
+	}(matchLabelsToExcludeInclude(o.GetLabels(), crd.Spec.Secrets.Exclude, crd.Spec.Secrets.Include))
 	return labels, err
 }
 
 func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, labels map[string]string) {
-	if o.GetAPIVersion() == "operator.victoriametrics.com/v1beta1" && o.GetKind() == "VMCluster" {
-		unstructured.SetNestedStringMap(o.Object, labels, "spec", "managedMetadata", "labels")
-		return
-	}
-
 	existing := o.GetLabels()
 	if existing == nil {
 		existing = make(map[string]string)
