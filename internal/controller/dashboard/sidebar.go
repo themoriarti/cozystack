@@ -74,8 +74,13 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 
 		// Check if this resource is a module
 		if def.Spec.Dashboard.Module {
-			// Add to modules sidebar list
-			moduleSidebars = append(moduleSidebars, fmt.Sprintf("%s-sidebar", lowerKind))
+			// Special case: info should have its own keysAndTags, not be in modules
+			if lowerKind == "info" {
+				keysAndTags[plural] = []any{fmt.Sprintf("%s-sidebar", lowerKind)}
+			} else {
+				// Add to modules sidebar list
+				moduleSidebars = append(moduleSidebars, fmt.Sprintf("%s-sidebar", lowerKind))
+			}
 		} else {
 			// Add to keysAndTags for non-module resources
 			keysAndTags[plural] = []any{fmt.Sprintf("%s-sidebar", lowerKind)}
