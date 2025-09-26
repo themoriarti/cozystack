@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/kubevirt-csi-driver:latest@sha256:35684db82ef7d5ad0cb39fa2568aa09cf60c50f3307099dbb89521aefad5baf6
+ghcr.io/cozystack/cozystack/kubevirt-csi-driver:0.0.0@sha256:f0e1d9f9e91be8e4a22be9fbe01a8b0e81aba4230b865fba9608ef7f9fb5745f
