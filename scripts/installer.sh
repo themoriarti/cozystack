@@ -89,8 +89,8 @@ kubectl get hr -A -o go-template='{{ range .items }}{{ if .spec.suspend }}{{ .sp
   esac
 done
 
-# TODO: Update all Cozystack managed charts to latest version
-# kubectl get hr -A -l cozystack.io/ui=true --no-headers | awk '{print "kubectl patch helmrelease -n " $1 " " $2 " --type=merge -p '\''{\"spec\":{\"chart\":{\"spec\":{\"version\":\"*\"}}}}'\'' "}' | sh -x
+# Update all Cozystack managed charts to latest version
+kubectl get hr -A -l cozystack.io/ui=true --no-headers | awk '{print "kubectl patch helmrelease -n " $1 " " $2 " --type=merge -p '\''{\"spec\":{\"chart\":{\"spec\":{\"version\":\">= 0.0.0-0\"}}}}'\'' "}' | sh -x
 
 # Reconcile platform chart
 trap 'exit' INT TERM

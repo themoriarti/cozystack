@@ -4,10 +4,9 @@
 set -euo pipefail
 
 kubectl delete ingresses.networking.k8s.io --all -n cozy-dashboard --ignore-not-found
-kubectl delete cozystackresourcedefinitions --all-namespaces --all --ignore-not-found
 kubectl delete crd cozystackresourcedefinitions.cozystack.io --ignore-not-found
 
-timestamp=$(date --rfc-3339=ns)
+timestamp=$(date --rfc-3339=ns || date)
 # Make sure webhook is upgraded first, then run migration
 cozypkg -C packages/system/cozystack-controller -n cozy-system reconcile cozystack-controller --force --with-source
 kubectl wait hr/cozystack-controller -n cozy-system --timeout=4m --for=condition=ready || exit 1
@@ -20,7 +19,7 @@ kubectl get namespace -o custom-columns=NAME:.metadata.name --no-headers |
     kubectl annotate \
       pods,services,pvc,secrets,ingresses.networking.k8s.io,workloadmonitors.cozystack.io \
       -n "$namespace" --all \
-      migration.cozystack.io="$timestamp" --overwrite)
+      migration.cozystack.io="$timestamp" --overwrite || true)
   done
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \
