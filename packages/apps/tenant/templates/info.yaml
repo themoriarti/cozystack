@@ -1,6 +1,3 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
-{{- if eq $oidcEnabled "true" }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -30,4 +27,3 @@ spec:
     force: true
     remediation:
       retries: -1
-{{- end }}
