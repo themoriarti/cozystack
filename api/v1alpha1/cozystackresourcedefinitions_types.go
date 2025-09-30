@@ -51,7 +51,7 @@ type CozystackResourceDefinitionSpec struct {
 	Release CozystackResourceDefinitionRelease `json:"release"`
 
 	// Secret selectors
-	Secrets CozystackResourceDefinitionSecrets `json:"secrets,omitempty"`
+	Secrets CozystackResourceDefinitionResources `json:"secrets,omitempty"`
 
 	// Dashboard configuration for this resource
 	Dashboard *CozystackResourceDefinitionDashboard `json:"dashboard,omitempty"`
@@ -95,16 +95,45 @@ type CozystackResourceDefinitionRelease struct {
 	Prefix string `json:"prefix"`
 }
 
-type CozystackResourceDefinitionSecrets struct {
-	// Exclude contains an array of label selectors that target secrets.
-	// If a secret matches the selector in any of the elements in the array, it is
+// CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
+// A resource matches this selector only if it satisfies ALL criteria:
+// - Label selector conditions (matchExpressions and matchLabels)
+// - AND has a name that matches one of the names in resourceNames (if specified)
+//
+// The resourceNames field supports Go templates with the following variables available:
+// - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
+// - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
+//
+// Example YAML:
+//   secrets:
+//     include:
+//     - matchExpressions:
+//       - key: badlabel
+//         operator: DoesNotExist
+//       matchLabels:
+//         goodlabel: goodvalue
+//       resourceNames:
+//       - "{{ .name }}-secret"
+//       - "{{ .kind }}-{{ .name }}-tls"
+//       - "specificname"
+type CozystackResourceDefinitionResourceSelector struct {
+	metav1.LabelSelector `json:",inline"`
+	// ResourceNames is a list of resource names to match
+	// If specified, the resource must have one of these exact names to match the selector
+	// +optional
+	ResourceNames []string `json:"resourceNames,omitempty"`
+}
+
+type CozystackResourceDefinitionResources struct {
+	// Exclude contains an array of resource selectors that target resources.
+	// If a resource matches the selector in any of the elements in the array, it is
 	// hidden from the user, regardless of the matches in the include array.
-	Exclude []*metav1.LabelSelector `json:"exclude,omitempty"`
-	// Include contains an array of label selectors that target secrets.
-	// If a secret matches the selector in any of the elements in the array, and
-	// matches none of the selectors in the exclude array that secret is marked
-	// as a tenant secret and is visible to users.
-	Include []*metav1.LabelSelector `json:"include,omitempty"`
+	Exclude []*CozystackResourceDefinitionResourceSelector `json:"exclude,omitempty"`
+	// Include contains an array of resource selectors that target resources.
+	// If a resource matches the selector in any of the elements in the array, and
+	// matches none of the selectors in the exclude array that resource is marked
+	// as a tenant resource and is visible to users.
+	Include []*CozystackResourceDefinitionResourceSelector `json:"include,omitempty"`
 }
 
 // ---- Dashboard types ----

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -130,6 +131,10 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 		"apps.cozystack.io/application.kind": obj.GetKind(),
 		"apps.cozystack.io/application.name": obj.GetName(),
 	}
+	templateLabels := map[string]string{
+		"kind":  strings.ToLower(obj.GetKind()),
+		"name": obj.GetName(),
+	}
 	if o.GetAPIVersion() != "v1" || o.GetKind() != "Secret" {
 		return labels, err
 	}
@@ -142,7 +147,7 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 			return "true"
 		}
 		return "false"
-	}(matchLabelsToExcludeInclude(o.GetLabels(), crd.Spec.Secrets.Exclude, crd.Spec.Secrets.Include))
+	}(matchResourceToExcludeInclude(o.GetName(), templateLabels, o.GetLabels(), crd.Spec.Secrets.Exclude, crd.Spec.Secrets.Include))
 	return labels, err
 }
 

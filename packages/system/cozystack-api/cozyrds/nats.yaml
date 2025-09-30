@@ -29,7 +29,5 @@ spec:
     icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl82ODFfMjgyMSkiLz4KPHJlY3Qgd2lkdGg9IjE0NCIgaGVpZ2h0PSIxNDQiIHJ4PSIyNCIgZmlsbD0iYmxhY2siIGZpbGwtb3BhY2l0eT0iMC4zIi8+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMTE3LjQ4IDI1SDI3Vjk4Ljk2OTNINjYuMDY4OUw4Ny43MDc1IDExOVY5OC45NjkzSDExNy40OFYyNVoiIGZpbGw9IndoaXRlIi8+CjxwYXRoIGQ9Ik05Mi4xMzUyIDcyLjQ1NTJWNDIuNjI1SDEwMi43NzNWODEuMTk5OUg4Ni42NTE5TDU0LjExNCA1MC44NDE0VjgxLjIzMjJINDMuNDQ0M1Y0Mi42MjVINjAuMTI2Mkw5Mi4xMzUyIDcyLjQ1NTJaIiBmaWxsPSJibGFjayIvPgo8ZGVmcz4KPGxpbmVhckdyYWRpZW50IGlkPSJwYWludDBfbGluZWFyXzY4MV8yODIxIiB4MT0iMTAiIHkxPSIxNS41IiB4Mj0iMTQ0IiB5Mj0iMTMxLjUiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KPHN0b3Agc3RvcC1jb2xvcj0iIzM4NUM5MyIvPgo8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMzMkE1NzQiLz4KPC9saW5lYXJHcmFkaWVudD4KPC9kZWZzPgo8L3N2Zz4K
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "storageClass"], ["spec", "external"], ["spec", "users"], ["spec", "jetstream"], ["spec", "jetstream", "enabled"], ["spec", "jetstream", "size"], ["spec", "config"], ["spec", "config", "merge"], ["spec", "config", "resolver"]]
   secrets:
-    exclude:
-      - matchLabels:
-          apps.cozystack.io/tenantresource: "false"
+    exclude: []
     include: [{}]

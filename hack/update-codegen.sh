@@ -53,4 +53,4 @@ kube::codegen::gen_openapi \
     "${SCRIPT_ROOT}/pkg/apis"
 
 $CONTROLLER_GEN object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
-$CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/..." output:crd:artifacts:config=packages/system/cozystack-controller/templates/crds
+$CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/..." output:crd:artifacts:config=packages/system/cozystack-controller/crds

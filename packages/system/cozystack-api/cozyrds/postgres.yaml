@@ -37,7 +37,7 @@ spec:
 
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "size"], ["spec", "storageClass"], ["spec", "external"], ["spec", "postgresql"], ["spec", "postgresql", "parameters"], ["spec", "postgresql", "parameters", "max_connections"], ["spec", "quorum"], ["spec", "quorum", "minSyncReplicas"], ["spec", "quorum", "maxSyncReplicas"], ["spec", "users"], ["spec", "databases"], ["spec", "backup"], ["spec", "backup", "enabled"], ["spec", "backup", "retentionPolicy"], ["spec", "backup", "destinationPath"], ["spec", "backup", "endpointURL"], ["spec", "backup", "schedule"], ["spec", "backup", "s3AccessKey"], ["spec", "backup", "s3SecretKey"], ["spec", "bootstrap"], ["spec", "bootstrap", "enabled"], ["spec", "bootstrap", "recoveryTime"], ["spec", "bootstrap", "oldName"]]
   secrets:
-    exclude:
-      - matchLabels:
-          apps.cozystack.io/tenantresource: "false"
-    include: [{}]
+    exclude: []
+    include:
+      - resourceNames:
+          - postgres-{{ .name }}-app
