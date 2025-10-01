@@ -30,4 +30,6 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "size"], ["spec", "storageClass"], ["spec", "external"], ["spec", "authEnabled"]]
   secrets:
     exclude: []
-    include: [{}]
+    include:
+      - resourceNames:
+          - redis-{{ .name }}-auth

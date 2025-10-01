@@ -30,4 +30,6 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "size"], ["spec", "storageClass"], ["spec", "external"], ["spec", "quorum"], ["spec", "quorum", "minSyncReplicas"], ["spec", "quorum", "maxSyncReplicas"], ["spec", "users"], ["spec", "backup"], ["spec", "backup", "enabled"], ["spec", "backup", "schedule"], ["spec", "backup", "retentionPolicy"], ["spec", "backup", "endpointURL"], ["spec", "backup", "destinationPath"], ["spec", "backup", "s3AccessKey"], ["spec", "backup", "s3SecretKey"], ["spec", "bootstrap"], ["spec", "bootstrap", "enabled"], ["spec", "bootstrap", "recoveryTime"], ["spec", "bootstrap", "oldName"]]
   secrets:
     exclude: []
-    include: [{}]
+    include:
+      - resourceNames:
+          - ferretdb-{{ .name }}-credentials

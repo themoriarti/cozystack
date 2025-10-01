@@ -31,4 +31,4 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "external"], ["spec", "externalMethod"], ["spec", "externalPorts"], ["spec", "running"], ["spec", "instanceType"], ["spec", "instanceProfile"], ["spec", "systemDisk"], ["spec", "systemDisk", "image"], ["spec", "systemDisk", "storage"], ["spec", "systemDisk", "storageClass"], ["spec", "gpus"], ["spec", "resources"], ["spec", "sshKeys"], ["spec", "cloudInit"], ["spec", "cloudInitSeed"]]
   secrets:
     exclude: []
-    include: [{}]
+    include: []

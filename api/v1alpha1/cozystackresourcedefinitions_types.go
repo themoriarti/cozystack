@@ -103,6 +103,7 @@ type CozystackResourceDefinitionRelease struct {
 // The resourceNames field supports Go templates with the following variables available:
 // - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
 // - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
+// - {{ .namespace }}: The namespace of the resource being processed
 //
 // Example YAML:
 //   secrets:

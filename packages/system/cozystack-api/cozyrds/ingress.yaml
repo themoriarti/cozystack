@@ -31,4 +31,4 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "whitelist"], ["spec", "cloudflareProxy"], ["spec", "resources"], ["spec", "resourcesPreset"]]
   secrets:
     exclude: []
-    include: [{}]
+    include: []

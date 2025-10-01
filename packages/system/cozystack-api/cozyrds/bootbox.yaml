@@ -30,4 +30,4 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "whitelistHTTP"], ["spec", "whitelist"], ["spec", "machines"]]
   secrets:
     exclude: []
-    include: [{}]
+    include: []

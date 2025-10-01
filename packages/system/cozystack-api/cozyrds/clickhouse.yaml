@@ -29,4 +29,6 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "shards"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "size"], ["spec", "storageClass"], ["spec", "logStorageSize"], ["spec", "logTTL"], ["spec", "users"], ["spec", "backup"], ["spec", "backup", "enabled"], ["spec", "backup", "s3Region"], ["spec", "backup", "s3Bucket"], ["spec", "backup", "schedule"], ["spec", "backup", "cleanupStrategy"], ["spec", "backup", "s3AccessKey"], ["spec", "backup", "s3SecretKey"], ["spec", "backup", "resticPassword"], ["spec", "clickhouseKeeper"], ["spec", "clickhouseKeeper", "enabled"], ["spec", "clickhouseKeeper", "size"], ["spec", "clickhouseKeeper", "resourcesPreset"], ["spec", "clickhouseKeeper", "replicas"]]
   secrets:
     exclude: []
-    include: [{}]
+    include:
+      - resourceNames:
+          - clickhouse-{{ .name }}-credentials

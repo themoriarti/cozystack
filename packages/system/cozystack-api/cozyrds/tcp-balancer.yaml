@@ -30,4 +30,4 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resourcesPreset"], ["spec", "external"], ["spec", "httpAndHttps"], ["spec", "httpAndHttps", "mode"], ["spec", "httpAndHttps", "targetPorts"], ["spec", "httpAndHttps", "targetPorts", "http"], ["spec", "httpAndHttps", "targetPorts", "https"], ["spec", "httpAndHttps", "endpoints"], ["spec", "whitelistHTTP"], ["spec", "whitelist"]]
   secrets:
     exclude: []
-    include: [{}]
+    include: []

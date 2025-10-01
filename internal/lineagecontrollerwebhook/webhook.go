@@ -134,8 +134,9 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 		"apps.cozystack.io/application.name": obj.GetName(),
 	}
 	templateLabels := map[string]string{
-		"kind": strings.ToLower(obj.GetKind()),
-		"name": obj.GetName(),
+		"kind":      strings.ToLower(obj.GetKind()),
+		"name":      obj.GetName(),
+		"namespace": o.GetNamespace(),
 	}
 	if o.GetAPIVersion() != "v1" || o.GetKind() != "Secret" {
 		return labels, err
@@ -149,7 +150,7 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 			return corev1alpha1.TenantResourceLabelValue
 		}
 		return "false"
-	}(matchResourceToExcludeInclude(o.GetName(), templateLabels, o.GetLabels(), crd.Spec.Secrets.Exclude, crd.Spec.Secrets.Include))
+	}(matchResourceToExcludeInclude(ctx, o.GetName(), templateLabels, o.GetLabels(), crd.Spec.Secrets.Exclude, crd.Spec.Secrets.Include))
 	return labels, err
 }
 

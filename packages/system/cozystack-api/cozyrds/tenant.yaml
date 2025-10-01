@@ -28,4 +28,4 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "host"], ["spec", "etcd"], ["spec", "monitoring"], ["spec", "ingress"], ["spec", "seaweedfs"], ["spec", "isolated"], ["spec", "resourceQuotas"]]
   secrets:
     exclude: []
-    include: [{}]
+    include: []

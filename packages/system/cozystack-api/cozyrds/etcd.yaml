@@ -31,4 +31,4 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "size"], ["spec", "storageClass"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resources", "cpu"], ["spec", "resources", "memory"]]
   secrets:
     exclude: []
-    include: [{}]
+    include: []

@@ -31,4 +31,7 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"]]
   secrets:
     exclude: []
-    include: [{}]
+    include:
+      - resourceNames:
+          - bucket-{{ .name }}
+          - bucket-{{ .name }}-credentials

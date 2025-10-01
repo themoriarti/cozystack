@@ -31,4 +31,4 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "size"], ["spec", "storageClass"], ["spec", "external"], ["spec", "endpoints"], ["spec", "haproxy"], ["spec", "haproxy", "replicas"], ["spec", "haproxy", "resources"], ["spec", "haproxy", "resourcesPreset"], ["spec", "nginx"], ["spec", "nginx", "replicas"], ["spec", "nginx", "resources"], ["spec", "nginx", "resourcesPreset"]]
   secrets:
     exclude: []
-    include: [{}]
+    include: []

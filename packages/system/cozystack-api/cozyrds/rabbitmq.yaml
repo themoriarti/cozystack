@@ -30,4 +30,8 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "size"], ["spec", "storageClass"], ["spec", "external"], ["spec", "users"], ["spec", "vhosts"]]
   secrets:
     exclude: []
-    include: [{}]
+    include:
+      - resourceNames:
+          - rabbitmq-{{ .name }}-default-user
+      - matchLabels:
+          apps.cozystack.io/user-secret: "true"

@@ -30,4 +30,6 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "external"], ["spec", "topics"], ["spec", "kafka"], ["spec", "kafka", "replicas"], ["spec", "kafka", "resources"], ["spec", "kafka", "resourcesPreset"], ["spec", "kafka", "size"], ["spec", "kafka", "storageClass"], ["spec", "zookeeper"], ["spec", "zookeeper", "replicas"], ["spec", "zookeeper", "resources"], ["spec", "zookeeper", "resourcesPreset"], ["spec", "zookeeper", "size"], ["spec", "zookeeper", "storageClass"]]
   secrets:
     exclude: []
-    include: [{}]
+    include:
+      - resourceNames:
+          - kafka-{{ .name }}-clients-ca

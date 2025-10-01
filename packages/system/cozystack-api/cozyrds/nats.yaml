@@ -30,4 +30,6 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "storageClass"], ["spec", "external"], ["spec", "users"], ["spec", "jetstream"], ["spec", "jetstream", "enabled"], ["spec", "jetstream", "size"], ["spec", "config"], ["spec", "config", "merge"], ["spec", "config", "resolver"]]
   secrets:
     exclude: []
-    include: [{}]
+    include:
+      - resourceNames:
+          - nats-{{ .name }}-credentials

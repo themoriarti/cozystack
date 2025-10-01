@@ -30,4 +30,6 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "external"], ["spec", "host"], ["spec", "users"], ["spec", "externalIPs"]]
   secrets:
     exclude: []
-    include: [{}]
+    include:
+      - resourceNames:
+          - vpn-{{ .name }}-urls

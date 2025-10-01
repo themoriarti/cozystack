@@ -31,4 +31,4 @@ spec:
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "host"], ["spec", "topology"], ["spec", "replicationFactor"], ["spec", "db"], ["spec", "db", "replicas"], ["spec", "db", "size"], ["spec", "db", "storageClass"], ["spec", "db", "resources"], ["spec", "db", "resourcesPreset"], ["spec", "master"], ["spec", "master", "replicas"], ["spec", "master", "resources"], ["spec", "master", "resourcesPreset"], ["spec", "filer"], ["spec", "filer", "replicas"], ["spec", "filer", "resources"], ["spec", "filer", "resourcesPreset"], ["spec", "filer", "grpcHost"], ["spec", "filer", "grpcPort"], ["spec", "filer", "whitelist"], ["spec", "volume"], ["spec", "volume", "replicas"], ["spec", "volume", "size"], ["spec", "volume", "storageClass"], ["spec", "volume", "resources"], ["spec", "volume", "resourcesPreset"], ["spec", "volume", "zones"], ["spec", "s3"], ["spec", "s3", "replicas"], ["spec", "s3", "resources"], ["spec", "s3", "resourcesPreset"]]
   secrets:
     exclude: []
-    include: [{}]
+    include: []
