@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // TenantSecretsTable registry – namespaced, read-only flattened view over
-// Secrets labelled "internal.cozystack.io/tenantsecret=true". Each data key is a separate object.
+// Secrets labelled "internal.cozystack.io/tenantresource=true". Each data key is a separate object.
 
 package tenantsecretstable
 
@@ -29,8 +29,8 @@ import (
 )
 
 const (
-	tsLabelKey     = "apps.cozystack.io/tenantresource"
-	tsLabelValue   = "true"
+	tsLabelKey     = corev1alpha1.TenantResourceLabelKey
+	tsLabelValue   = corev1alpha1.TenantResourceLabelValue
 	kindObj        = "TenantSecretsTable"
 	kindObjList    = "TenantSecretsTableList"
 	singularName   = "tenantsecretstable"

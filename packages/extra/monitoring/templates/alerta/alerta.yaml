@@ -192,8 +192,6 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: alertmanager
-  labels:
-    apps.cozystack.io/tenantresource: "false"
 type: Opaque
 stringData:
   alertmanager.yaml: |

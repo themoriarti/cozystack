@@ -175,14 +175,33 @@ spec:
                 properties:
                   exclude:
                     description: |-
-                      Exclude contains an array of label selectors that target secrets.
-                      If a secret matches the selector in any of the elements in the array, it is
+                      Exclude contains an array of resource selectors that target resources.
+                      If a resource matches the selector in any of the elements in the array, it is
                       hidden from the user, regardless of the matches in the include array.
                     items:
                       description: |-
-                        A label selector is a label query over a set of resources. The result of matchLabels and
-                        matchExpressions are ANDed. An empty label selector matches all objects. A null
-                        label selector matches no objects.
+                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
+                        A resource matches this selector only if it satisfies ALL criteria:
+                        - Label selector conditions (matchExpressions and matchLabels)
+                        - AND has a name that matches one of the names in resourceNames (if specified)
+
+                        The resourceNames field supports Go templates with the following variables available:
+                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
+                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
+                        - {{ .namespace }}: The namespace of the resource being processed
+
+                        Example YAML:
+                          secrets:
+                            include:
+                            - matchExpressions:
+                              - key: badlabel
+                                operator: DoesNotExist
+                              matchLabels:
+                                goodlabel: goodvalue
+                              resourceNames:
+                              - "{{ .name }}-secret"
+                              - "{{ .kind }}-{{ .name }}-tls"
+                              - "specificname"
                       properties:
                         matchExpressions:
                           description: matchExpressions is a list of label selector
@@ -225,20 +244,46 @@ spec:
                             map is equivalent to an element of matchExpressions, whose key field is "key", the
                             operator is "In", and the values array contains only "value". The requirements are ANDed.
                           type: object
+                        resourceNames:
+                          description: |-
+                            ResourceNames is a list of resource names to match
+                            If specified, the resource must have one of these exact names to match the selector
+                          items:
+                            type: string
+                          type: array
                       type: object
                       x-kubernetes-map-type: atomic
                     type: array
                   include:
                     description: |-
-                      Include contains an array of label selectors that target secrets.
-                      If a secret matches the selector in any of the elements in the array, and
-                      matches none of the selectors in the exclude array that secret is marked
-                      as a tenant secret and is visible to users.
+                      Include contains an array of resource selectors that target resources.
+                      If a resource matches the selector in any of the elements in the array, and
+                      matches none of the selectors in the exclude array that resource is marked
+                      as a tenant resource and is visible to users.
                     items:
                       description: |-
-                        A label selector is a label query over a set of resources. The result of matchLabels and
-                        matchExpressions are ANDed. An empty label selector matches all objects. A null
-                        label selector matches no objects.
+                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
+                        A resource matches this selector only if it satisfies ALL criteria:
+                        - Label selector conditions (matchExpressions and matchLabels)
+                        - AND has a name that matches one of the names in resourceNames (if specified)
+
+                        The resourceNames field supports Go templates with the following variables available:
+                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
+                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
+                        - {{ .namespace }}: The namespace of the resource being processed
+
+                        Example YAML:
+                          secrets:
+                            include:
+                            - matchExpressions:
+                              - key: badlabel
+                                operator: DoesNotExist
+                              matchLabels:
+                                goodlabel: goodvalue
+                              resourceNames:
+                              - "{{ .name }}-secret"
+                              - "{{ .kind }}-{{ .name }}-tls"
+                              - "specificname"
                       properties:
                         matchExpressions:
                           description: matchExpressions is a list of label selector
@@ -281,6 +326,13 @@ spec:
                             map is equivalent to an element of matchExpressions, whose key field is "key", the
                             operator is "In", and the values array contains only "value". The requirements are ANDed.
                           type: object
+                        resourceNames:
+                          description: |-
+                            ResourceNames is a list of resource names to match
+                            If specified, the resource must have one of these exact names to match the selector
+                          items:
+                            type: string
+                          type: array
                       type: object
                       x-kubernetes-map-type: atomic
                     type: array

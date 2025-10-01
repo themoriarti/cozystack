@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // TenantSecret registry – namespaced view over Secrets labelled
-// "internal.cozystack.io/tenantsecret=true".  Internal tenant secret labels are hidden.
+// "internal.cozystack.io/tenantresource=true".  Internal tenant secret labels are hidden.
 
 package tenantsecret
 
@@ -35,8 +35,8 @@ import (
 // -----------------------------------------------------------------------------
 
 const (
-	tsLabelKey           = "apps.cozystack.io/tenantresource"
-	tsLabelValue         = "true"
+	tsLabelKey           = corev1alpha1.TenantResourceLabelKey
+	tsLabelValue         = corev1alpha1.TenantResourceLabelValue
 	singularName         = "tenantsecret"
 	kindTenantSecret     = "TenantSecret"
 	kindTenantSecretList = "TenantSecretList"

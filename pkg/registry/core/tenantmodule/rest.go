@@ -55,7 +55,7 @@ var (
 
 // Define constants for label filtering
 const (
-	TenantModuleLabelKey   = "apps.cozystack.io/tenantmodule"
+	TenantModuleLabelKey   = "internal.cozystack.io/tenantmodule"
 	TenantModuleLabelValue = "true"
 	singularName           = "tenantmodule"
 )

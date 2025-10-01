@@ -28,7 +28,7 @@ spec:
     icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl82ODNfMzIwMikiLz4KPHBhdGggZD0iTTIzIDEwNUgzNFYxMTZIMjNWMTA1WiIgZmlsbD0iI0ZGMDAwMCIvPgo8cGF0aCBkPSJNMjMgMjhIMzRWMTA1SDIzVjI4Wk00NSAyOEg1NS45OTk5VjExNkg0NVYyOFpNNjYuOTk5OSAyOEg3Ny45OTk5VjExNkg2Ni45OTk5VjI4Wk04OC45OTk5IDI4SDk5Ljk5OTlWMTE2SDg4Ljk5OTlWMjhaTTExMSA2My43NDk5SDEyMlY4MC4yNDk5SDExMVY2My43NDk5WiIgZmlsbD0id2hpdGUiLz4KPGRlZnM+CjxsaW5lYXJHcmFkaWVudCBpZD0icGFpbnQwX2xpbmVhcl82ODNfMzIwMiIgeDE9Ii0wLjQ5OTk5OCIgeTE9IjEuNSIgeDI9IjE1My41IiB5Mj0iMTYyIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CjxzdG9wIHN0b3AtY29sb3I9IiNGRkNDMDAiLz4KPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjRkY3QTAwIi8+CjwvbGluZWFyR3JhZGllbnQ+CjwvZGVmcz4KPC9zdmc+Cg==
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "shards"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "size"], ["spec", "storageClass"], ["spec", "logStorageSize"], ["spec", "logTTL"], ["spec", "users"], ["spec", "backup"], ["spec", "backup", "enabled"], ["spec", "backup", "s3Region"], ["spec", "backup", "s3Bucket"], ["spec", "backup", "schedule"], ["spec", "backup", "cleanupStrategy"], ["spec", "backup", "s3AccessKey"], ["spec", "backup", "s3SecretKey"], ["spec", "backup", "resticPassword"], ["spec", "clickhouseKeeper"], ["spec", "clickhouseKeeper", "enabled"], ["spec", "clickhouseKeeper", "size"], ["spec", "clickhouseKeeper", "resourcesPreset"], ["spec", "clickhouseKeeper", "replicas"]]
   secrets:
-    exclude:
-      - matchLabels:
-          apps.cozystack.io/tenantresource: "false"
-    include: [{}]
+    exclude: []
+    include:
+      - resourceNames:
+          - clickhouse-{{ .name }}-credentials

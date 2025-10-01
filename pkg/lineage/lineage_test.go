@@ -46,7 +46,7 @@ func TestWalkingOwnershipGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nodes := WalkOwnershipGraph(ctx, dynClient, mapper, obj)
+	nodes := WalkOwnershipGraph(ctx, dynClient, mapper, &stubMapper{}, obj)
 	for _, node := range nodes {
 		fmt.Printf("%#v\n", node)
 	}
