@@ -41,3 +41,4 @@ spec:
     include:
       - resourceNames:
           - postgres-{{ .name }}-app
+          - postgres-{{ .name }}-credentials

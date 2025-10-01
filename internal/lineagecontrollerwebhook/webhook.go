@@ -18,6 +18,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
 var (
@@ -132,7 +134,7 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 		"apps.cozystack.io/application.name": obj.GetName(),
 	}
 	templateLabels := map[string]string{
-		"kind":  strings.ToLower(obj.GetKind()),
+		"kind": strings.ToLower(obj.GetKind()),
 		"name": obj.GetName(),
 	}
 	if o.GetAPIVersion() != "v1" || o.GetKind() != "Secret" {
@@ -142,9 +144,9 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 	crd := cfg.appCRDMap[appRef{gv.Group, obj.GetKind()}]
 
 	// TODO: expand this to work with other resources than Secrets
-	labels["apps.cozystack.io/tenantresource"] = func(b bool) string {
+	labels[corev1alpha1.TenantResourceLabelKey] = func(b bool) string {
 		if b {
-			return "true"
+			return corev1alpha1.TenantResourceLabelValue
 		}
 		return "false"
 	}(matchResourceToExcludeInclude(o.GetName(), templateLabels, o.GetLabels(), crd.Spec.Secrets.Exclude, crd.Spec.Secrets.Include))
