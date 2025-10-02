@@ -84,6 +84,8 @@ seaweedfs:
       auditLogConfig: {}
   s3:
     enabled: true
+    extraArgs:
+    - -idleTimeout=60
     enableAuth: false
     readinessProbe:
       scheme: HTTPS
