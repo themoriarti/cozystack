@@ -98,6 +98,7 @@ EOF
     done
   '
   # Verify the nodes are ready
+  kubectl --kubeconfig tenantkubeconfig wait node --all --timeout=2m --for=condition=Ready
   kubectl --kubeconfig tenantkubeconfig get nodes -o wide
 
   # Verify the kubelet version matches what we expect
