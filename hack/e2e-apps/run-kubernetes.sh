@@ -79,21 +79,50 @@ EOF
   
   # Wait for the machine deployment to scale to 2 replicas (timeout after 1 minute)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=1m --for=jsonpath='{.status.replicas}'=2
-
   # Get the admin kubeconfig and save it to a file
   kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > tenantkubeconfig
 
   # Update the kubeconfig to use localhost for the API server
   yq -i ".clusters[0].cluster.server = \"https://localhost:${port}\"" tenantkubeconfig
 
-  # Set up port forwarding to the Kubernetes API server for a 40 second timeout
-  bash -c 'timeout 40s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
 
+  # Set up port forwarding to the Kubernetes API server for a 40 second timeout
+  bash -c 'timeout 150s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
   timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 5; done'
 
+  # Wait for the nodes to be ready (timeout after 2 minutes)
+  timeout 2m bash -c '
+    until [ "$(kubectl --kubeconfig tenantkubeconfig get nodes -o jsonpath="{.items[*].metadata.name}" | wc -w)" -eq 2 ]; do
+      sleep 3
+    done
+  '
+  # Verify the nodes are ready
+  kubectl --kubeconfig tenantkubeconfig get nodes -o wide
+
+  # Verify the kubelet version matches what we expect
+  versions=$(kubectl --kubeconfig tenantkubeconfig get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}')
+  node_ok=true
+  for v in $versions; do
+      if [[ ! "$v" =~ ^"${k8s_version}"[^$]+ ]]; then
+          node_ok=false
+      fi
+  done
+
+  if ! $node_ok; then
+      echo "Kubelet versions did not match expected ${k8s_version}" >&2
+      exit 1
+  fi
+
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
+
+  # Wait for all required HelmReleases to be ready (timeout after 1 minute)
+  kubectl wait hr kubernetes-${test_name}-cilium -n tenant-test --timeout=1m --for=condition=ready
+  kubectl wait hr kubernetes-${test_name}-coredns -n tenant-test --timeout=1m --for=condition=ready
+  kubectl wait hr kubernetes-${test_name}-csi -n tenant-test --timeout=1m --for=condition=ready
+  kubectl wait hr kubernetes-${test_name}-ingress-nginx -n tenant-test --timeout=1m --for=condition=ready
+  kubectl wait hr kubernetes-${test_name}-vsnap-crd -n tenant-test --timeout=1m --for=condition=ready
 
   # Clean up by deleting the Kubernetes resource
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io $test_name
