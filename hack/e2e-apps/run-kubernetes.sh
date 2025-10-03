@@ -105,13 +105,13 @@ EOF
   versions=$(kubectl --kubeconfig tenantkubeconfig get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}')
   node_ok=true
 
-  if [ "$k8s_version" = "v1.32" ]; then
+  if [[ "$k8s_version" == v1.32* ]]; then
     echo "⚠️  TODO: Temporary stub — allowing nodes with v1.33 while k8s_version is v1.32"
   fi
 
   for v in $versions; do
     case "$k8s_version" in
-      v1.32)
+      v1.32|v1.32.*)
         case "$v" in
           v1.32 | v1.32.* | v1.32-* | v1.33 | v1.33.* | v1.33-*)
             ;;
