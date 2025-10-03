@@ -86,7 +86,7 @@ EOF
   yq -i ".clusters[0].cluster.server = \"https://localhost:${port}\"" tenantkubeconfig
 
 
-  # Set up port forwarding to the Kubernetes API server for a 40 second timeout
+  # Set up port forwarding to the Kubernetes API server for a 200 second timeout
   bash -c 'timeout 200s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
   timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 5; done'
