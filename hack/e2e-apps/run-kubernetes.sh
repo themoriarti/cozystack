@@ -104,10 +104,16 @@ EOF
   versions=$(kubectl --kubeconfig tenantkubeconfig get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}')
   node_ok=true
   for v in $versions; do
-      if [[ ! "$v" =~ ^"${k8s_version}"[^$]+ ]]; then
-          node_ok=false
-      fi
+    case "$v" in
+      "${k8s_version}" | "${k8s_version}".* | "${k8s_version}"-*)
+        ;;
+      *)
+        node_ok=false
+        break
+        ;;
+    esac
   done
+
 
   if ! $node_ok; then
       echo "Kubelet versions did not match expected ${k8s_version}" >&2
@@ -117,12 +123,9 @@ EOF
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
 
-  # Wait for all required HelmReleases to be ready (timeout after 1 minute)
-  kubectl wait hr kubernetes-${test_name}-cilium -n tenant-test --timeout=1m --for=condition=ready
-  kubectl wait hr kubernetes-${test_name}-coredns -n tenant-test --timeout=1m --for=condition=ready
-  kubectl wait hr kubernetes-${test_name}-csi -n tenant-test --timeout=1m --for=condition=ready
-  kubectl wait hr kubernetes-${test_name}-ingress-nginx -n tenant-test --timeout=1m --for=condition=ready
-  kubectl wait hr kubernetes-${test_name}-vsnap-crd -n tenant-test --timeout=1m --for=condition=ready
+  for component in cilium coredns csi ingress-nginx vsnap-crd; do
+      kubectl wait hr kubernetes-${test_name}-${component} -n tenant-test --timeout=1m --for=condition=ready
+    done
 
   # Clean up by deleting the Kubernetes resource
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io $test_name
