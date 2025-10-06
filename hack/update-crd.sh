@@ -8,7 +8,7 @@ need yq; need jq; need base64
 CHART_YAML="${CHART_YAML:-Chart.yaml}"
 VALUES_YAML="${VALUES_YAML:-values.yaml}"
 SCHEMA_JSON="${SCHEMA_JSON:-values.schema.json}"
-CRD_DIR="../../system/cozystack-api/templates/cozystack-resource-definitions"
+CRD_DIR="../../system/cozystack-api/cozyrds"
 
 [[ -f "$CHART_YAML" ]] || { echo "No $CHART_YAML found"; exit 1; }
 [[ -f "$SCHEMA_JSON" ]] || { echo "No $SCHEMA_JSON found"; exit 1; }
