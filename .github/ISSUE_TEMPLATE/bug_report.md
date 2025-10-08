@@ -24,6 +24,9 @@ Steps to reproduce the behavior:
 3. Scroll down to '....'
 4. See error
 
+**Expected behaviour**
+When taking the steps to reproduce, what should have happened differently?
+
 **Actual behaviour**
 A clear and concise description of what happens when the bug occurs. Explain how the system currently behaves, including error messages, unexpected results, or incorrect functionality observed during execution.
 
