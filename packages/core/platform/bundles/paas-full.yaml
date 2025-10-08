@@ -105,6 +105,18 @@ releases:
       disableTelemetry: true
   {{- end }}
 
+- name: cozystack-resource-definition-crd
+  releaseName: cozystack-resource-definition-crd
+  chart: cozystack-resource-definition-crd
+  namespace: cozy-system
+  dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller]
+
+- name: cozystack-resource-definitions
+  releaseName: cozystack-resource-definitions
+  chart: cozystack-resource-definitions
+  namespace: cozy-system
+  dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller,cozystack-resource-definition-crd]
+
 - name: cert-manager
   releaseName: cert-manager
   chart: cozy-cert-manager
