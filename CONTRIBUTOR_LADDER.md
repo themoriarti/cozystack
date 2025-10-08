@@ -1,6 +1,6 @@
-# Contributor Ladder Template
+# Contributor Ladder
 
-* [Contributor Ladder](#contributor-ladder-template)
+* [Contributor Ladder](#contributor-ladder)
     * [Community Participant](#community-participant)
     * [Contributor](#contributor)
     * [Reviewer](#reviewer)
