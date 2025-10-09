@@ -998,6 +998,15 @@ func createBoolColumn(name, jsonPath string) map[string]any {
 	}
 }
 
+// createReadyColumn creates a Ready column with Boolean type and condition check
+func createReadyColumn() map[string]any {
+	return map[string]any{
+		"name":     "Ready",
+		"type":     "Boolean",
+		"jsonPath": `.status.conditions[?(@.type=="Ready")].status`,
+	}
+}
+
 // createConverterBytesColumn creates a column with ConverterBytes component
 func createConverterBytesColumn(name, jsonPath string) map[string]any {
 	return map[string]any{
