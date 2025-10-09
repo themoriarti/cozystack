@@ -39,3 +39,4 @@ webhooks:
           operator: NotIn
           values:
             - kube-system
+            - default
