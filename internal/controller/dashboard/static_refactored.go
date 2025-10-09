@@ -149,9 +149,9 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 		// Stock namespace core cozystack io v1alpha1 tenantmodules
 		createCustomColumnsOverride("stock-namespace-/core.cozystack.io/v1alpha1/tenantmodules", []any{
 			createCustomColumnWithJsonPath("Name", ".metadata.name", "M", "module", getColorForType("module"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/{reqsJsonPath[0]['.metadata.name']['-']}-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createStringColumn("Version", ".spec.version"),
-			createStringColumn("Status", ".status.phase"),
+			createReadyColumn(),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
+			createStringColumn("Version", ".status.version"),
 		}),
 
 		// Factory service details port mapping
