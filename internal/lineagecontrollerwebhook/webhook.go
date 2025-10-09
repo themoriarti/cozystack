@@ -10,12 +10,10 @@ import (
 	"github.com/cozystack/cozystack/pkg/lineage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/restmapper"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -52,13 +50,15 @@ func (h *LineageControllerWebhook) SetupWithManagerAsWebhook(mgr ctrl.Manager) e
 		return err
 	}
 
-	discoClient, err := discovery.NewDiscoveryClientForConfig(cfg)
+	httpClient, err := rest.HTTPClientFor(cfg)
 	if err != nil {
 		return err
 	}
 
-	cachedDisco := memory.NewMemCacheClient(discoClient)
-	h.mapper = restmapper.NewDeferredDiscoveryRESTMapper(cachedDisco)
+	h.mapper, err = apiutil.NewDynamicRESTMapper(cfg, httpClient)
+	if err != nil {
+		return err
+	}
 
 	h.initConfig()
 	// Register HTTP path -> handler.
