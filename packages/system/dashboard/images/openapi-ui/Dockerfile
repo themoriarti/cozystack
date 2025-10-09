@@ -4,7 +4,7 @@ ARG NODE_VERSION=20.18.1
 # imported from https://github.com/cozystack/openapi-k8s-toolkit
 FROM node:${NODE_VERSION}-alpine AS openapi-k8s-toolkit-builder
 WORKDIR /src
-ARG COMMIT=393fd84a3b9283e93c047b744b53f1ae65465df8
+ARG COMMIT=a72ef72afa9bc822572c3cd0d76fb7ea872853ec
 RUN wget -O- https://github.com/cozystack/openapi-k8s-toolkit/archive/${COMMIT}.tar.gz | tar -xzvf- --strip-components=1
 RUN npm install
 RUN npm install --build-from-source @swc/core
