@@ -38,8 +38,8 @@ func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.
 		return reconcile.Result{}, nil
 	}
 
-	// Skip module resources (they don't need MarketplacePanel)
-	if crd.Spec.Dashboard.Module {
+	// Skip module and tenant resources (they don't need MarketplacePanel)
+	if crd.Spec.Dashboard.Module || crd.Spec.Application.Kind == "Tenant" {
 		err := m.client.Get(ctx, client.ObjectKey{Name: mp.Name}, mp)
 		if apierrors.IsNotFound(err) {
 			return reconcile.Result{}, nil
