@@ -22,9 +22,15 @@ kubectl get helmreleases.helm.toolkit.fluxcd.io -A \
 
   # JSON Patch
   | [
-      { op:"add", path:"/spec/chart/spec/version", value:"0.7.0" },
+      (if $s.chart.spec.version? then
+         {op:"replace", path:"/spec/chart/spec/version", value:"0.7.0"}
+       else
+         {op:"add",     path:"/spec/chart/spec/version", value:"0.7.0"}
+       end),
 
-      (if ($v.volume? | type) != "object" then {op:"add", path:"/spec/values/volume", value:{}} else empty end),
+      (if ($v|type) != "object" then {op:"add", path:"/spec/values", value:{}} else empty end),
+
+      (if ($v.volume?|type) != "object" then {op:"add", path:"/spec/values/volume", value:{}} else empty end),
 
       (if $v.size?          then {op:"add", path:"/spec/values/volume/size",         value:$v.size}          else empty end),
       (if $v.storageClass?  then {op:"add", path:"/spec/values/volume/storageClass", value:$v.storageClass}  else empty end),

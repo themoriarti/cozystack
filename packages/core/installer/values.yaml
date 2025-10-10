@@ -1,2 +1,2 @@
 cozystack:
-  image: ghcr.io/cozystack/cozystack/installer:v0.36.0-beta.4@sha256:51cb9828af3bdceac289de3b1161625065db22535a961958530e9c751880ee96
+  image: ghcr.io/cozystack/cozystack/installer:v0.37.0@sha256:256c5a0f0ae2fc3ad6865b9fda74c42945b38a5384240fa29554617185b60556

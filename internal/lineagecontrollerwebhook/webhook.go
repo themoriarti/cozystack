@@ -5,25 +5,40 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/restmapper"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
 var (
 	NoAncestors       = fmt.Errorf("no managed apps found in lineage")
 	AncestryAmbiguous = fmt.Errorf("object ancestry is ambiguous")
 )
+
+// getResourceSelectors returns the appropriate CozystackResourceDefinitionResources for a given GroupKind
+func (h *LineageControllerWebhook) getResourceSelectors(gk schema.GroupKind, crd *cozyv1alpha1.CozystackResourceDefinition) *cozyv1alpha1.CozystackResourceDefinitionResources {
+	switch {
+	case gk.Group == "" && gk.Kind == "Secret":
+		return &crd.Spec.Secrets
+	case gk.Group == "" && gk.Kind == "Service":
+		return &crd.Spec.Services
+	case gk.Group == "networking.k8s.io" && gk.Kind == "Ingress":
+		return &crd.Spec.Ingresses
+	default:
+		return nil
+	}
+}
 
 // SetupWithManager registers the handler with the webhook server.
 func (h *LineageControllerWebhook) SetupWithManagerAsWebhook(mgr ctrl.Manager) error {
@@ -35,13 +50,15 @@ func (h *LineageControllerWebhook) SetupWithManagerAsWebhook(mgr ctrl.Manager) e
 		return err
 	}
 
-	discoClient, err := discovery.NewDiscoveryClientForConfig(cfg)
+	httpClient, err := rest.HTTPClientFor(cfg)
 	if err != nil {
 		return err
 	}
 
-	cachedDisco := memory.NewMemCacheClient(discoClient)
-	h.mapper = restmapper.NewDeferredDiscoveryRESTMapper(cachedDisco)
+	h.mapper, err = apiutil.NewDynamicRESTMapper(cfg, httpClient)
+	if err != nil {
+		return err
+	}
 
 	h.initConfig()
 	// Register HTTP path -> handler.
@@ -81,6 +98,7 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 			break
 		}
 		if err != nil {
+			logger.Error(err, "error computing lineage labels")
 			return admission.Errored(500, fmt.Errorf("error computing lineage labels: %w", err))
 		}
 		if err == nil {
@@ -115,7 +133,7 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 	if len(owners) > 1 {
 		err = AncestryAmbiguous
 	}
-	return map[string]string{
+	labels := map[string]string{
 		// truncate apigroup to first 63 chars
 		"apps.cozystack.io/application.group": func(s string) string {
 			if len(s) < 63 {
@@ -129,10 +147,26 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 		}(gv.Group),
 		"apps.cozystack.io/application.kind": obj.GetKind(),
 		"apps.cozystack.io/application.name": obj.GetName(),
-	}, err
+	}
+	templateLabels := map[string]string{
+		"kind":      strings.ToLower(obj.GetKind()),
+		"name":      obj.GetName(),
+		"namespace": o.GetNamespace(),
+	}
+	cfg := h.config.Load().(*runtimeConfig)
+	crd := cfg.appCRDMap[appRef{gv.Group, obj.GetKind()}]
+	resourceSelectors := h.getResourceSelectors(o.GroupVersionKind().GroupKind(), crd)
+
+	labels[corev1alpha1.TenantResourceLabelKey] = func(b bool) string {
+		if b {
+			return corev1alpha1.TenantResourceLabelValue
+		}
+		return "false"
+	}(matchResourceToExcludeInclude(ctx, o.GetName(), templateLabels, o.GetLabels(), resourceSelectors))
+	return labels, err
 }
 
-func (h *LineageControllerWebhook) applyLabels(o client.Object, labels map[string]string) {
+func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, labels map[string]string) {
 	existing := o.GetLabels()
 	if existing == nil {
 		existing = make(map[string]string)

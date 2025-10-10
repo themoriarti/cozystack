@@ -111,10 +111,12 @@ func WalkOwnershipGraph(
 		}
 		a, k, p, err := appMapper.Map(hr)
 		if err != nil {
+			l.Error(err, "failed to map HelmRelease to app")
 			break
 		}
 		ownerObj, err := getUnstructuredObject(ctx, client, mapper, a, k, obj.GetNamespace(), strings.TrimPrefix(obj.GetName(), p))
 		if err != nil {
+			l.Error(err, "couldn't get unstructured object", "APIVersion", a, "Kind", k, "Name", strings.TrimPrefix(obj.GetName(), p))
 			break
 		}
 		// successfully mapped a HelmRelease to a custom app, no need to continue
