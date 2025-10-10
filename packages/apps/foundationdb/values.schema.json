@@ -10,19 +10,7 @@
     "backup": {
       "description": "Backup configuration",
       "type": "object",
-      "default": {
-        "enabled": false,
-        "retentionPolicy": "7d",
-        "s3": {
-          "bucket": "",
-          "credentials": {
-            "accessKeyId": "",
-            "secretAccessKey": ""
-          },
-          "endpoint": "",
-          "region": "us-east-1"
-        }
-      },
+      "default": {},
       "required": [
         "enabled",
         "retentionPolicy",
@@ -42,15 +30,7 @@
         "s3": {
           "description": "S3 configuration for backups",
           "type": "object",
-          "default": {
-            "bucket": "",
-            "credentials": {
-              "accessKeyId": "",
-              "secretAccessKey": ""
-            },
-            "endpoint": "",
-            "region": "us-east-1"
-          },
+          "default": {},
           "required": [
             "bucket",
             "credentials",
@@ -65,10 +45,7 @@
             "credentials": {
               "description": "S3 credentials",
               "type": "object",
-              "default": {
-                "accessKeyId": "",
-                "secretAccessKey": ""
-              },
+              "default": {},
               "required": [
                 "accessKeyId",
                 "secretAccessKey"
@@ -100,20 +77,7 @@
     "cluster": {
       "description": "Cluster configuration",
       "type": "object",
-      "default": {
-        "faultDomain": {
-          "key": "kubernetes.io/hostname",
-          "valueFrom": "spec.nodeName"
-        },
-        "processCounts": {
-          "cluster_controller": 1,
-          "stateless": -1,
-          "storage": 3
-        },
-        "redundancyMode": "double",
-        "storageEngine": "ssd-2",
-        "version": "7.3.63"
-      },
+      "default": {},
       "required": [
         "faultDomain",
         "processCounts",
@@ -125,10 +89,7 @@
         "faultDomain": {
           "description": "Fault domain configuration",
           "type": "object",
-          "default": {
-            "key": "kubernetes.io/hostname",
-            "valueFrom": "spec.nodeName"
-          },
+          "default": {},
           "required": [
             "key",
             "valueFrom"
@@ -149,11 +110,7 @@
         "processCounts": {
           "description": "Process counts for different roles",
           "type": "object",
-          "default": {
-            "cluster_controller": 1,
-            "stateless": -1,
-            "storage": 3
-          },
+          "default": {},
           "required": [
             "cluster_controller",
             "stateless",
@@ -214,9 +171,7 @@
     "monitoring": {
       "description": "Monitoring configuration",
       "type": "object",
-      "default": {
-        "enabled": true
-      },
+      "default": {},
       "required": [
         "enabled"
       ],
@@ -276,10 +231,7 @@
     "securityContext": {
       "description": "Security context for containers",
       "type": "object",
-      "default": {
-        "runAsGroup": 4059,
-        "runAsUser": 4059
-      },
+      "default": {},
       "required": [
         "runAsGroup",
         "runAsUser"
@@ -300,10 +252,7 @@
     "storage": {
       "description": "Storage configuration",
       "type": "object",
-      "default": {
-        "size": "16Gi",
-        "storageClass": ""
-      },
+      "default": {},
       "required": [
         "size",
         "storageClass"
