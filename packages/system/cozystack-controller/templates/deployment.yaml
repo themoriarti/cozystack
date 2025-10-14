@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cozystack-controller
-  namespace: cozy-system
   labels:
     app: cozystack-controller
 spec:

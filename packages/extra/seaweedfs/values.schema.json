@@ -5,13 +5,7 @@
     "db": {
       "description": "Database Configuration",
       "type": "object",
-      "default": {
-        "replicas": 2,
-        "resources": {},
-        "resourcesPreset": "small",
-        "size": "10Gi",
-        "storageClass": ""
-      },
+      "default": {},
       "required": [
         "resources",
         "resourcesPreset"
@@ -92,14 +86,7 @@
     "filer": {
       "description": "Filer service configuration",
       "type": "object",
-      "default": {
-        "grpcHost": "",
-        "grpcPort": 443,
-        "replicas": 2,
-        "resources": {},
-        "resourcesPreset": "small",
-        "whitelist": {}
-      },
+      "default": {},
       "required": [
         "resources",
         "resourcesPreset"
@@ -183,11 +170,7 @@
     "master": {
       "description": "Master service configuration",
       "type": "object",
-      "default": {
-        "replicas": 3,
-        "resources": {},
-        "resourcesPreset": "small"
-      },
+      "default": {},
       "required": [
         "resources",
         "resourcesPreset"
@@ -255,11 +238,7 @@
     "s3": {
       "description": "S3 service configuration",
       "type": "object",
-      "default": {
-        "replicas": 2,
-        "resources": {},
-        "resourcesPreset": "small"
-      },
+      "default": {},
       "required": [
         "resources",
         "resourcesPreset"
@@ -332,14 +311,7 @@
     "volume": {
       "description": "Volume service configuration",
       "type": "object",
-      "default": {
-        "replicas": 2,
-        "resources": {},
-        "resourcesPreset": "small",
-        "size": "10Gi",
-        "storageClass": "",
-        "zones": {}
-      },
+      "default": {},
       "required": [
         "resources",
         "resourcesPreset"

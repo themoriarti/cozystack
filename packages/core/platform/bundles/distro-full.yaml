@@ -68,6 +68,12 @@ releases:
       disableTelemetry: true
   {{- end }}
 
+- name: lineage-controller-webhook
+  releaseName: lineage-controller-webhook
+  chart: cozy-lineage-controller-webhook
+  namespace: cozy-system
+  dependsOn: [cozystack-controller,cilium,cert-manager]
+
 - name: cert-manager
   releaseName: cert-manager
   chart: cozy-cert-manager
@@ -154,6 +160,13 @@ releases:
   namespace: cozy-clickhouse-operator
   optional: true
   dependsOn: [cilium,victoria-metrics-operator]
+
+- name: foundationdb-operator
+  releaseName: foundationdb-operator
+  chart: cozy-foundationdb-operator
+  namespace: cozy-foundationdb-operator
+  optional: true
+  dependsOn: [cilium,cert-manager]
 
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator

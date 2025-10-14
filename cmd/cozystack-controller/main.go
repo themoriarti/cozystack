@@ -38,6 +38,7 @@ import (
 
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
+	"github.com/cozystack/cozystack/internal/controller/dashboard"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -53,6 +54,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
+	utilruntime.Must(dashboard.AddToScheme(scheme))
 	utilruntime.Must(helmv2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -150,7 +152,12 @@ func main() {
 		// this setup is not recommended for production.
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	// Configure rate limiting for the Kubernetes client
+	config := ctrl.GetConfigOrDie()
+	config.QPS = 50.0  // Increased from default 5.0
+	config.Burst = 100 // Increased from default 10
+
+	mgr, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
