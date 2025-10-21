@@ -167,6 +167,20 @@
         "type": "string"
       }
     },
+    "subnets": {
+      "description": "Additional subnets",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Subnet name",
+            "type": "string"
+          }
+        }
+      }
+    },
     "systemDisk": {
       "description": "System disk configuration.",
       "type": "object",

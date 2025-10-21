@@ -18,6 +18,9 @@
 ## @field {string} storage - The size of the disk allocated for the virtual machine.
 ## @field {string} [storageClass] - StorageClass used to store the data.
 
+## @typedef {struct} Subnet - Additional subnets
+## @field {string} [name] - Subnet name
+
 ## @typedef {struct} GPU - GPU device configuration.
 ## @field {string} name - The name of the GPU resource to attach.
 
@@ -49,6 +52,14 @@ systemDisk:
   image: ubuntu
   storage: 5Gi
   storageClass: replicated
+
+## @param {[]Subnet} subnets - Additional subnets
+subnets: []
+## Example:
+## subnets:
+##   - name: subnet-84dbec17
+##   - name: subnet-aa8896b5
+##   - name: subnet-e9b97196
 
 ## @param {[]GPU} gpus - List of GPUs to attach.
 gpus: []
