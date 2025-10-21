@@ -21,6 +21,7 @@ spec:
       - CPUManager
       - GPU
       - VMExport
+    evictionStrategy: LiveMigrate
     vmRolloutStrategy: LiveUpdate
   workloadUpdateStrategy:
     workloadUpdateMethods:
