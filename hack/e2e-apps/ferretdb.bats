@@ -33,7 +33,6 @@ spec:
 EOF
   sleep 5
   kubectl -n tenant-test wait hr ferretdb-$name --timeout=100s --for=condition=ready
-  kubectl -n tenant-test wait job.batch postgres-$name-init-job --timeout=50s --for=condition=Complete
   timeout 40 sh -ec "until kubectl -n tenant-test get svc ferretdb-$name-postgres-r -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
   timeout 40 sh -ec "until kubectl -n tenant-test get svc ferretdb-$name-postgres-ro -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
   timeout 40 sh -ec "until kubectl -n tenant-test get svc ferretdb-$name-postgres-rw -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
@@ -42,5 +41,4 @@ EOF
   #timeout 120 sh -ec "until kubectl -n tenant-test get endpoints ferretdb-$name-postgres-ro -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   timeout 120 sh -ec "until kubectl -n tenant-test get endpoints ferretdb-$name-postgres-rw -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   kubectl -n tenant-test delete ferretdb.apps.cozystack.io $name
-  kubectl -n tenant-test delete job.batch/postgres-$name-init-job
 }
