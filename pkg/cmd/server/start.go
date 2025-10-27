@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	v1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
@@ -161,8 +162,33 @@ func (o *CozyServerOptions) Complete() error {
 
 	crdList := &v1alpha1.CozystackResourceDefinitionList{}
 
-	if err := o.Client.List(context.Background(), crdList); err != nil {
-		return fmt.Errorf("failed to list CozystackResourceDefinitions: %w", err)
+	// Retry with exponential backoff for at least 30 minutes
+	const maxRetryDuration = 30 * time.Minute
+	const initialDelay = time.Second
+	const maxDelay = 2 * time.Minute
+
+	startTime := time.Now()
+	delay := initialDelay
+
+	for {
+		err := o.Client.List(context.Background(), crdList)
+		if err == nil {
+			break
+		}
+
+		// Check if we've exceeded the maximum retry duration
+		if time.Since(startTime) >= maxRetryDuration {
+			return fmt.Errorf("failed to list CozystackResourceDefinitions after %v: %w", maxRetryDuration, err)
+		}
+
+		// Log the error and wait before retrying
+		fmt.Printf("Failed to list CozystackResourceDefinitions (retrying in %v): %v\n", delay, err)
+		time.Sleep(delay)
+
+		delay = time.Duration(float64(delay) * 1.5)
+		if delay > maxDelay {
+			delay = maxDelay
+		}
 	}
 
 	// Convert to ResourceConfig

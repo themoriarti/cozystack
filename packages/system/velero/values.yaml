@@ -6,14 +6,13 @@ velero:
       volumeMounts:
         - mountPath: /target
           name: plugins
-  # deployNodeAgent: true
+  deployNodeAgent: true
   configuration:
     # defaultVolumesToFsBackup: true
     backupStorageLocation: null
     volumeSnapshotLocation: null
     namespace: cozy-velero
     features: EnableCSI
-  kubectl:
-    image:
-      repository: docker.io/alpine/k8s
-      tag: 1.33.4
+    # Increase timeout for item operations to 24 hours to prevent timeouts
+    # during backups of very large volumes. The Velero default is 4 hours.
+    defaultItemOperationTimeout: 24h

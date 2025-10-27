@@ -142,16 +142,16 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 		createCustomColumnsOverride("stock-namespace-/v1/services", []any{
 			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "service", getColorForType("service"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("ClusterIP", ".spec.clusterIP"),
-			createStringColumn("LoadbalancerIP", ".spec.loadBalancerIP"),
+			createStringColumn("LoadbalancerIP", ".status.loadBalancer.ingress[0].ip"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
 		// Stock namespace core cozystack io v1alpha1 tenantmodules
 		createCustomColumnsOverride("stock-namespace-/core.cozystack.io/v1alpha1/tenantmodules", []any{
 			createCustomColumnWithJsonPath("Name", ".metadata.name", "M", "module", getColorForType("module"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/{reqsJsonPath[0]['.metadata.name']['-']}-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createStringColumn("Version", ".spec.version"),
-			createStringColumn("Status", ".status.phase"),
+			createReadyColumn(),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
+			createStringColumn("Version", ".status.version"),
 		}),
 
 		// Factory service details port mapping

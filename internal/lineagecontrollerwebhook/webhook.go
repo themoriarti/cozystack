@@ -5,24 +5,47 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/restmapper"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
 var (
 	NoAncestors       = fmt.Errorf("no managed apps found in lineage")
 	AncestryAmbiguous = fmt.Errorf("object ancestry is ambiguous")
 )
+
+const (
+	ManagedObjectKey = "internal.cozystack.io/managed-by-cozystack"
+	ManagerGroupKey  = "apps.cozystack.io/application.group"
+	ManagerKindKey   = "apps.cozystack.io/application.kind"
+	ManagerNameKey   = "apps.cozystack.io/application.name"
+)
+
+// getResourceSelectors returns the appropriate CozystackResourceDefinitionResources for a given GroupKind
+func (h *LineageControllerWebhook) getResourceSelectors(gk schema.GroupKind, crd *cozyv1alpha1.CozystackResourceDefinition) *cozyv1alpha1.CozystackResourceDefinitionResources {
+	switch {
+	case gk.Group == "" && gk.Kind == "Secret":
+		return &crd.Spec.Secrets
+	case gk.Group == "" && gk.Kind == "Service":
+		return &crd.Spec.Services
+	case gk.Group == "networking.k8s.io" && gk.Kind == "Ingress":
+		return &crd.Spec.Ingresses
+	default:
+		return nil
+	}
+}
 
 // SetupWithManager registers the handler with the webhook server.
 func (h *LineageControllerWebhook) SetupWithManagerAsWebhook(mgr ctrl.Manager) error {
@@ -34,13 +57,15 @@ func (h *LineageControllerWebhook) SetupWithManagerAsWebhook(mgr ctrl.Manager) e
 		return err
 	}
 
-	discoClient, err := discovery.NewDiscoveryClientForConfig(cfg)
+	httpClient, err := rest.HTTPClientFor(cfg)
 	if err != nil {
 		return err
 	}
 
-	cachedDisco := memory.NewMemCacheClient(discoClient)
-	h.mapper = restmapper.NewDeferredDiscoveryRESTMapper(cachedDisco)
+	h.mapper, err = apiutil.NewDynamicRESTMapper(cfg, httpClient)
+	if err != nil {
+		return err
+	}
 
 	h.initConfig()
 	// Register HTTP path -> handler.
@@ -73,7 +98,7 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 	labels, err := h.computeLabels(ctx, obj)
 	for {
 		if err != nil && errors.Is(err, NoAncestors) {
-			return admission.Allowed("object not managed by app")
+			break // not a problem, mark object as unmanaged
 		}
 		if err != nil && errors.Is(err, AncestryAmbiguous) {
 			warn = append(warn, "object ancestry ambiguous, using first ancestor found")
@@ -101,7 +126,7 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstructured.Unstructured) (map[string]string, error) {
 	owners := lineage.WalkOwnershipGraph(ctx, h.dynClient, h.mapper, h, o)
 	if len(owners) == 0 {
-		return nil, NoAncestors
+		return map[string]string{ManagedObjectKey: "false"}, NoAncestors
 	}
 	obj, err := owners[0].GetUnstructured(ctx, h.dynClient, h.mapper)
 	if err != nil {
@@ -117,7 +142,8 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 	}
 	labels := map[string]string{
 		// truncate apigroup to first 63 chars
-		"apps.cozystack.io/application.group": func(s string) string {
+		ManagedObjectKey: "true",
+		ManagerGroupKey: func(s string) string {
 			if len(s) < 63 {
 				return s
 			}
@@ -127,22 +153,24 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 			}
 			return s
 		}(gv.Group),
-		"apps.cozystack.io/application.kind": obj.GetKind(),
-		"apps.cozystack.io/application.name": obj.GetName(),
+		ManagerKindKey: obj.GetKind(),
+		ManagerNameKey: obj.GetName(),
 	}
-	if o.GetAPIVersion() != "v1" || o.GetKind() != "Secret" {
-		return labels, err
+	templateLabels := map[string]string{
+		"kind":      strings.ToLower(obj.GetKind()),
+		"name":      obj.GetName(),
+		"namespace": o.GetNamespace(),
 	}
 	cfg := h.config.Load().(*runtimeConfig)
 	crd := cfg.appCRDMap[appRef{gv.Group, obj.GetKind()}]
+	resourceSelectors := h.getResourceSelectors(o.GroupVersionKind().GroupKind(), crd)
 
-	// TODO: expand this to work with other resources than Secrets
-	labels["apps.cozystack.io/tenantresource"] = func(b bool) string {
+	labels[corev1alpha1.TenantResourceLabelKey] = func(b bool) string {
 		if b {
-			return "true"
+			return corev1alpha1.TenantResourceLabelValue
 		}
 		return "false"
-	}(matchLabelsToExcludeInclude(o.GetLabels(), crd.Spec.Secrets.Exclude, crd.Spec.Secrets.Include))
+	}(matchResourceToExcludeInclude(ctx, o.GetName(), templateLabels, o.GetLabels(), resourceSelectors))
 	return labels, err
 }
 

@@ -7,26 +7,23 @@ package tenantnamespace
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
-	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
-	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
@@ -50,21 +47,18 @@ var (
 )
 
 type REST struct {
-	core       corev1client.CoreV1Interface
-	authClient authorizationv1client.AuthorizationV1Interface
-	maxWorkers int
-	gvr        schema.GroupVersionResource
+	c   client.Client
+	w   client.WithWatch
+	gvr schema.GroupVersionResource
 }
 
 func NewREST(
-	coreCli corev1client.CoreV1Interface,
-	authCli authorizationv1client.AuthorizationV1Interface,
-	maxWorkers int,
+	c client.Client,
+	w client.WithWatch,
 ) *REST {
 	return &REST{
-		core:       coreCli,
-		authClient: authCli,
-		maxWorkers: maxWorkers,
+		c: c,
+		w: w,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -96,7 +90,8 @@ func (r *REST) List(
 	ctx context.Context,
 	_ *metainternal.ListOptions,
 ) (runtime.Object, error) {
-	nsList, err := r.core.Namespaces().List(ctx, metav1.ListOptions{})
+	nsList := &corev1.NamespaceList{}
+	err := r.c.List(ctx, nsList)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +120,8 @@ func (r *REST) Get(
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
-	ns, err := r.core.Namespaces().Get(ctx, name, *opts)
+	ns := &corev1.Namespace{}
+	err := r.c.Get(ctx, types.NamespacedName{Namespace: "", Name: name}, ns, &client.GetOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
@@ -135,14 +131,7 @@ func (r *REST) Get(
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
 			Kind:       "TenantNamespace",
 		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              ns.Name,
-			UID:               ns.UID,
-			ResourceVersion:   ns.ResourceVersion,
-			CreationTimestamp: ns.CreationTimestamp,
-			Labels:            ns.Labels,
-			Annotations:       ns.Annotations,
-		},
+		ObjectMeta: ns.ObjectMeta,
 	}, nil
 }
 
@@ -151,10 +140,11 @@ func (r *REST) Get(
 // -----------------------------------------------------------------------------
 
 func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch.Interface, error) {
-	nsWatch, err := r.core.Namespaces().Watch(ctx, metav1.ListOptions{
+	nsList := &corev1.NamespaceList{}
+	nsWatch, err := r.w.Watch(ctx, nsList, &client.ListOptions{Raw: &metav1.ListOptions{
 		Watch:           true,
 		ResourceVersion: opts.ResourceVersion,
-	})
+	}})
 	if err != nil {
 		return nil, err
 	}
@@ -271,74 +261,64 @@ func (r *REST) filterAccessible(
 	ctx context.Context,
 	names []string,
 ) ([]string, error) {
-	workers := int(math.Min(float64(r.maxWorkers), float64(len(names))))
-	type job struct{ name string }
-	type res struct {
-		name    string
-		allowed bool
-		err     error
+	u, ok := request.UserFrom(ctx)
+	if !ok {
+		return []string{}, fmt.Errorf("user missing in context")
 	}
-	jobs := make(chan job, workers)
-	out := make(chan res, workers)
-
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := range jobs {
-				ok, err := r.sar(ctx, j.name)
-				out <- res{j.name, ok, err}
-			}
-		}()
+	groups := make(map[string]struct{})
+	for _, group := range u.GetGroups() {
+		groups[group] = struct{}{}
 	}
-	go func() { wg.Wait(); close(out) }()
-
-	go func() {
-		for _, n := range names {
-			jobs <- job{n}
-		}
-		close(jobs)
-	}()
-
-	var allowed []string
-	for r := range out {
-		if r.err != nil {
-			klog.Errorf("SAR failed for %s: %v", r.name, r.err)
+	if _, ok = groups["system:masters"]; ok {
+		return names, nil
+	}
+	if _, ok = groups["cozystack-cluster-admin"]; ok {
+		return names, nil
+	}
+	nameSet := make(map[string]struct{})
+	for _, name := range names {
+		nameSet[name] = struct{}{}
+	}
+	rbs := &rbacv1.RoleBindingList{}
+	err := r.c.List(ctx, rbs)
+	if err != nil {
+		return []string{}, fmt.Errorf("failed to list rolebindings: %w", err)
+	}
+	allowedNameSet := make(map[string]struct{})
+	for i := range rbs.Items {
+		if _, ok := allowedNameSet[rbs.Items[i].Namespace]; ok {
 			continue
 		}
-		if r.allowed {
-			allowed = append(allowed, r.name)
+		if _, ok := nameSet[rbs.Items[i].Namespace]; !ok {
+			continue
+		}
+	subjectLoop:
+		for j := range rbs.Items[i].Subjects {
+			subj := rbs.Items[i].Subjects[j]
+			switch subj.Kind {
+			case "Group":
+				if _, ok = groups[subj.Name]; ok {
+					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
+					break subjectLoop
+				}
+			case "User":
+				if subj.Name == u.GetName() {
+					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
+					break subjectLoop
+				}
+			case "ServiceAccount":
+				if u.GetName() == fmt.Sprintf("system:serviceaccount:%s:%s", subj.Namespace, subj.Name) {
+					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
+					break subjectLoop
+				}
+			}
 		}
 	}
+	allowed := make([]string, 0, len(allowedNameSet))
+	for name := range allowedNameSet {
+		allowed = append(allowed, name)
+	}
 	return allowed, nil
-}
-
-func (r *REST) sar(ctx context.Context, ns string) (bool, error) {
-	u, ok := request.UserFrom(ctx)
-	if !ok || u == nil {
-		return false, fmt.Errorf("user missing in context")
-	}
-
-	sar := &authorizationv1.SubjectAccessReview{
-		Spec: authorizationv1.SubjectAccessReviewSpec{
-			User:   u.GetName(),
-			Groups: u.GetGroups(),
-			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Group:     "cozystack.io",
-				Resource:  "workloadmonitors",
-				Verb:      "get",
-				Namespace: ns,
-			},
-		},
-	}
-
-	rsp, err := r.authClient.SubjectAccessReviews().
-		Create(ctx, sar, metav1.CreateOptions{})
-	if err != nil {
-		return false, err
-	}
-	return rsp.Status.Allowed, nil
 }
 
 // -----------------------------------------------------------------------------

@@ -10,11 +10,11 @@ rules:
   resources:
   - secrets
   resourceNames:
-  - {{- if eq $oidcEnabled "true" -}}
-    kubeconfig-{{ .Release.Namespace }}
-    {{- else -}}
-    tenant-{{ .Release.Namespace }}
-    {{- end }}
+  {{- if eq $oidcEnabled "true" }}
+  - kubeconfig-{{ .Release.Namespace }}
+  {{- else }}
+  - {{ .Release.Namespace }}
+  {{- end }}
   verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding

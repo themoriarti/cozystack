@@ -2,6 +2,7 @@ kube-ovn:
   namespace: cozy-kubeovn
   func:
     ENABLE_NP: false
+    ENABLE_LB: false
   ipv4:
     POD_CIDR: "10.244.0.0/16"
     POD_GATEWAY: "10.244.0.1"
@@ -64,4 +65,4 @@ global:
   images:
     kubeovn:
       repository: kubeovn
-      tag: v1.14.5@sha256:4be1987a8893cdd77fd2b07486b21838650220a650c9adf7c52395405f48716c
+      tag: v1.14.5@sha256:af10da442a0c6dc7df47a0ef752e2eb5c247bb0b43069fdfcb2aa51511185ea2
