@@ -10,6 +10,9 @@
 ## @field {string} name - Disk name.
 ## @field {string} [bus] - Disk bus type (e.g. "sata").
 
+## @typedef {struct} Subnet - Additional subnets
+## @field {string} [name] - Subnet name
+
 ## @typedef {struct} GPU - GPU device configuration.
 ## @field {string} name - The name of the GPU resource to attach.
 
@@ -44,6 +47,14 @@ disks: []
 ## - name: example-system
 ## - name: example-data
 ##   bus: sata
+
+## @param {[]Subnet} subnets - Additional subnets
+subnets: []
+## Example:
+## subnets:
+##   - name: subnet-84dbec17
+##   - name: subnet-aa8896b5
+##   - name: subnet-e9b97196
 
 ## @param {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 gpus: []
