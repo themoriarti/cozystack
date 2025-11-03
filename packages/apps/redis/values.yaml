@@ -15,6 +15,9 @@
 ## @value xlarge
 ## @value 2xlarge
 
+##
+image: "redis:8.2.0"
+
 ## @param {int} replicas - Number of Redis replicas.
 replicas: 2
 
