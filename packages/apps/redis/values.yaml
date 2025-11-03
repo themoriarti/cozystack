@@ -15,7 +15,7 @@
 ## @value xlarge
 ## @value 2xlarge
 
-##
+## @param {string} image - Redis image in name:tag format
 image: "redis:8.2.0"
 
 ## @param {int} replicas - Number of Redis replicas.
