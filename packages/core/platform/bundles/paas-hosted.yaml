@@ -40,6 +40,10 @@ releases:
   chart: cozy-cozystack-api
   namespace: cozy-system
   dependsOn: [cozystack-controller]
+  values:
+    cozystackAPI:
+      localK8sAPIEndpoint:
+        enabled: false
 
 - name: cozystack-controller
   releaseName: cozystack-controller
