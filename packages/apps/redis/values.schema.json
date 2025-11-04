@@ -12,11 +12,6 @@
       "type": "boolean",
       "default": false
     },
-    "image": {
-      "description": "Redis image in name:tag format",
-      "type": "string",
-      "default": "redis:8.2.0"
-    },
     "replicas": {
       "description": "Number of Redis replicas.",
       "type": "integer",

@@ -15,7 +15,6 @@ Service utilizes the Spotahome Redis Operator for efficient management and orche
 
 | Name               | Description                                                                                                                     | Type       | Value         |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------- |
-| `image`            | Redis image in name:tag format                                                                                                  | `string`   | `redis:8.2.0` |
 | `replicas`         | Number of Redis replicas.                                                                                                       | `int`      | `2`           |
 | `resources`        | Explicit CPU and memory configuration for each Redis replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`          |
 | `resources.cpu`    | CPU available to each replica.                                                                                                  | `quantity` | `""`          |
