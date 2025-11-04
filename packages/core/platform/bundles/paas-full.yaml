@@ -76,6 +76,13 @@ releases:
   namespace: cozy-kubeovn
   dependsOn: [cilium,kubeovn]
 
+- name: multus
+  releaseName: multus
+  chart: cozy-multus
+  namespace: cozy-multus
+  privileged: true
+  dependsOn: [cilium,kubeovn]
+
 - name: cozy-proxy
   releaseName: cozystack
   chart: cozy-cozy-proxy
