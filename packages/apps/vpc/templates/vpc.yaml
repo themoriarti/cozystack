@@ -58,9 +58,9 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ $vpcId }}-subnets
+  name: {{ $.Release.Name }}-subnets
   labels:
-    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/vpcId: {{ $vpcId }}
     cozystack.io/tenantName: {{ $.Release.Namespace }}
 data:
   subnets: |
