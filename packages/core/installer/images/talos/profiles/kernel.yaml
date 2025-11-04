@@ -21,7 +21,6 @@ input:
     - imageRef: ghcr.io/siderolabs/qlogic-firmware:20250917@sha256:7094e5db6931a1b68240416b65ddc0f3b546bd9b8520e3cfb1ddebcbfc83e890
     - imageRef: ghcr.io/siderolabs/drbd:9.2.14-v1.11.3@sha256:4393756875751e2664a04e96c1ccff84c99958ca819dd93b46b82ad8f3b4be67
     - imageRef: ghcr.io/siderolabs/zfs:2.3.3-v1.11.3@sha256:3c0b34a760914980ac234e66f130d829e428018e46420b7bca33219b1cc2dd87
-    - imageRef: ghcr.io/siderolabs/lldpd:1.0.20@sha256:4c6370518f5b2e1f03214a6ed54778eaea663fda8850e3f4da174ed69b636172
 output:
   kind: kernel
   imageOptions: {}
