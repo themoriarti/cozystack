@@ -5,12 +5,12 @@ As the service evolves, it will provide more ways to isolate your workloads.
 
 ## Service details
 
-The service utilizes kube-ovn VPC and Subnet resources, which use ovn logical routers and logical switches under the hood.
-Currently every workload will have a connection to a default management network which will also have a default gateway, and the majority of traffic will be going through it.
-VPC subnets are for now an additional dedicated networking spaces.
+To function, the service requires kube-ovn and multus CNI to be present, so by default it will only work on `paas-full` bundle.
+Kube-ovn provides VPC and Subnet resources and performs isolation and networking maintenance such as DHCP. Under the hood it uses ovn virtual routers and virtual switches.
+Multus enables a multi-nic capability, so a pod or a VM could have two or more network interfaces.
 
-A VM or a pod may be connected to multiple secondary Subnets at once.
-Each secondary connection will be represented as an additional network interface.
+Currently every workload will have a connection to a default management network which will also have a default gateway, and the majority of traffic will go through it.
+VPC subnets are for now an additional dedicated networking spaces.
 
 ## Deployment notes
 
@@ -20,6 +20,8 @@ Subnet ip address space must not overlap with the default management network ip 
 Currently there are no fail-safe checks, however they are planned for the future.
 
 Different VPCs may have subnets with ovelapping ip address ranges.
+
+A VM or a pod may be connected to multiple secondary Subnets at once. Each secondary connection will be represented as an additional network interface.
 
 ## Parameters
 
