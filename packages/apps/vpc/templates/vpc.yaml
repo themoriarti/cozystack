@@ -63,10 +63,10 @@ metadata:
     cozystack.io/vpcId: {{ $vpcId }}
     cozystack.io/tenantName: {{ $.Release.Namespace }}
 data:
-  subnets: |
-    {{- range $subnetName, $subnetConfig := .Values.subnets }}
-    - subnetName: {{ $subnetName }}
-      subnetId: {{ print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $subnetName | sha256sum | trunc 8) }}
-      subnetCIDR: {{ $subnetConfig.cidr }}
-    {{- end }}
+  {{- range $subnetName, $subnetConfig := .Values.subnets }}
+  {{ $subnetName }}: |-
+    subnetName: {{ $subnetName }}
+    subnetId: {{ print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $subnetName | sha256sum | trunc 8) }}
+    subnetCIDR: {{ $subnetConfig.cidr }}
+  {{- end }}
 
