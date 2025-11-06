@@ -3,7 +3,7 @@ ARG NODE_VERSION=20.18.1
 FROM node:${NODE_VERSION}-alpine AS builder
 WORKDIR /src
 
-ARG COMMIT_REF=92906a7f21050cfb8e352f98d36b209c57844f63
+ARG COMMIT_REF=ba56271739505284aee569f914fc90e6a9c670da
 RUN wget -O- https://github.com/PRO-Robotech/openapi-ui-k8s-bff/archive/${COMMIT_REF}.tar.gz | tar xzf - --strip-components=1
 
 ENV PATH=/src/node_modules/.bin:$PATH
