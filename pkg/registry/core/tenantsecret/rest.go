@@ -278,7 +278,13 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 	for i := range list.Items {
 		out.Items = append(out.Items, *secretToTenant(&list.Items[i]))
 	}
-	sort.Slice(out.Items, func(i, j int) bool { return out.Items[i].Name < out.Items[j].Name })
+	sort.Slice(out.Items, func(i, j int) bool {
+		ii, jj := out.Items[i], out.Items[j]
+		if ii.Namespace == jj.Namespace {
+			return ii.Name < jj.Name
+		}
+		return ii.Namespace < jj.Namespace
+	})
 	return out, nil
 }
 
