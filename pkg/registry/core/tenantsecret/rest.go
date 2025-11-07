@@ -9,7 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -278,12 +278,16 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 	for i := range list.Items {
 		out.Items = append(out.Items, *secretToTenant(&list.Items[i]))
 	}
-	sort.Slice(out.Items, func(i, j int) bool {
-		ii, jj := out.Items[i], out.Items[j]
-		if ii.Namespace == jj.Namespace {
-			return ii.Name < jj.Name
+	slices.SortFunc(out.Items, func(a, b corev1alpha1.TenantSecret) int {
+		aKey := fmt.Sprintf("%s/%s", a.Namespace, a.Name)
+		bKey := fmt.Sprintf("%s/%s", b.Namespace, b.Name)
+		switch {
+		case aKey < bKey:
+			return -1
+		case aKey > bKey:
+			return 1
 		}
-		return ii.Namespace < jj.Namespace
+		return 0
 	})
 	return out, nil
 }
