@@ -174,6 +174,16 @@ resource maps.
 {{- end }}
 
 {{- define "cozy-lib.resources.flatten" -}}
+{{- /*
+This helper either outputs raw ResourceQuota fields (e.g., services.loadbalancers)
+as-is, or flattens sanitized resource maps into limits.* / requests.* keys.
+
+If ALL keys in the input are recognized quota keys (pods, services.*, etc.),
+the input is output directly as YAML. Otherwise, the input is treated as a
+resource map and processed through sanitize + flatten.
+
+Do not mix quota keys and resource keys in a single call.
+*/ -}}
 {{- $input := index . 0 -}}
 {{- $ctx := index . 1 -}}
 
