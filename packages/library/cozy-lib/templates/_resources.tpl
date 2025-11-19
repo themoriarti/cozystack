@@ -177,7 +177,6 @@ resource maps.
 {{- $input := index . 0 -}}
 {{- $ctx := index . 1 -}}
 
-{{- /* List of keys that should NOT be placed under limits.* / requests.* */ -}}
 {{- $rawQuotaKeys := list
 "pods"
 "services"
@@ -191,19 +190,26 @@ resource maps.
 "resourcequotas"
 -}}
 
-{{- /* Detect if this is a ResourceQuota map */ -}}
-{{- $isQuota := true -}}
+{{- $computeKeys := list
+"cpu"
+"memory"
+"ephemeral-storage"
+-}}
+
+{{- $hasCompute := false -}}
 {{- range $k, $v := $input }}
-{{- if not (has $k $rawQuotaKeys) }}
-{{- $isQuota = false -}}
+{{- if or (has $k $computeKeys)
+(hasPrefix "limits." $k)
+(hasPrefix "requests." $k) }}
+{{- $hasCompute = true -}}
 {{- end }}
 {{- end }}
 
+{{- $isQuota := not $hasCompute -}}
+
 {{- if $isQuota }}
-{{- /* Output as plain resource quotas */ -}}
 {{- $input | toYaml }}
 {{- else }}
-{{- /* Old behavior: flatten sanitized limits.* + requests.* */ -}}
 {{- $out := dict -}}
 {{- $res := include "cozy-lib.resources.sanitize" . | fromYaml -}}
 {{- range $section, $values := $res }}
@@ -216,4 +222,5 @@ resource maps.
 {{- end }}
 {{- $out | toYaml }}
 {{- end }}
+
 {{- end }}
