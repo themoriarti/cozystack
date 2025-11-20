@@ -206,22 +206,22 @@ Do not mix quota keys and resource keys in a single call.
 "ephemeral-storage"
 -}}
 
-{{- $hasCompute := false -}}
-{{- range $k, $v := $input }}
-{{- if or (has $k $computeKeys)
-(hasPrefix "limits." $k)
-(hasPrefix "requests." $k) }}
-{{- $hasCompute = true -}}
-{{- end }}
-{{- end }}
-
-{{- $isQuota := not $hasCompute -}}
-
-{{- if $isQuota }}
-{{- $input | toYaml }}
-{{- else }}
 {{- $out := dict -}}
-{{- $res := include "cozy-lib.resources.sanitize" . | fromYaml -}}
+{{- $computeResources := dict -}}
+{{- $quotaResources := dict -}}
+
+{{- range $k, $v := $input }}
+{{- if or (has $k $computeKeys) (hasPrefix "limits." $k) (hasPrefix "requests." $k) }}
+{{- $_ := set $computeResources $k $v }}
+{{- else if has $k $rawQuotaKeys }}
+{{- $_ := set $quotaResources $k $v }}
+{{- else }}
+{{- $_ := set $computeResources $k $v }}
+{{- end }}
+{{- end }}
+
+{{- if $computeResources }}
+{{- $res := include "cozy-lib.resources.sanitize" (list $computeResources (index . 1)) | fromYaml -}}
 {{- range $section, $values := $res }}
 {{- range $k, $v := $values }}
 {{- $key := printf "%s.%s" $section $k }}
@@ -230,7 +230,12 @@ Do not mix quota keys and resource keys in a single call.
 {{- end }}
 {{- end }}
 {{- end }}
-{{- $out | toYaml }}
 {{- end }}
+
+{{- range $k, $v := $quotaResources }}
+{{- $_ := set $out $k $v }}
+{{- end }}
+
+{{- $out | toYaml }}
 
 {{- end }}
