@@ -30,26 +30,28 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/cozystack/cozystack/pkg/apis/apps"
 	appsinstall "github.com/cozystack/cozystack/pkg/apis/apps/install"
-	coreinstall "github.com/cozystack/cozystack/pkg/apis/apps/install"
 	"github.com/cozystack/cozystack/pkg/apis/core"
+	coreinstall "github.com/cozystack/cozystack/pkg/apis/core/install"
 	"github.com/cozystack/cozystack/pkg/config"
 	cozyregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
 	tenantmodulestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantmodule"
 	tenantnamespacestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantnamespace"
 	tenantsecretstorage "github.com/cozystack/cozystack/pkg/registry/core/tenantsecret"
-	tenantsecretstablestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantsecretstable"
 )
 
 var (
 	// Scheme defines methods for serializing and deserializing API objects.
-	Scheme = runtime.NewScheme()
+	Scheme    = runtime.NewScheme()
+	mgrScheme = runtime.NewScheme()
 	// Codecs provides methods for retrieving codecs and serializers for specific
 	// versions and content types.
 	Codecs            = serializer.NewCodecFactory(Scheme)
@@ -58,18 +60,23 @@ var (
 )
 
 func init() {
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zap.Options{
+		Development: true,
+		// any other zap.Options tweaks
+	})))
+	klog.SetLogger(ctrl.Log.WithName("klog"))
 	appsinstall.Install(Scheme)
 	coreinstall.Install(Scheme)
 
 	// Register HelmRelease types.
-	if err := helmv2.AddToScheme(Scheme); err != nil {
+	if err := helmv2.AddToScheme(mgrScheme); err != nil {
 		panic(fmt.Errorf("Failed to add HelmRelease types to scheme: %w", err))
 	}
 
-	if err := corev1.AddToScheme(Scheme); err != nil {
+	if err := corev1.AddToScheme(mgrScheme); err != nil {
 		panic(fmt.Errorf("Failed to add core types to scheme: %w", err))
 	}
-	if err := rbacv1.AddToScheme(Scheme); err != nil {
+	if err := rbacv1.AddToScheme(mgrScheme); err != nil {
 		panic(fmt.Errorf("Failed to add RBAC types to scheme: %w", err))
 	}
 	// Add unversioned types.
@@ -135,7 +142,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 	}
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme: Scheme,
+		Scheme: mgrScheme,
 		Cache:  cache.Options{SyncPeriod: &syncPeriod},
 	})
 	if err != nil {
@@ -165,7 +172,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 	}
 
 	cli := mgr.GetClient()
-	watchCli, err := client.NewWithWatch(cfg, client.Options{Scheme: Scheme})
+	watchCli, err := client.NewWithWatch(cfg, client.Options{Scheme: mgrScheme})
 	if err != nil {
 		return nil, fmt.Errorf("failed to build watch client: %w", err)
 	}
@@ -176,9 +183,6 @@ func (c completedConfig) New() (*CozyServer, error) {
 	)
 	coreV1alpha1Storage["tenantsecrets"] = cozyregistry.RESTInPeace(
 		tenantsecretstorage.NewREST(cli, watchCli),
-	)
-	coreV1alpha1Storage["tenantsecretstables"] = cozyregistry.RESTInPeace(
-		tenantsecretstablestorage.NewREST(cli, watchCli),
 	)
 	coreV1alpha1Storage["tenantmodules"] = cozyregistry.RESTInPeace(
 		tenantmodulestorage.NewREST(cli, watchCli),

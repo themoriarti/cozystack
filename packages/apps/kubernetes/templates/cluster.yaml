@@ -147,7 +147,7 @@ spec:
     podAdditionalMetadata:
       labels:
         policy.cozystack.io/allow-to-etcd: "true"
-  replicas: 2
+  replicas: {{ .Values.controlPlane.replicas }}
   version: {{ include "kubernetes.versionMap" $ }}
 ---
 apiVersion: cozystack.io/v1alpha1
@@ -182,6 +182,33 @@ metadata:
 spec:
   template:
     spec:
+      files:
+      - path: /usr/bin/update-k8s.sh
+        owner: root:root
+        permissions: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          # Expected to be passed in via preKubeadmCommands
+          : "${KUBELET_VERSION:?KUBELET_VERSION must be set, e.g. v1.31.0}"
+
+          ARCH="$(uname -m)"
+          case "${ARCH}" in
+            x86_64) ARCH=amd64 ;;
+            aarch64) ARCH=arm64 ;;
+          esac
+
+          # Use your internal mirror here for real-world use.
+          BASE_URL="https://dl.k8s.io/release/${KUBELET_VERSION}/bin/linux/${ARCH}"
+
+          echo "Installing kubelet and kubeadm  ${KUBELET_VERSION} for ${ARCH}..."
+          curl -fsSL "${BASE_URL}/kubelet" -o /root/kubelet
+          curl -fsSL "${BASE_URL}/kubeadm" -o /root/kubeadm
+          chmod 0755 /root/kubelet
+          chmod 0755 /root/kubeadm
+          if /root/kubelet --version ; then mv /root/kubelet /usr/bin/kubelet ; fi
+          if /root/kubeadm version ; then mv /root/kubeadm /usr/bin/kubeadm ; fi
       diskSetup:
         filesystems:
         - device: /dev/vdb
@@ -205,6 +232,7 @@ spec:
         {{- end }}
       {{- end }}
       preKubeadmCommands:
+      - KUBELET_VERSION={{ include "kubernetes.versionMap" $}} /usr/bin/update-k8s.sh || true
       - sed -i 's|root:x:|root::|' /etc/passwd
       - systemctl stop containerd.service
       - mkdir -p /ephemeral/kubelet /ephemeral/containerd

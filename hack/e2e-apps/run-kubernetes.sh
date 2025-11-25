@@ -80,58 +80,41 @@ EOF
   # Wait for the machine deployment to scale to 2 replicas (timeout after 1 minute)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=1m --for=jsonpath='{.status.replicas}'=2
   # Get the admin kubeconfig and save it to a file
-  kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > tenantkubeconfig
+  kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > tenantkubeconfig-${test_name}
 
   # Update the kubeconfig to use localhost for the API server
-  yq -i ".clusters[0].cluster.server = \"https://localhost:${port}\"" tenantkubeconfig
+  yq -i ".clusters[0].cluster.server = \"https://localhost:${port}\"" tenantkubeconfig-${test_name}
 
 
   # Set up port forwarding to the Kubernetes API server for a 200 second timeout
-  bash -c 'timeout 200s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
+  bash -c 'timeout 300s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
-  timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 5; done'
+  timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 5; done'
 
   # Wait for the nodes to be ready (timeout after 2 minutes)
-  timeout 2m bash -c '
-    until [ "$(kubectl --kubeconfig tenantkubeconfig get nodes -o jsonpath="{.items[*].metadata.name}" | wc -w)" -eq 2 ]; do
-      sleep 3
+  timeout 3m bash -c '
+    until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes -o jsonpath="{.items[*].metadata.name}" | wc -w)" -eq 2 ]; do
+      sleep 2
     done
   '
   # Verify the nodes are ready
-  kubectl --kubeconfig tenantkubeconfig wait node --all --timeout=2m --for=condition=Ready
-  kubectl --kubeconfig tenantkubeconfig get nodes -o wide
+  kubectl --kubeconfig tenantkubeconfig-${test_name} wait node --all --timeout=2m --for=condition=Ready
+  kubectl --kubeconfig tenantkubeconfig-${test_name} get nodes -o wide
 
   # Verify the kubelet version matches what we expect
-  versions=$(kubectl --kubeconfig tenantkubeconfig get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}')
+  versions=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" \
+    get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}')
+  
   node_ok=true
-
-  case "$k8s_version" in
-    v1.32*)
-      echo "⚠️  TODO: Temporary stub — allowing nodes with v1.33 while k8s_version is v1.32"
-      ;;
-  esac
-
+  
   for v in $versions; do
-    case "$k8s_version" in
-      v1.32|v1.32.*)
-        case "$v" in
-          v1.32 | v1.32.* | v1.32-* | v1.33 | v1.33.* | v1.33-*)
-            ;;
-          *)
-            node_ok=false
-            break
-            ;;
-        esac
+    case "$v" in
+      "${k8s_version}" | "${k8s_version}".* | "${k8s_version}"-*)
+        # acceptable
         ;;
       *)
-        case "$v" in
-          "${k8s_version}" | "${k8s_version}".* | "${k8s_version}"-*)
-            ;;
-          *)
-            node_ok=false
-            break
-            ;;
-        esac
+        node_ok=false
+        break
         ;;
     esac
   done
