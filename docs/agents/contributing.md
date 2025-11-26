@@ -95,6 +95,83 @@ Clean up:
 rm /tmp/pr_body.md
 ```
 
+## Addressing AI Bot Reviewer Comments
+
+When the user asks to fix comments from AI bot reviewers (like Qodo, Copilot, etc.):
+
+### 1. Get PR Comments
+
+View all comments on the pull request:
+
+```bash
+gh pr view <PR-number> --comments
+```
+
+Or for the current branch:
+
+```bash
+gh pr view --comments
+```
+
+### 2. Review Each Comment Carefully
+
+**Important**: Do NOT blindly apply all suggestions. Each comment should be evaluated:
+
+- **Consider context** - Does the suggestion make sense for this specific case?
+- **Check project conventions** - Does it align with Cozystack patterns?
+- **Evaluate impact** - Will this improve code quality or introduce issues?
+- **Question validity** - AI bots can be wrong or miss context
+
+**When to apply:**
+- ✅ Legitimate bugs or security issues
+- ✅ Clear improvements to code quality
+- ✅ Better error handling or edge cases
+- ✅ Conformance to project conventions
+
+**When to skip:**
+- ❌ Stylistic preferences that don't match project style
+- ❌ Over-engineering simple code
+- ❌ Changes that break existing patterns
+- ❌ Suggestions that show misunderstanding of the code
+
+### 3. Apply Valid Fixes
+
+Make changes addressing the valid comments. Use your judgment.
+
+### 4. Leave Changes Uncommitted
+
+**Critical**: Do NOT commit or push the changes automatically.
+
+Leave the changes in the working directory so the user can:
+- Review the fixes
+- Decide whether to commit them
+- Make additional adjustments if needed
+
+```bash
+# After making changes, show status but DON'T commit
+git status
+git diff
+```
+
+The user will commit and push when ready.
+
+### Example Workflow
+
+```bash
+# Get PR comments
+gh pr view 1234 --comments
+
+# Review comments and identify valid ones
+# Make necessary changes to address valid comments
+# ... edit files ...
+
+# Show what was changed (but don't commit)
+git status
+git diff
+
+# Tell the user what was fixed and what was skipped
+```
+
 ## Git Permissions
 
 Request these permissions when needed:
