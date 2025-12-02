@@ -4,3 +4,5 @@ coredns:
     tag: v1.12.4
   replicaCount: 2
   k8sAppLabelOverride: kube-dns
+  service:
+    name: kube-dns
