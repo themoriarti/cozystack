@@ -230,8 +230,14 @@ func hasAllLineageLabels(o *unstructured.Unstructured) bool {
 	return true
 }
 
-// applySchedulingClass injects schedulerName and scheduling-class annotation
-// into Pods whose namespace carries the scheduler.cozystack.io/scheduling-class label.
+// applySchedulingClass injects schedulerName, scheduling-class annotation, and
+// scheduling-class label into Pods whose namespace carries the
+// scheduler.cozystack.io/scheduling-class label.
+//
+// The label (in addition to the annotation) lets SchedulingClass authors write
+// podAffinity rules whose labelSelector matches pods across applications that
+// share the same class.
+//
 // If the referenced SchedulingClass CR does not exist (e.g. the scheduler
 // package is not installed), the injection is silently skipped so that pods
 // are not left Pending.
@@ -282,6 +288,13 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	}
 	annotations[schedulerapi.SchedulingClassAnnotation] = schedulingClass
 	obj.SetAnnotations(annotations)
+
+	podLabels := obj.GetLabels()
+	if podLabels == nil {
+		podLabels = make(map[string]string)
+	}
+	podLabels[schedulerapi.SchedulingClassLabel] = schedulingClass
+	obj.SetLabels(podLabels)
 
 	return nil
 }
