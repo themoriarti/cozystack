@@ -53,6 +53,7 @@ jobs:
     # rc *tag*, not the staging branch, and derives it from its own validated
     # parse — see the checkout comment in that job.)
     outputs:
+      rc_tag: ${{ steps.parse.outputs.rc_tag }}
       stable_tag: ${{ steps.parse.outputs.stable_tag }}
       stable_version: ${{ steps.parse.outputs.stable_version }}
       stable_branch: ${{ steps.parse.outputs.stable_branch }}
@@ -321,6 +322,10 @@ jobs:
           RC_TAG: ${{ inputs.rc_tag }}
         run: |
           set -euo pipefail
+          # Trim, matching the github-script parse in `promote` (RC_TAG.trim()).
+          # Without this a dispatch input with a stray space passes there and
+          # fails here — silently costing the changelog while the promotion runs on.
+          RC_TAG="$(printf '%s' "${RC_TAG}" | tr -d '[:space:]')"
           if [[ ! "${RC_TAG}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-rc\.([0-9]+)$ ]]; then
             echo "::error::rc_tag '${RC_TAG}' must match 'vX.Y.Z-rc.N'"
             exit 1
@@ -354,6 +359,43 @@ jobs:
           fetch-tags: true
           token: ${{ steps.app-token-read.outputs.token }}
           persist-credentials: false
+
+      # The agent reads docs/agents/changelog.md from the WORKING TREE, which is
+      # the rc tag — a commit that predates this workflow. Every rc cut before
+      # this change carries the old §2, listing only two valid configurations and
+      # instructing the agent to STOP on anything else. A detached rc-tag checkout
+      # is exactly that "anything else", so a compliant agent would refuse to
+      # generate, silently, on every promotion of an existing rc.
+      #
+      # Overlay the current instructions from the ref this workflow was dispatched
+      # from. The changelog process is repo-level policy, not release content, so
+      # taking it from the dispatch ref rather than the tag is correct in its own
+      # right — the tag pins what was BUILT, not how we document it today.
+      #
+      # Best-effort: if the overlay fails the agent falls back to the tag's copy
+      # and, at worst, declines to generate — the degraded path, not a wedge.
+      - name: Refresh agent instructions from the dispatch ref
+        continue-on-error: true
+        env:
+          DISPATCH_REF: ${{ github.ref_name }}
+        run: |
+          set -eu
+          # hack/validate-changelog.sh is overlaid for the same reason: an rc tag
+          # cut before this workflow landed does not carry it, and the Verify step
+          # below would then die on "command not found".
+          FILES="docs/agents/changelog.md hack/validate-changelog.sh"
+          # shellcheck disable=SC2086
+          if git fetch -q origin "${DISPATCH_REF}" 2>/dev/null \
+             && git checkout -q FETCH_HEAD -- $FILES 2>/dev/null; then
+            echo "✅ Overlaid agent instructions + validator from ${DISPATCH_REF}."
+          # shellcheck disable=SC2086
+          elif git fetch -q origin main 2>/dev/null \
+             && git checkout -q FETCH_HEAD -- $FILES 2>/dev/null; then
+            echo "✅ Overlaid agent instructions + validator from main."
+          else
+            echo "::warning::Could not refresh docs/agents/changelog.md and hack/validate-changelog.sh; the agent will read the rc tag's copy, which may predate the promotion configuration in §2 and cause it to decline generation."
+          fi
+          chmod +x hack/validate-changelog.sh 2>/dev/null || true
 
       # Skip generation when the changelog is already present in the rc tree — a
       # maintainer who wrote it by hand (or an earlier dispatch) has already
@@ -399,40 +441,36 @@ jobs:
           RC_TAG: ${{ steps.parse.outputs.rc_tag }}
         run: |
           copilot \
-            --prompt "Generate the release changelog for the upcoming stable release v${STABLE_VERSION}, which is being promoted from the release candidate ${RC_TAG}. The repository is checked out in detached HEAD at the ${RC_TAG} tag — the 'promotion' configuration in section 2 of docs/agents/changelog.md. IMPORTANT: the v${STABLE_VERSION} tag does NOT exist yet; it is created only after the promotion PR merges. Use ${RC_TAG} as the upper bound in every git command (for example 'git log v<previous>..${RC_TAG}'), never HEAD. Write the file as docs/changelogs/v${STABLE_VERSION}.md and use v${STABLE_VERSION} — not ${RC_TAG} — in the header, in the 'Full Changelog' link, and in the trailing release-link comment. Follow the instructions in @docs/agents/changelog.md exactly, including the 'Scope and boundaries' section at the top. Your deliverable is the single file docs/changelogs/v${STABLE_VERSION}.md — write it and exit; this workflow handles committing and opening the PR." \
+            --prompt "Generate the release changelog for the upcoming stable release v${STABLE_VERSION}, which is being promoted from the release candidate ${RC_TAG}. The repository is checked out in detached HEAD at the ${RC_TAG} tag — the 'promotion' configuration in section 2 of docs/agents/changelog.md. IMPORTANT: the v${STABLE_VERSION} tag does NOT exist yet; it is created only after the promotion PR merges. Use ${RC_TAG} as the upper bound in every git command (for example 'git log v<previous>..${RC_TAG}'), never HEAD. Write the file as docs/changelogs/v${STABLE_VERSION}.md and use v${STABLE_VERSION} — not ${RC_TAG} — in the header, in the 'Full Changelog' link, and in the leading release-link comment (the HTML comment at the very top of the file). Follow the instructions in @docs/agents/changelog.md exactly, including the 'Scope and boundaries' section at the top. Your deliverable is the single file docs/changelogs/v${STABLE_VERSION}.md — write it and exit; this workflow handles committing and opening the PR." \
             --allow-all-tools --allow-all-paths < /dev/null
 
       # Structural validation, not just "non-empty". The AI step is allowed to
       # fail, and a run that dies partway (timeout, quota exhaustion mid-stream)
-      # can leave a fragment or a few bytes of whitespace behind. A bare `-s`
-      # test would call that present, commit it, advertise it as valid in the PR
-      # body, and finalize would publish it verbatim as the release notes. Assert
-      # the markers a real changelog always has instead; anything failing them is
-      # treated exactly like "not generated" and takes the degraded path.
+      # can leave a fragment behind. A bare `-s` test would call that present,
+      # commit it, advertise it as valid in the PR body, and finalize would
+      # publish it verbatim as the release notes.
+      #
+      # The predicates live in hack/validate-changelog.sh so they can be tested
+      # directly against real shipped changelogs — an earlier inline version of
+      # this check asserted a `# Cozystack vX.Y.Z` header and a 20-line floor,
+      # both of which reject every PATCH changelog in the tree (they use
+      # `# vX.Y.Z (date)`, and v1.5.1 is a complete 19-line release). That threw
+      # away good output and told the operator generation had failed.
+      #
+      # A rejected changelog is treated exactly like "not generated": warn and
+      # take the degraded path, never fail the job — generation is non-blocking.
       - name: Verify changelog
         id: changelog_status
         env:
           STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
         run: |
-          CL="docs/changelogs/v${STABLE_VERSION}.md"
-          fail() {
+          if REASON="$(hack/validate-changelog.sh "docs/changelogs/v${STABLE_VERSION}.md" "${STABLE_VERSION}" 2>&1)"; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "✅ ${REASON}"
+          else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Changelog not usable ($1). The promote PR will open WITHOUT a changelog — commit docs/changelogs/v${STABLE_VERSION}.md to the PR branch before merging, or the published release will have empty notes."
-            exit 0
-          }
-          [ -f "$CL" ] || fail "file absent"
-          [ -s "$CL" ] || fail "file empty"
-          # Non-whitespace content
-          grep -q '[^[:space:]]' "$CL" || fail "file is only whitespace"
-          # A truncated stream usually loses the tail, so check both ends.
-          grep -qE "^# Cozystack v${STABLE_VERSION}\b" "$CL" \
-            || fail "missing '# Cozystack v${STABLE_VERSION}' header"
-          grep -qF "compare/" "$CL" \
-            || fail "missing the Full Changelog compare link (likely truncated)"
-          LINES=$(wc -l < "$CL")
-          [ "$LINES" -ge 20 ] || fail "only ${LINES} lines — implausibly short for a release changelog"
-          echo "present=true" >> "$GITHUB_OUTPUT"
-          echo "✅ $CL validated (${LINES} lines)."
+            echo "::warning::Changelog not usable (${REASON}). The promote PR will open WITHOUT a changelog — commit docs/changelogs/v${STABLE_VERSION}.md to the PR branch before merging, or the published release will have empty notes."
+          fi
 
       # Hand the file to `open-pr`, which owns every write to the staging branch.
       - name: Upload changelog artifact
@@ -490,29 +528,86 @@ jobs:
       # hand-written by a maintainer, or carried over from an earlier dispatch by
       # `promote`'s preserve step — and must win over a fresh AI run. Without this
       # check the artifact download below would silently overwrite human edits.
+      # The staging branch derives from the rc tree, so on any rc cut before this
+      # workflow landed it carries no hack/validate-changelog.sh and the checks
+      # below would die on "command not found" — taking the promote PR with them.
+      # Overlay it from the dispatch ref, exactly as the changelog job does.
+      - name: Ensure the changelog validator is present
+        continue-on-error: true
+        env:
+          DISPATCH_REF: ${{ github.ref_name }}
+        run: |
+          set -u
+          if [ -x hack/validate-changelog.sh ]; then
+            echo "✅ Validator already present on the staging branch."
+          elif git fetch -q origin "${DISPATCH_REF}" 2>/dev/null \
+               && git checkout -q FETCH_HEAD -- hack/validate-changelog.sh 2>/dev/null; then
+            echo "✅ Overlaid hack/validate-changelog.sh from ${DISPATCH_REF}."
+          elif git fetch -q origin main 2>/dev/null \
+               && git checkout -q FETCH_HEAD -- hack/validate-changelog.sh 2>/dev/null; then
+            echo "✅ Overlaid hack/validate-changelog.sh from main."
+          else
+            echo "::warning::Could not obtain hack/validate-changelog.sh; changelog validation will fail closed and the PR will open without one."
+          fi
+          chmod +x hack/validate-changelog.sh 2>/dev/null || true
+
+      # Validated with the same script the changelog job uses, not a bare `-s`.
+      # A pre-existing file reaches here by two routes that skip generation
+      # entirely — hand-written into the rc tree, or preserved by `promote` across
+      # the force-push — so nothing else has checked it. Treating "non-empty" as
+      # "good" would let a truncated hand-commit be advertised with ✅ and
+      # published verbatim as the release body.
       - name: Check for an existing changelog on the branch
         id: existing
         env:
           STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
         run: |
-          if [ -s "docs/changelogs/v${STABLE_VERSION}.md" ]; then
+          CL="docs/changelogs/v${STABLE_VERSION}.md"
+          if [ ! -s "$CL" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          elif REASON="$(hack/validate-changelog.sh "$CL" "${STABLE_VERSION}" 2>&1)"; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "✅ Changelog already on the staging branch — keeping it, not overwriting with generated output."
+            echo "✅ Changelog already on the staging branch and valid — keeping it, not overwriting with generated output. ${REASON}"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::A changelog is on the staging branch but is not usable (${REASON}). Falling back to this run's generated output if there is one."
           fi
 
+      # continue-on-error: a transient artifact-transfer failure must not abort
+      # the job before the PR is opened. Without it the download step is fatal,
+      # and the promotion ends with a pushed staging branch, a drafted release and
+      # no promote PR — the same wedge the job-level `if:` exists to prevent, one
+      # step further down.
       - name: Download changelog artifact
+        id: download
         if: needs.changelog.outputs.present == 'true' && steps.existing.outputs.present == 'false'
+        continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: changelog-v${{ needs.promote.outputs.stable_version }}
           path: docs/changelogs
 
+      # Re-establish ground truth from the filesystem rather than trusting the
+      # upstream job's output: the artifact may have failed to transfer, and what
+      # actually matters from here on is whether a usable file is on disk.
+      - name: Confirm changelog on disk
+        id: usable
+        env:
+          STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
+        run: |
+          CL="docs/changelogs/v${STABLE_VERSION}.md"
+          if [ -s "$CL" ] && REASON="$(hack/validate-changelog.sh "$CL" "${STABLE_VERSION}" 2>&1)"; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "✅ ${REASON}"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No usable changelog available for v${STABLE_VERSION} — the promote PR will open without one."
+          fi
+
       # Only when the file came from the artifact. A changelog already on the
       # branch was committed by `promote` (preserve path) and needs no second commit.
       - name: Commit changelog to staging branch
-        if: needs.changelog.outputs.present == 'true' && steps.existing.outputs.present == 'false'
+        if: steps.usable.outputs.present == 'true' && steps.existing.outputs.present == 'false'
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
           STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
@@ -537,12 +632,14 @@ jobs:
           STABLE_BRANCH: ${{ needs.promote.outputs.stable_branch }}
           STABLE_TAG: ${{ needs.promote.outputs.stable_tag }}
           STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
-          RC_TAG: ${{ inputs.rc_tag }}
+          # From promote's validated parse, not raw dispatch input — the rc tag is
+          # pattern-checked exactly once and every consumer reads that result.
+          RC_TAG: ${{ needs.promote.outputs.rc_tag }}
           LINE: ${{ needs.promote.outputs.line }}
           # True when the PR carries a changelog by EITHER route: preserved on the
           # branch, or generated this run. The PR body must reflect what merged,
           # not just what the AI produced.
-          CHANGELOG_PRESENT: ${{ (steps.existing.outputs.present == 'true' || needs.changelog.outputs.present == 'true') && 'true' || 'false' }}
+          CHANGELOG_PRESENT: ${{ (steps.existing.outputs.present == 'true' || steps.usable.outputs.present == 'true') && 'true' || 'false' }}
         run: |
           # Target the maintenance line if it exists, else main.
           BASE=main
@@ -561,9 +658,25 @@ jobs:
           BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. The tree pins the rc's images by digest. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit, retags those digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishes the stable cozy-installer chart, and publishes the release — so the stable artifacts are bit-for-bit the rc that passed e2e. The \`full-e2e\` label forces the full suite on this PR. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit.
 
           ${CHANGELOG_NOTE}"
-          if gh pr view "${STABLE_BRANCH}" >/dev/null 2>&1; then
-            echo "PR already open for ${STABLE_BRANCH}; refreshing body."
-            gh pr edit "${STABLE_BRANCH}" --body "$BODY"
+          # `gh pr view <branch>` resolves CLOSED PRs too. After a promote PR was
+          # closed unmerged and the rc re-dispatched, editing that dead PR would
+          # "succeed" and no new PR would ever be opened — the promotion reports
+          # success and produces nothing. Branch on the state explicitly.
+          PR_STATE="$(gh pr view "${STABLE_BRANCH}" --json state --jq .state 2>/dev/null || echo "")"
+          if [ "${PR_STATE}" = "OPEN" ]; then
+            # Refresh only while the body is still the one this workflow wrote.
+            # docs/release.md tells reviewers to paste upstream breaking-change
+            # notes into this body before merge; a re-dispatch that overwrites it
+            # would destroy that with no trace and no way to recover it.
+            CURRENT="$(gh pr view "${STABLE_BRANCH}" --json body --jq .body 2>/dev/null || echo "")"
+            if [ "${CURRENT}" = "${BODY}" ]; then
+              echo "PR already open for ${STABLE_BRANCH} with an identical body; nothing to do."
+            elif printf '%s' "${CURRENT}" | grep -qF 'Promotes `'; then
+              echo "::notice::Refreshing the body of the open PR for ${STABLE_BRANCH}."
+              gh pr edit "${STABLE_BRANCH}" --body "$BODY"
+            else
+              echo "::warning::The open PR for ${STABLE_BRANCH} has a hand-edited body — leaving it untouched. Changelog status this run: ${CHANGELOG_PRESENT}."
+            fi
           else
             gh pr create --base "$BASE" --head "${STABLE_BRANCH}" \
               --title "chore(release): promote ${RC_TAG} -> ${STABLE_TAG}" \

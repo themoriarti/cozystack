@@ -22,6 +22,13 @@
 #   7. promote preserves a changelog across the staging-branch force-push.
 #   8. The finalize trigger has no paths filter that a docs-only promote PR would
 #      trip over.
+#   9-11. The validator accepts every changelog of the current era (both header
+#      conventions, including a 19-line patch release) and rejects unusable output.
+#   12. The workflow calls the validator script rather than reimplementing it.
+#   13. The agent instructions and the validator are overlaid from the dispatch
+#      ref, because the rc tag's copies predate this workflow.
+#   14. open-pr survives an artifact transfer failure and keys off the file on disk.
+#   15. A pre-existing changelog is validated, not merely non-empty.
 #
 # WHAT THIS DOES NOT CHECK, so a green tick is not mistaken for a working release:
 #
@@ -98,22 +105,44 @@ job_block() {
   block="$(job_block changelog "$PROMOTE")"
   [ -n "$block" ] || { echo "Could not locate the changelog job in $PROMOTE" >&2; exit 1; }
 
-  count="$(printf '%s\n' "$block" | grep -c 'continue-on-error: true' || true)"
-  [ "$count" -eq 1 ] || {
-    echo "Expected exactly 1 'continue-on-error: true' in the changelog job, found $count." >&2
-    echo "Only the 'Generate changelog using AI' step may fail silently — on any other" >&2
-    echo "step it would let an unvalidated or missing changelog through unnoticed." >&2
+  # Two steps may legitimately fail without failing the job, and only two:
+  #
+  #   Generate changelog using AI            — the whole point of non-blocking.
+  #   Refresh agent instructions ...          — best-effort overlay; on failure the
+  #                                             agent falls back to the tag's copy.
+  #
+  # Anywhere else it would let an unvalidated or missing changelog through as if
+  # it were fine — in particular on Verify, which is the gate that decides whether
+  # a fragment becomes the release body.
+  allowed="Generate changelog using AI|Refresh agent instructions from the dispatch ref"
+
+  offenders="$(printf '%s\n' "$block" | awk -v allowed="$allowed" '
+    /^      - name: / {
+      name = $0
+      sub(/^      - name: /, "", name)
+      ok = (name ~ "^(" allowed ")$")
+      next
+    }
+    /^        continue-on-error: true$/ { if (!ok) print name }
+  ')"
+
+  [ -z "$offenders" ] || {
+    echo "These changelog-job steps carry continue-on-error but must not:" >&2
+    printf '  %s\n' "$offenders" >&2
+    echo "Allowing them to fail silently would let an unvalidated or absent changelog" >&2
+    echo "be advertised as valid and published as the release body." >&2
     exit 1
   }
 
-  # The single occurrence must sit in the AI step, not somewhere else.
+  # And the AI step must actually still have it, or generation is blocking again.
   ai_step="$(printf '%s\n' "$block" | awk '
     /^      - name: Generate changelog using AI$/ { inside = 1; next }
     /^      - name: / { inside = 0 }
     inside')"
   [ -n "$ai_step" ] || { echo "Could not locate the 'Generate changelog using AI' step" >&2; exit 1; }
   printf '%s\n' "$ai_step" | grep -q 'continue-on-error: true' || {
-    echo "'Generate changelog using AI' is not the step carrying continue-on-error." >&2
+    echo "'Generate changelog using AI' no longer carries continue-on-error —" >&2
+    echo "a Copilot outage would now block the release." >&2
     exit 1
   }
 }
@@ -246,4 +275,247 @@ job_block() {
     exit 1
   }
   return 0
+}
+
+# 9. The validator is a script, not inline YAML, precisely so these tests can run
+#    it. An earlier inline version asserted a `# Cozystack vX.Y.Z` header and a
+#    20-line floor — both of which reject every PATCH changelog in the tree, and
+#    the suite at the time was fully green while that shipped. Feed it the real
+#    files and let them be the specification.
+#
+#    Scope note: only v1.3.0+ is asserted. Changelogs before that predate the
+#    current documented process — v0.31 through v1.2.x carry no H1 at all — and
+#    the validator never sees them, since it only ever runs on freshly generated
+#    output. Holding it to a form the process no longer produces would be testing
+#    history, not behaviour.
+@test "the changelog validator accepts every changelog of the current era" {
+  [ -x "$REPO_ROOT/hack/validate-changelog.sh" ] || {
+    echo "hack/validate-changelog.sh missing or not executable" >&2; exit 1; }
+
+  checked=0
+  rejected=""
+  for f in "$REPO_ROOT"/docs/changelogs/v1.[3-9]*.md; do
+    [ -f "$f" ] || continue
+    base="$(basename "$f" .md)"
+    version="${base#v}"
+    checked=$((checked + 1))
+    if ! "$REPO_ROOT/hack/validate-changelog.sh" "$f" "$version" >/dev/null 2>&1; then
+      reason="$("$REPO_ROOT/hack/validate-changelog.sh" "$f" "$version" 2>&1 || true)"
+      rejected="$rejected
+  $base: $reason"
+    fi
+  done
+
+  # Anti-vacuum: a glob that matches nothing would pass silently.
+  [ "$checked" -ge 10 ] || {
+    echo "Only $checked changelog(s) checked; expected at least 10. The glob broke" >&2
+    echo "and this test is verifying nothing." >&2
+    exit 1
+  }
+
+  [ -z "$rejected" ] || {
+    echo "The validator rejects shipped changelogs — it would discard good AI output" >&2
+    echo "and mislabel the promote PR as a generation failure:$rejected" >&2
+    exit 1
+  }
+}
+
+# 10. Both header conventions are live: minors use `# Cozystack vX.Y.Z`, patches
+#     use `# vX.Y.Z (date)`. Pin one of each so a future tightening cannot drop
+#     the patch form, which is the more common release by roughly 5:1.
+@test "the validator accepts both the minor and patch header conventions" {
+  minor="$REPO_ROOT/docs/changelogs/v1.5.0.md"   # '# Cozystack v1.5.0'
+  patch="$REPO_ROOT/docs/changelogs/v1.5.1.md"   # '# v1.5.1 (2026-06-23)', 19 lines
+
+  for pair in "$minor:1.5.0" "$patch:1.5.1"; do
+    f="${pair%:*}"; v="${pair##*:}"
+    [ -f "$f" ] || { echo "fixture $f is gone; pick another of the same shape" >&2; exit 1; }
+    "$REPO_ROOT/hack/validate-changelog.sh" "$f" "$v" >/dev/null 2>&1 || {
+      echo "Validator rejected $(basename "$f") — a legitimate, shipped changelog." >&2
+      "$REPO_ROOT/hack/validate-changelog.sh" "$f" "$v" 2>&1 >/dev/null | sed 's/^/    /' >&2
+      exit 1
+    }
+  done
+
+  # v1.5.1 is 19 lines. Any line-count floor at 20 or above silently rejects it.
+  lines="$(wc -l < "$patch" | tr -d ' ')"
+  [ "$lines" -lt 25 ] || {
+    echo "v1.5.1 is now $lines lines — it was the short-patch fixture precisely" >&2
+    echo "because it is 19. Pick a genuinely short changelog instead." >&2
+    exit 1
+  }
+}
+
+# 11. The other half of the contract: what must be REJECTED. Without these the
+#     validator could degenerate to `exit 0` and tests 9 and 10 would still pass.
+@test "the changelog validator rejects unusable output" {
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+
+  printf '   \n\n  \n' > "$tmp/whitespace.md"
+  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/whitespace.md" 1.6.0 >/dev/null 2>&1 || {
+    echo "Validator accepted a whitespace-only file — it would publish as blank release notes." >&2
+    exit 1
+  }
+
+  : > "$tmp/empty.md"
+  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/empty.md" 1.6.0 >/dev/null 2>&1 || {
+    echo "Validator accepted an empty file." >&2; exit 1; }
+
+  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/absent.md" 1.6.0 >/dev/null 2>&1 || {
+    echo "Validator accepted a nonexistent file." >&2; exit 1; }
+
+  # Truncated mid-stream: head intact, tail (the compare link) lost. This is the
+  # realistic AI failure — a timeout or quota cutoff partway through the write.
+  head -8 "$REPO_ROOT/docs/changelogs/v1.5.1.md" > "$tmp/truncated.md"
+  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/truncated.md" 1.5.1 >/dev/null 2>&1 || {
+    echo "Validator accepted a truncated changelog — a fragment would be published" >&2
+    echo "verbatim as the release body." >&2
+    exit 1
+  }
+
+  # Right shape, wrong version: a stale file left by a previous promotion, or a
+  # changelog generated against the rc tag instead of the stable one.
+  ! "$REPO_ROOT/hack/validate-changelog.sh" "$REPO_ROOT/docs/changelogs/v1.5.1.md" 1.6.0 >/dev/null 2>&1 || {
+    echo "Validator accepted v1.5.1's changelog as v1.6.0's release body." >&2
+    exit 1
+  }
+}
+
+# 12. The workflow must actually call the script. Keeping the predicates in a
+#     tested script helps nothing if the step quietly reverts to an inline check.
+@test "promote-rc calls the changelog validator script" {
+  block="$(job_block changelog "$PROMOTE")"
+  printf '%s\n' "$block" | grep -q 'hack/validate-changelog.sh' || {
+    echo "The Verify changelog step no longer calls hack/validate-changelog.sh." >&2
+    echo "An inline reimplementation would not be covered by tests 9-11." >&2
+    exit 1
+  }
+  # And a rejected changelog must not fail the job — generation is non-blocking.
+  printf '%s\n' "$block" | grep -q "present=false" || {
+    echo "The Verify changelog step no longer has a present=false path; a rejected" >&2
+    echo "changelog would fail the job instead of degrading gracefully." >&2
+    exit 1
+  }
+}
+
+# 13. The agent reads docs/agents/changelog.md from the WORKING TREE, which is the
+#     rc tag — a commit that predates this workflow. Every rc cut before this
+#     change carries the old §2, which lists only two valid configurations and
+#     tells the agent to STOP on anything else; a detached rc-tag checkout is
+#     exactly that. Without the overlay a compliant agent declines to generate on
+#     every promotion of an existing rc, silently. hack/validate-changelog.sh is
+#     absent from those trees for the same reason, and the Verify step would then
+#     die on "command not found".
+#
+#     Asserting the doc's content on the current branch (test 5) is necessary but
+#     NOT sufficient — that copy is not the one the agent reads.
+@test "promote-rc overlays the agent instructions and validator from the dispatch ref" {
+  block="$(job_block changelog "$PROMOTE")"
+
+  overlay="$(printf '%s\n' "$block" | awk '
+    /^      - name: Refresh agent instructions from the dispatch ref$/ { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside')"
+  [ -n "$overlay" ] || {
+    echo "The changelog job has no step refreshing docs/agents/changelog.md from the" >&2
+    echo "dispatch ref. Promoting any rc tagged before this change would present the" >&2
+    echo "agent with instructions that reject its own checkout state." >&2
+    exit 1
+  }
+
+  printf '%s\n' "$overlay" | grep -q 'docs/agents/changelog.md' || {
+    echo "The overlay step no longer refreshes docs/agents/changelog.md." >&2; exit 1; }
+  printf '%s\n' "$overlay" | grep -q 'hack/validate-changelog.sh' || {
+    echo "The overlay step no longer refreshes hack/validate-changelog.sh — the Verify" >&2
+    echo "step would fail with 'command not found' on an older rc tree." >&2
+    exit 1
+  }
+  printf '%s\n' "$overlay" | grep -q 'continue-on-error: true' || {
+    echo "The overlay step is fatal. A transient fetch failure would wedge the" >&2
+    echo "changelog job instead of degrading to the tag's own copy." >&2
+    exit 1
+  }
+
+  # open-pr checks out the staging branch, which derives from the same rc tree.
+  open_block="$(job_block open-pr "$PROMOTE")"
+  printf '%s\n' "$open_block" | grep -q 'Ensure the changelog validator is present' || {
+    echo "open-pr does not ensure hack/validate-changelog.sh exists. Its validation" >&2
+    echo "steps would fail on a staging branch derived from an older rc tree, and" >&2
+    echo "take the promote PR down with them." >&2
+    exit 1
+  }
+}
+
+# 14. The non-blocking guarantee has to survive the whole job, not just the
+#     job-level `if:`. A fatal artifact download would stop open-pr before the PR
+#     step — the same wedge, one step further down — and the PR-body/commit
+#     decisions must key off what is actually on disk rather than an upstream
+#     job's output, which says nothing about whether the transfer succeeded.
+@test "open-pr survives an artifact transfer failure and keys off the file on disk" {
+  block="$(job_block open-pr "$PROMOTE")"
+
+  dl="$(printf '%s\n' "$block" | awk '
+    /^      - name: Download changelog artifact$/ { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside')"
+  [ -n "$dl" ] || { echo "Could not locate the Download changelog artifact step" >&2; exit 1; }
+  printf '%s\n' "$dl" | grep -q 'continue-on-error: true' || {
+    echo "The artifact download is fatal. A transient transfer failure would abort" >&2
+    echo "open-pr before the PR is created, leaving a pushed staging branch and a" >&2
+    echo "drafted release with no promote PR." >&2
+    exit 1
+  }
+
+  printf '%s\n' "$block" | grep -q 'Confirm changelog on disk' || {
+    echo "open-pr no longer re-establishes changelog presence from the filesystem" >&2
+    echo "after the download." >&2
+    exit 1
+  }
+
+  # The commit and the PR body must both read the on-disk result.
+  printf '%s\n' "$block" | grep -qE "steps\.usable\.outputs\.present == 'true'" || {
+    echo "The commit step no longer gates on steps.usable (the on-disk check)." >&2
+    exit 1
+  }
+  printf '%s\n' "$block" | grep -q 'steps.usable.outputs.present' || {
+    echo "The PR body no longer reflects the on-disk changelog state — it could" >&2
+    echo "claim ✅ for a changelog that never arrived." >&2
+    exit 1
+  }
+  printf '%s\n' "$block" | grep -qE "CHANGELOG_PRESENT:.*needs\.changelog\.outputs\.present" && {
+    echo "The PR body still keys off needs.changelog.outputs.present, which is true" >&2
+    echo "even when the artifact failed to transfer." >&2
+    exit 1
+  }
+  return 0
+}
+
+# 15. A pre-existing changelog reaches open-pr by routes that skip generation
+#     entirely — hand-written into the rc tree, or preserved by promote across the
+#     force-push — so nothing else has validated it. Accepting "non-empty" there
+#     would let a truncated hand-commit be advertised with ✅ and published
+#     verbatim as the release body, bypassing the validator completely.
+@test "a pre-existing changelog is validated, not merely non-empty" {
+  block="$(job_block open-pr "$PROMOTE")"
+  existing="$(printf '%s\n' "$block" | awk '
+    /^      - name: Check for an existing changelog on the branch$/ { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside')"
+  [ -n "$existing" ] || { echo "Could not locate the existing-changelog check" >&2; exit 1; }
+  printf '%s\n' "$existing" | grep -q 'hack/validate-changelog.sh' || {
+    echo "The existing-changelog check accepts any non-empty file without validating" >&2
+    echo "it. A truncated hand-commit would be published as the release body." >&2
+    exit 1
+  }
+
+  # The backstop has the same exposure: it commits either a ported or a generated
+  # file, and update-releasenotes.yaml pushes whatever merges into the release body.
+  tags_block="$(job_block generate-changelog "$TAGS")"
+  printf '%s\n' "$tags_block" | grep -q 'hack/validate-changelog.sh' || {
+    echo "The tags.yaml backstop no longer validates the changelog before opening" >&2
+    echo "its PR." >&2
+    exit 1
+  }
 }

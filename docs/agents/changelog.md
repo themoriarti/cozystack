@@ -68,7 +68,7 @@ Verify the working tree is at a sensible starting point. Three configurations ar
   ```bash
   git describe --exact-match HEAD   # should print e.g. "v1.3.1-rc.2"
   ```
-  In this configuration the caller tells you both versions. Use the rc tag as the upper bound of every commit range, and write the *stable* version into the filename, the header, the "Full Changelog" link, and the trailing release-link comment. Never write the rc tag into the changelog's own contents.
+  In this configuration the caller tells you both versions. Use the rc tag as the upper bound of every commit range, and write the *stable* version into the filename, the header, the "Full Changelog" link, and the leading release-link comment. Never write the rc tag into the changelog's own contents.
 
 If none holds, stop — the caller invoked you from the wrong place. Do **not** switch branches yourself; the "Scope and boundaries" section forbids it.
 
