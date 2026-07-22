@@ -48,6 +48,15 @@ jobs:
       packages: write
       pull-requests: write
 
+    # Consumed by the changelog / open-pr / update-website-docs jobs below, so
+    # the rc tag is parsed and validated exactly once.
+    outputs:
+      stable_tag: ${{ steps.parse.outputs.stable_tag }}
+      stable_version: ${{ steps.parse.outputs.stable_version }}
+      stable_branch: ${{ steps.parse.outputs.stable_branch }}
+      rc_branch: ${{ steps.parse.outputs.rc_branch }}
+      line: ${{ steps.parse.outputs.line }}
+
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -245,35 +254,351 @@ jobs:
           # Restamp step above.
           make upload_assets VERSION="${STABLE_TAG}" COZYSTACK_VERSION="${STABLE_VERSION}"
 
+  # ── Changelog: generated HERE, at promote time, so it rides the promote PR and
+  #    is on the base branch the moment the release publishes.
+  #
+  #    Previously this lived in tags.yaml::generate-changelog, gated on the stable
+  #    tag push. Under the promote flow that tag is created by
+  #    pull-requests-release.yaml finalize — i.e. AFTER the release is published —
+  #    so the changelog PR could only ever be opened once the release was already
+  #    public. Moving generation here is the only fix; re-gating the tag-triggered
+  #    job cannot help.
+  #
+  #    Runs in PARALLEL with `promote`: generation is AI-driven and slow, while
+  #    `promote` spends most of its wall clock downloading and re-uploading the
+  #    heavy Talos assets. Neither needs the other's result, so both start at
+  #    once and `open-pr` joins them. The rc tag is re-derived here with a plain
+  #    regex rather than waiting on `promote`'s validate step, which would
+  #    serialize the two jobs and defeat the point.
+  changelog:
+    name: Generate changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      present: ${{ steps.changelog_status.outputs.present }}
+    steps:
+      # Read-only token for the AI step. Minting a separate scoped token means
+      # generation cannot push branches, open PRs, or mutate any repository even
+      # with --allow-all-tools, regardless of whether the agent follows the
+      # prompt's instructions. `open-pr` owns every write.
+      - name: Generate read-only GitHub App token
+        id: app-token-read
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          permission-contents: read
+          permission-pull-requests: read
+          permission-metadata: read
+
+      - name: Parse rc tag
+        id: parse
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RC_TAG}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-rc\.([0-9]+)$ ]]; then
+            echo "::error::rc_tag '${RC_TAG}' must match 'vX.Y.Z-rc.N'"
+            exit 1
+          fi
+          VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          {
+            echo "stable_version=${VERSION}"
+            echo "rc_branch=release-${VERSION}-rc.${BASH_REMATCH[4]}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout rc staging branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.parse.outputs.rc_branch }}
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token-read.outputs.token }}
+          persist-credentials: false
+
+      # Skip generation when the changelog is already present in the rc tree — a
+      # maintainer who wrote it by hand (or an earlier dispatch) has already
+      # produced the deliverable, and regenerating would discard hand edits. This
+      # is the documented escape hatch for the non-blocking failure mode below.
+      - name: Check if changelog already exists
+        id: check_changelog
+        env:
+          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+        run: |
+          if [ -s "docs/changelogs/v${STABLE_VERSION}.md" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "✅ docs/changelogs/v${STABLE_VERSION}.md already in the rc tree — skipping generation."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js
+        if: steps.check_changelog.outputs.exists == 'false'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install GitHub Copilot CLI
+        if: steps.check_changelog.outputs.exists == 'false'
+        run: npm i -g @github/copilot
+
+      # Non-blocking by decision: a flaky AI step must not wedge a promotion that
+      # is otherwise ready. The promote PR then opens WITHOUT a changelog, and the
+      # PR body says so explicitly (see `open-pr`) so the reviewer catches it.
+      #
+      # Upper bound is the rc TAG, not HEAD and not the staging branch: the branch
+      # carries digest-vendoring commits that are not release content, and the
+      # stable tag does not exist yet (finalize cuts it post-merge).
+      - name: Generate changelog using AI
+        if: steps.check_changelog.outputs.exists == 'false'
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
+          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: |
+          copilot \
+            --prompt "Generate the release changelog for the upcoming stable release v${STABLE_VERSION}, which is being promoted from the release candidate ${RC_TAG}. The repository is checked out on the rc staging branch. IMPORTANT: the v${STABLE_VERSION} tag does NOT exist yet — it is created only after the promotion PR merges. Use ${RC_TAG} as the upper bound in every git command (for example 'git log v<previous>..${RC_TAG}'), never HEAD and never the staging branch, because the staging branch carries digest-vendoring commits that are not part of the release content. Write the file as docs/changelogs/v${STABLE_VERSION}.md and use v${STABLE_VERSION} in the header, in the 'Full Changelog' link, and in the trailing release-link comment. Follow the instructions in @docs/agents/changelog.md exactly, including the 'Scope and boundaries' section at the top. Your deliverable is the single file docs/changelogs/v${STABLE_VERSION}.md — write it and exit; this workflow handles committing and opening the PR." \
+            --allow-all-tools --allow-all-paths < /dev/null
+
+      - name: Verify changelog
+        id: changelog_status
+        env:
+          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+        run: |
+          if [ -s "docs/changelogs/v${STABLE_VERSION}.md" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "✅ docs/changelogs/v${STABLE_VERSION}.md present ($(wc -l < "docs/changelogs/v${STABLE_VERSION}.md") lines)."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Changelog generation did not produce docs/changelogs/v${STABLE_VERSION}.md. The promote PR will open WITHOUT a changelog — commit it to the PR branch before merging, or the published release will have empty notes."
+          fi
+
+      # Hand the file to `open-pr`, which owns every write to the staging branch.
+      - name: Upload changelog artifact
+        if: steps.changelog_status.outputs.present == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: changelog-v${{ steps.parse.outputs.stable_version }}
+          path: docs/changelogs/v${{ steps.parse.outputs.stable_version }}.md
+          retention-days: 7
+          if-no-files-found: error
+
+  # Join point: commits the changelog onto the staging branch `promote` pushed,
+  # then opens the release PR. Split out of `promote` so changelog generation can
+  # run concurrently with the asset staging rather than after it.
+  open-pr:
+    name: Open promote PR
+    runs-on: ubuntu-latest
+    needs: [promote, changelog]
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          repositories: ${{ github.event.repository.name }}
+
+      # Credentials are persisted here (unlike the other checkouts in this
+      # workflow): the Open PR step runs `git ls-remote` to pick the base branch
+      # whether or not the changelog step ran, so it cannot rely on the
+      # `git remote set-url` that only the conditional commit step performs.
+      - name: Checkout stable staging branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.promote.outputs.stable_branch }}
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Download changelog artifact
+        if: needs.changelog.outputs.present == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: changelog-v${{ needs.promote.outputs.stable_version }}
+          path: docs/changelogs
+
+      - name: Commit changelog to staging branch
+        if: needs.changelog.outputs.present == 'true'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
+          STABLE_BRANCH: ${{ needs.promote.outputs.stable_branch }}
+        run: |
+          set -euo pipefail
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+          git add "docs/changelogs/v${STABLE_VERSION}.md"
+          if git diff --cached --quiet; then
+            echo "✅ Changelog already committed on ${STABLE_BRANCH}; nothing to do."
+            exit 0
+          fi
+          git commit -s -m "docs: add changelog for v${STABLE_VERSION}"
+          git push origin "HEAD:refs/heads/${STABLE_BRANCH}"
+          echo "✅ Committed changelog to ${STABLE_BRANCH}."
+
       - name: Open promote (release) PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          STABLE_BRANCH: ${{ steps.parse.outputs.stable_branch }}
-          STABLE_TAG: ${{ steps.parse.outputs.stable_tag }}
-          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
-          LINE: ${{ steps.parse.outputs.line }}
+          STABLE_BRANCH: ${{ needs.promote.outputs.stable_branch }}
+          STABLE_TAG: ${{ needs.promote.outputs.stable_tag }}
+          STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
+          RC_TAG: ${{ inputs.rc_tag }}
+          LINE: ${{ needs.promote.outputs.line }}
+          CHANGELOG_PRESENT: ${{ needs.changelog.outputs.present }}
         run: |
           # Target the maintenance line if it exists, else main.
           BASE=main
           if git ls-remote --exit-code --heads origin "release-${LINE}" >/dev/null 2>&1; then
             BASE="release-${LINE}"
           fi
-          BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. The tree pins the rc's images by digest. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit, retags those digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishes the stable cozy-installer chart, and publishes the release — so the stable artifacts are bit-for-bit the rc that passed e2e. The \`full-e2e\` label forces the full suite on this PR. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit."
-          # Reuse an OPEN pr, create one otherwise. `gh pr view <branch>` was
-          # wrong here: it resolves a pr by head branch in any state, so a
-          # closed one satisfied the guard and creation was skipped while the
-          # step still exited 0 — a promotion that reports success and leaves
-          # nothing to merge. That wedges the two paths this workflow is built
-          # to support, because STABLE_BRANCH is derived from the stable
-          # version and is therefore shared by every rc promoted to it:
-          # re-dispatching the same rc, and promoting a newer rc to the same
-          # version. Neither can recover by reopening, since the force-push
-          # below makes the old pr's head unreachable and GitHub then refuses
-          # the reopen outright ("branch was force-pushed or recreated").
-          if [ -n "$(gh pr list --head "${STABLE_BRANCH}" --state open --json number --jq '.[0].number')" ]; then
-            echo "PR already open for ${STABLE_BRANCH}"
+          # State the changelog outcome in the PR body: generation is non-blocking,
+          # so a missing changelog must be visible where the reviewer is looking.
+          # finalize reads this file to populate the published release body — if it
+          # is absent at merge, the release ships with empty notes.
+          if [ "${CHANGELOG_PRESENT}" = "true" ]; then
+            CHANGELOG_NOTE="✅ Includes \`docs/changelogs/v${STABLE_VERSION}.md\`, which finalize uses verbatim as the published release body."
+          else
+            CHANGELOG_NOTE="⚠️ **No changelog in this PR** — automatic generation failed. Commit \`docs/changelogs/v${STABLE_VERSION}.md\` to this branch before merging, or \`${STABLE_TAG}\` publishes with an empty release body."
+          fi
+          BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. The tree pins the rc's images by digest. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit, retags those digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishes the stable cozy-installer chart, and publishes the release — so the stable artifacts are bit-for-bit the rc that passed e2e. The \`full-e2e\` label forces the full suite on this PR. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit.
+
+          ${CHANGELOG_NOTE}"
+          if gh pr view "${STABLE_BRANCH}" >/dev/null 2>&1; then
+            echo "PR already open for ${STABLE_BRANCH}; refreshing body."
+            gh pr edit "${STABLE_BRANCH}" --body "$BODY"
           else
             gh pr create --base "$BASE" --head "${STABLE_BRANCH}" \
               --title "chore(release): promote ${RC_TAG} -> ${STABLE_TAG}" \
               --body "$BODY" --label release --label full-e2e
+          fi
+
+  # Website docs, opened at promote time rather than at stable-tag push, for the
+  # same reason as the changelog: at tag push the release is already public.
+  # Different repository, so it cannot ride the promote PR — it can only be
+  # opened early. pull-requests-release.yaml finalize auto-merges it once the
+  # release is published, so the site never lags the release.
+  #
+  # Depends only on `promote` (it reads the release-X.Y.Z branch that step
+  # pushed), so it runs concurrently with `changelog` and `open-pr`.
+  update-website-docs:
+    name: Update Website Docs
+    runs-on: ubuntu-latest
+    needs: [promote]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
+      - name: Checkout website repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: cozystack/website
+          token: ${{ steps.app-token.outputs.token }}
+          ref: main
+
+      # Decide whether this release promotes the `next/` trunk to a new released
+      # version directory. Per the website repo's contract (see website#495):
+      #   - `make release-next` runs only for new minor/major final releases
+      #     (`vX.Y/` does not yet exist on disk).
+      #   - Patch releases skip this step and let `make update-all` route on
+      #     their own.
+      - name: Determine if this release promotes next/
+        id: promote_next
+        env:
+          STABLE_TAG: ${{ needs.promote.outputs.stable_tag }}
+        run: |
+          if [[ ! "$STABLE_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            echo "Non-stable tag '$STABLE_TAG' — skipping release-next."
+            exit 0
+          fi
+          MAJOR="${BASH_REMATCH[1]}"
+          MINOR="${BASH_REMATCH[2]}"
+          if [[ "$MAJOR" == "0" ]]; then
+            DOC_VERSION="v0"
+          else
+            DOC_VERSION="v${MAJOR}.${MINOR}"
+          fi
+          if [[ -d "content/en/docs/${DOC_VERSION}" ]]; then
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            echo "content/en/docs/${DOC_VERSION}/ already exists — patch release, skipping release-next."
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+            echo "New minor/major release ${DOC_VERSION} — will promote next/ → ${DOC_VERSION}/."
+          fi
+
+      - name: Promote next/ to released version
+        if: steps.promote_next.outputs.promote == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ needs.promote.outputs.stable_tag }}
+        run: make release-next RELEASE_TAG="$TAG"
+
+      # BRANCH is the release-X.Y.Z staging branch `promote` just pushed — the
+      # promoted stable tree. At stable-tag push this used to read the same
+      # branch, so the input is unchanged; only the timing moved earlier.
+      - name: Update docs from release branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ needs.promote.outputs.stable_tag }}
+          VERSION: ${{ needs.promote.outputs.stable_version }}
+        run: make update-all BRANCH="release-$VERSION" RELEASE_TAG="$TAG"
+
+      - name: Commit and push
+        id: commit
+        env:
+          VERSION: ${{ needs.promote.outputs.stable_version }}
+        run: |
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git add content hugo.yaml data/versions
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BRANCH="update-docs-v${VERSION}"
+          git branch -D "$BRANCH" 2>/dev/null || true
+          git checkout -b "$BRANCH"
+          git commit --signoff -m "[docs] Update managed apps reference for v${VERSION}"
+          git push --force --set-upstream origin "$BRANCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ needs.promote.outputs.stable_version }}
+          STABLE_TAG: ${{ needs.promote.outputs.stable_tag }}
+        run: |
+          BRANCH="update-docs-v${VERSION}"
+          pr_state=$(gh pr view "$BRANCH" --repo cozystack/website --json state --jq .state 2>/dev/null || echo "")
+          if [[ "$pr_state" == "OPEN" ]]; then
+            echo "PR already open, skipping creation."
+          else
+            gh pr create \
+              --repo cozystack/website \
+              --title "[docs] Update managed apps reference for v${VERSION}" \
+              --body "Automated docs update for release \`${STABLE_TAG}\`. Opened at promotion time, before the release is published; pull-requests-release.yaml auto-merges this once \`${STABLE_TAG}\` goes live." \
+              --head "$BRANCH" \
+              --base main
           fi

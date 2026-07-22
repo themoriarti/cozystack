@@ -312,6 +312,29 @@ jobs:
               console.log(`🏷️  ${tag} is the highest version, make_latest: true`);
             }
 
+            // Release body comes from the changelog that merged with THIS PR
+            // (promote-rc.yaml commits it onto the release-X.Y.Z branch), read
+            // from the merge commit already checked out here.
+            //
+            // Deliberately not left to update-releasenotes.yaml: that workflow
+            // triggers on pushes to main touching docs/changelogs/v*.md, so it
+            // would race this job on the very same push — and if it won, it
+            // would find no published release yet, skip, and never fire again,
+            // leaving the release body permanently empty. It also only watches
+            // main, so a patch release whose promote PR targets release-X.Y
+            // would never be synced at all. Reading the file here is both
+            // race-free and branch-agnostic; update-releasenotes.yaml remains
+            // for later maintainer edits and manual re-syncs.
+            const fs = require('fs');
+            const changelogPath = `docs/changelogs/${tag}.md`;
+            let body;
+            if (fs.existsSync(changelogPath)) {
+              body = fs.readFileSync(changelogPath, 'utf8');
+              console.log(`📝 Release body from ${changelogPath} (${body.length} bytes)`);
+            } else {
+              console.log(`::warning::${changelogPath} not found in the merge commit — publishing ${tag} with the draft's existing body. Add the changelog and re-run 'Update Release Notes' to backfill it.`);
+            }
+
             // Publish the release
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
@@ -319,7 +342,8 @@ jobs:
               release_id: draft.id,
               draft: false,
               prerelease: isRc,
-              make_latest: makeLatest
+              make_latest: makeLatest,
+              ...(body ? { body } : {})
             });
             console.log(`🚀 Published release ${tag}`);
 
@@ -410,3 +434,28 @@ jobs:
               "docker://${REGISTRY}/cozy-installer:${STABLE_VERSION}" \
               "docker://${REGISTRY}/cozy-installer:latest"
           fi
+
+      # Land the website docs PR that promote-rc.yaml opened before the release
+      # existed. Merged LAST, once the tag, the release and every registry side
+      # effect above have succeeded — so the site is never updated for a release
+      # that failed to ship. Stable releases only: an rc never opens a docs PR.
+      #
+      # Best-effort by design. The docs PR living in another repository means it
+      # can be closed, retargeted or merged by hand between promotion and merge;
+      # none of those should fail a release that is already fully published and
+      # irreversible at this point.
+      - name: Merge website docs PR
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VTAG: ${{ steps.get_tag.outputs.tag }}
+        run: |
+          BRANCH="update-docs-${VTAG}"
+          state="$(gh pr view "$BRANCH" --repo cozystack/website --json state --jq .state 2>/dev/null || echo "")"
+          if [ "$state" != "OPEN" ]; then
+            echo "No open website docs PR for ${BRANCH} (state: ${state:-none}) — nothing to merge."
+            exit 0
+          fi
+          gh pr merge "$BRANCH" --repo cozystack/website --squash --delete-branch
+          echo "✅ Merged cozystack/website PR for ${BRANCH}."
