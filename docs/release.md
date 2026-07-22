@@ -136,7 +136,10 @@ Once problems were found and fixed, a patch release is due.
 
 ```mermaid
 gitGraph
-   commit id: "Release v1.2.0" tag: "v1.2.0"
+    commit id: "feature 3" tag: "v1.2.0-rc.1"
+    branch release-1.2
+    checkout release-1.2
+    commit id: "Release v1.2.0" tag: "v1.2.0"
     checkout main
     commit id: "feature 4"
     commit id: "patch 1"
@@ -153,8 +156,10 @@ gitGraph
 
    ```mermaid
    gitGraph
-       commit id: "Release v1.2.0" tag: "v1.2.0"
+       commit id: "feature 3" tag: "v1.2.0-rc.1"
        branch release-1.2
+       checkout release-1.2
+       commit id: "Release v1.2.0" tag: "v1.2.0"
        checkout main
        commit id: "feature 4"
        commit id: "patch 1"
@@ -173,8 +178,10 @@ gitGraph
 
    ```mermaid
    gitGraph
-       commit id: "Release v1.2.0" tag: "v1.2.0"
+       commit id: "feature 3" tag: "v1.2.0-rc.1"
        branch release-1.2
+       checkout release-1.2
+       commit id: "Release v1.2.0" tag: "v1.2.0"
        checkout main
        commit id: "feature 4"
        commit id: "patch 1"
