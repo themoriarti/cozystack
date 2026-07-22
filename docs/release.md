@@ -60,7 +60,8 @@ A regular release sequence runs as follows:
 3. Once an rc is green, run the [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) workflow (manual dispatch) with that rc tag. Promotion is **transactional** — it performs no registry mutation at dispatch. It:
    1. Pushes the `release-1.2.0` branch: the rc's digest-vendored tree with the rc version substring rewritten to `1.2.0` (the digests are the rc's — unchanged).
    2. Drafts the `v1.2.0` release and uploads the (restamped) assets.
-   3. Opens the `chore(release): promote v1.2.0-rc.N -> v1.2.0` PR into `main`, labelled `release` and `full-e2e` (the latter forces the full e2e suite on the PR). The retag itself is deferred to the merge (step 5) — so an abandoned promotion leaves no stable-named images and cannot wedge a re-promotion.
+   3. Generates `docs/changelogs/v1.2.0.md` (in a parallel job, detached at the rc tag) and commits it onto the `release-1.2.0` branch, so the changelog is reviewed as part of the promotion and finalize can publish the release with it already in place. Non-blocking: if generation fails the PR still opens, carrying a ⚠️ line that says the changelog is missing.
+   4. Opens the `chore(release): promote v1.2.0-rc.N -> v1.2.0` PR into `main`, labelled `release` and `full-e2e` (the latter forces the full e2e suite on the PR). The retag itself is deferred to the merge (step 5) — so an abandoned promotion leaves no stable-named images and cannot wedge a re-promotion.
 
    ```mermaid
    gitGraph
@@ -79,7 +80,7 @@ A regular release sequence runs as follows:
    1. Creates the tag `v1.2.0` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    2. Cuts the write-once `api/apps/v1alpha1/v1.2.0` Go-module tag at the same commit.
    3. Ensures the `release-1.2` maintenance branch exists at the tag commit.
-   4. Publishes the release page (`draft` → `latest`).
+   4. Publishes the release page (`draft` → `latest`), using `docs/changelogs/v1.2.0.md` from the merge commit as the release body.
    5. Retags the rc's images by digest to `v1.2.0` (and `:latest` only when `v1.2.0` is the newest published stable), and publishes the stable `cozy-installer` chart — no rebuild.
 6. The maintainer can now announce the release to the community.
 
@@ -179,10 +180,10 @@ gitGraph
 The numbered process above is implemented by five workflows. Knowing which job does what makes the failure modes much easier to diagnose.
 
 1. [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) — manual dispatch (from `main` or `release-X.Y`): the sole entry point for creating a pre-release tag. Validates the `-alpha`/`-beta`/`-rc` tag, then pushes it (write-once, at the branch tip) as the CI app so `tags.yaml` fires. Stable tags are never created here.
-2. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on an rc tag push: runs `prepare-release`, then `generate-changelog`, then `update-website-docs`.
-3. [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — manual dispatch: stages the `release-X.Y.Z` tree (rc digests, tag string rewritten to stable), drafts the stable release, and opens the `release-X.Y.Z` promote PR. No registry mutation — transactional.
-4. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires when the `release-X.Y.Z` PR merges; finalizes the release: cuts the write-once stable + Go-module tags, publishes, then retags the rc images to stable by digest (`:latest` gated on newest-stable) and publishes the stable chart.
-5. [`update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — fires on every push to `main`; syncs `docs/changelogs/v*.md` content into the corresponding GitHub Release body.
+2. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on an rc tag push: runs `prepare-release`, then `update-website-docs`. `generate-changelog` also lives here but is a **backstop only** — the changelog is normally produced at promotion time (see 3), and this job self-skips when it is already on `main`.
+3. [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — manual dispatch. Three jobs: `promote` stages the `release-X.Y.Z` tree (rc digests, tag string rewritten to stable) and drafts the stable release; `changelog` generates `docs/changelogs/vX.Y.Z.md` **in parallel**; `open-pr` joins them, commits the changelog onto the staging branch, and opens the `release-X.Y.Z` promote PR. So the changelog is reviewed as part of the promotion, and is on the base branch before the release is ever published. No registry mutation — transactional.
+4. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires when the `release-X.Y.Z` PR merges; finalizes the release: cuts the write-once stable + Go-module tags, publishes the release **with the merged changelog as its body**, then retags the rc images to stable by digest (`:latest` gated on newest-stable) and publishes the stable chart.
+5. [`update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — fires on pushes to `main` that touch `docs/changelogs/v*.md`; syncs that content into the corresponding GitHub Release body. No longer the primary path (finalize sets the body directly, which is race-free and works for maintenance lines too) — this now covers later edits to a published changelog and manual re-syncs via `workflow_dispatch`.
 
 ### Phase 1 — `prepare-release` (hard gate)
 
@@ -202,17 +203,27 @@ Things that look surprising in the diff but are normal:
 - **Switched registry**: if a self-built image moved from `docker.io` to `ghcr.io`, the registry portion of the digest changes — that's a deliberate move, not a regression.
 - **`targetVersion` is NOT touched by the release PR.** Platform migration `targetVersion` is bumped earlier in a feature commit (e.g. `[platform] Bump migration targetVersion to 39 for migration 38`). The release PR only re-pins the `platform-migrations` image digest.
 
-### Phase 2 — `generate-changelog` (non-blocking)
+### Phase 2 — the changelog (generated at promotion, not here)
 
-Uses a separate **read-only** GitHub App token (`permission-contents: read`, `permission-pull-requests: read`, `permission-metadata: read`) for the AI step, so the model cannot mutate the repo even with `--allow-all-tools`. Branch creation, commit, push, and PR creation happen in subsequent steps under a write-scoped token.
+The changelog for `vX.Y.Z` is produced by [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml)'s `changelog` job and committed onto the `release-X.Y.Z` staging branch by `open-pr`, so it rides the promote PR and is on the base branch the moment the release publishes. Finalize then uses that file verbatim as the GitHub Release body. Generating it here — on the stable tag push — would be too late by construction: that tag is created by finalize, which has already published the release.
 
-The job runs with `continue-on-error: true`. A green tag CI run does **not** imply a changelog landed — check that the `changelog-vX.Y.Z` PR exists with content. If it does not, follow [`agents/changelog.md`](./agents/changelog.md) manually.
+The `changelog` job runs **in parallel** with `promote`, detached at the rc tag (the "promotion" configuration in §2 of [`agents/changelog.md`](./agents/changelog.md)), using a separate **read-only** GitHub App token for the AI step so the model cannot mutate the repo even with `--allow-all-tools`. Every write — the commit onto the staging branch and the PR — happens in `open-pr` under a write-scoped token.
 
-Known reasons this phase fails silently:
+Generation is deliberately **non-blocking**: a Copilot outage or exhausted token quota must never block a release. Only the AI step carries `continue-on-error`, and `open-pr` is gated on `promote` alone (`if: !cancelled() && needs.promote.result == 'success'`) so the promote PR opens regardless. When the changelog is missing the PR body says so explicitly — that ⚠️ line is the signal to act on.
 
-- Copilot quota exhausted (`COPILOT_GITHUB_TOKEN` 402). Refill or rotate. Drafts still get created by Phase 1; you have to open the changelog PR by hand.
+Recovery, in order of preference:
+
+1. Commit `docs/changelogs/vX.Y.Z.md` to the `release-X.Y.Z` branch by hand (follow [`agents/changelog.md`](./agents/changelog.md)). `promote` preserves it across a re-dispatch, and `open-pr` will not overwrite it with generated output.
+2. Re-dispatch `promote-rc.yaml` — generation runs again; anything already on the branch wins.
+3. Merge without one and let `tags.yaml::generate-changelog` (the backstop) open a changelog PR against `main` after the fact. The release is published with the draft's body until that merges.
+
+Known failure modes:
+
+- Copilot quota exhausted (`COPILOT_GITHUB_TOKEN` 402). Refill or rotate, then re-dispatch.
 - AI step timeout (hard 30-min cap).
-- Output file empty — caught by the next step's `[ -s ]` check, fails loudly.
+- Output truncated or whitespace-only — caught by the `Verify changelog` step, which asserts the `# Cozystack vX.Y.Z` header, the compare link, and a plausible line count, and downgrades to the missing-changelog path rather than shipping a fragment as release notes.
+
+**`tags.yaml::generate-changelog` is the backstop.** It self-skips when the changelog is already on `main`. It earns its keep in two cases: generation failed during promotion, or the promote PR targeted `release-X.Y` (a patch release) so the file never reached `main`. In the second case it **ports the reviewed file from the tag commit verbatim** rather than regenerating — a second AI pass there would spend quota and then overwrite already-published, already-reviewed release notes.
 
 ### Phase 3 — `update-website-docs`
 
@@ -228,7 +239,7 @@ Reviewer checklist:
 - [ ] No accidental config drift (a value file you don't recognize).
 - [ ] If any chart bumped, check the new digest pulls — `crane manifest ghcr.io/cozystack/cozystack/<name>@<digest>` should return.
 - [ ] Build artifacts on the draft release page exist and match the expected count.
-- [ ] Changelog PR exists, has content, and the entries match the commit range (see [Changelog pre-publish verification](#changelog-pre-publish-verification)).
+- [ ] The PR includes `docs/changelogs/vX.Y.Z.md`, it has content, and the entries match the commit range (see [Changelog pre-publish verification](#changelog-pre-publish-verification)). If the PR body carries the ⚠️ "No changelog in this PR" line, resolve that before merging — finalize publishes this file as the release body.
 
 ### Phase 5 — `pull-requests-release.yaml` (finalize)
 
@@ -237,12 +248,12 @@ Fires on merge of a PR that is merged, carries the `release` label, and is autho
 1. **Create the tag at the merge commit** (write-once). The merge commit of `Prepare release vX.Y.Z` did not exist before the PR opened, so there is nothing to move — the tag is created here for the first time. A pre-existing tag at a different commit fails the step loudly rather than being force-moved (see [Tag immutability](#tag-immutability)).
 2. **Cut the `api/apps/v1alpha1/vX.Y.Z` Go-module tag** (write-once, stable only) at the same commit, so Go consumers of `api/apps/v1alpha1` get the release. Moved here from `tags.yaml`, whose `prepare-release` body is skipped for a promoted stable (the draft already exists).
 3. **Ensure the maintenance branch `release-X.Y` exists** at the tag commit. Created if missing; updated fast-forward-only — a non-fast-forward update warns and is left for a maintainer rather than being force-updated.
-4. **Publish the draft release.** `make_latest` is computed against published-non-prerelease tags: prereleases stay `false`; tags older than the current max stay `false` (and the current max is force-restored to `latest` if necessary, so an older patch tag cut after a newer minor won't downgrade `latest`).
+4. **Publish the draft release**, with `docs/changelogs/vX.Y.Z.md` from the merge commit as its body (an absent or whitespace-only file warns and leaves the draft's body in place, rather than publishing blank notes). `make_latest` is computed against published-non-prerelease tags: prereleases stay `false`; tags older than the current max stay `false` (and the current max is force-restored to `latest` if necessary, so an older patch tag cut after a newer minor won't downgrade `latest`).
 5. **Retag the rc images to stable** by digest (`hack/promote-retag.sh`, no rebuild) and **publish the stable `cozy-installer` chart**. `:latest` (on both the images and the chart) moves only when this release's `make_latest` was `true` — the same decision as step 4, so the release's `latest` and the images' `:latest` never disagree. The chart is packaged with `platformVersion` stamped into its default values so the documented `helm --install --version X.Y.Z` path reports the stable version.
 
 ### Phase 6 — `update-releasenotes.yaml` (sync GitHub Release body)
 
-Fires on every push to `main`. Reads each `docs/changelogs/vX.Y.Z.md` and PATCHes the matching GitHub Release's `body` if it differs. So edits to a published changelog file land on the GitHub Release on the next push to `main`, without re-running the release flow.
+Fires on pushes to `main` that touch `docs/changelogs/v*.md`. Reads each `docs/changelogs/vX.Y.Z.md` and PATCHes the matching GitHub Release's `body` if it differs. Since Phase 5 now sets the body directly from the merge commit, this is no longer on the critical path — it covers later **edits** to a published changelog, the backstop PR landing a changelog that reached `main` after the fact, and manual re-syncs via `workflow_dispatch`. It only watches `main`, which is why finalize (not this job) is what populates a patch release promoted onto `release-X.Y`.
 
 ## Stable tags come from rc promotion
 
@@ -374,7 +385,7 @@ This rule generalizes to any monotonic-counter state: schema versions, feature-f
 
 ### Where the canonical process lives
 
-[`agents/changelog.md`](./agents/changelog.md) is the source of truth. Read it end-to-end before generating; do not infer the process from past commits or memory. The CI runs it under Copilot via `tags.yaml::generate-changelog`; locally the same prompt is replayable by following the doc directly.
+[`agents/changelog.md`](./agents/changelog.md) is the source of truth. Read it end-to-end before generating; do not infer the process from past commits or memory. The CI runs it under Copilot via `promote-rc.yaml::changelog` (and, as a backstop, `tags.yaml::generate-changelog`); locally the same prompt is replayable by following the doc directly.
 
 ### Common changelog failure modes
 
@@ -525,7 +536,7 @@ For RCs and final releases, run this before merging the release PR. Each item is
 - [ ] **For every CRD-source bump** (kubevirt, cert-manager, flux, cilium, kamaji): `helm template | kubectl apply --dry-run=server` against the freshly-installed CRDs.
 - [ ] **For every flux / helm-controller / kubevirt-operator / cert-manager bump:** paste the upstream breaking-changes section of the bump's CHANGELOG into the PR body before merge.
 - [ ] **After cutting the tag,** watch `pull-requests-release.yaml::Finalize Release`. If it fails on `Draft release for v... not found`, undraft the release manually and file the workflow regression — this has been a known recurring failure since the `Publish draft release` step lost its explicit `github-token` in refactor `66a756b6`.
-- [ ] **Changelog PR exists and was verified** per [Changelog pre-publish verification](#changelog-pre-publish-verification).
+- [ ] **The promote PR carries `docs/changelogs/vX.Y.Z.md` and it was verified** per [Changelog pre-publish verification](#changelog-pre-publish-verification). Finalize publishes this file as the release body, so verifying it before merge is verifying the release notes.
 
 ## CI failures release engineers commonly hit
 
@@ -550,7 +561,7 @@ Published tags are **write-once** — once a `vX.Y.Z` or rc tag is pushed it is 
 |------|------------------------|
 | [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) | Creates `vX.Y.Z` at the PR merge commit **write-once** (create if absent, no-op if unchanged, fail loudly if it would move — the merge commit is new, so there is nothing to move). Cuts the `api/apps/v1alpha1/<vTAG>` Go-submodule tag write-once at the same commit, **stable only** (never rc/beta/alpha). The `release-X.Y` maintenance branch is fast-forward-only. Retags the rc image digests to the stable image tag (also write-once at the image level). |
 | [`tags.yaml`](../.github/workflows/tags.yaml) | The `release-X.Y.Z-rc.N` staging branch is a mutable staging ref (compare-before-force: skipped when unchanged, force+log only when it genuinely moves). Fails fast on a stable `vX.Y.Z` tag with no pre-existing draft — stable tags come from `promote-rc.yaml`, never a hand push. |
-| [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) | Mutates no tags. Stages the `release-X.Y.Z` branch and opens the promote PR; the stable tag and the image retag both happen at merge (finalize). |
+| [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) | Mutates no tags. Stages the `release-X.Y.Z` branch, generates the changelog onto it, and opens the promote PR; the stable tag and the image retag both happen at merge (finalize). The staging branch is force-pushed on re-dispatch, but an existing `docs/changelogs/vX.Y.Z.md` is preserved across the rebuild. |
 
 This is the immutable-tag + rc-promotion model from [#2677](https://github.com/cozystack/cozystack/issues/2677): stable `vX.Y.Z` is created only by promoting an existing rc, rc tags are write-once, and `api/apps/v1alpha1/vX.Y.Z` is created only on a stable release. The old nightly `auto-release.yaml` (which delete-recreated auto-bumped patch tags) has been removed. rc and stable tags accrete permanently; the only churning artifacts are GHCR nightlies, which [`retention.yaml`](../.github/workflows/retention.yaml) prunes (see [Nightly builds](#nightly-builds)) — GHCR storage is the cost vector to watch.
 
@@ -576,7 +587,7 @@ Sometimes the work that has to land before a release is a 40-commit grab bag (CI
 
 - The `release-X.Y.Z` branch is deleted by GitHub when its PR merges. The `release-X.Y` maintenance branch is created/updated by `pull-requests-release.yaml::Ensure maintenance branch`.
 - The draft release is published by the same workflow.
-- The `update-releasenotes.yaml` workflow syncs `docs/changelogs/vX.Y.Z.md` into the GitHub Release body on the next push to `main`. Edits to a published changelog file land on the release page the next time `main` moves.
+- The release body is set by finalize from `docs/changelogs/vX.Y.Z.md` at publication. Afterwards, `update-releasenotes.yaml` re-syncs that file into the GitHub Release body on any push to `main` that touches it — so edits to a published changelog land on the release page the next time `main` moves.
 - Local cleanup: remove your worktree (`git worktree remove`) and prune merged release branches.
 
 ## See also

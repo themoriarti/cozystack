@@ -54,18 +54,23 @@ This is necessary to get up-to-date information about tags and commits from the 
 
 ### 2. Checking current branch
 
-Verify the working tree is at a sensible starting point. Two configurations are valid:
+Verify the working tree is at a sensible starting point. Three configurations are valid:
 
 - **Interactive use:** the working tree is on the `main` branch.
   ```bash
   git branch --show-current   # should print "main"
   ```
-- **CI use:** HEAD is detached at the release tag being generated (this is how `.github/workflows/tags.yaml` runs).
+- **CI use (backstop):** HEAD is detached at the release tag being generated (this is how `.github/workflows/tags.yaml` runs).
   ```bash
   git describe --exact-match HEAD   # should print e.g. "v1.3.1"
   ```
+- **CI use (promotion):** HEAD is detached at the **release-candidate** tag being promoted, while the changelog you are asked to write is for the *stable* version that candidate becomes (this is how `.github/workflows/promote-rc.yaml` runs, and it is the normal path — the stable tag does not exist yet at that point).
+  ```bash
+  git describe --exact-match HEAD   # should print e.g. "v1.3.1-rc.2"
+  ```
+  In this configuration the caller tells you both versions. Use the rc tag as the upper bound of every commit range, and write the *stable* version into the filename, the header, the "Full Changelog" link, and the trailing release-link comment. Never write the rc tag into the changelog's own contents.
 
-If neither holds, stop — the caller invoked you from the wrong place. Do **not** switch branches yourself; the "Scope and boundaries" section forbids it.
+If none holds, stop — the caller invoked you from the wrong place. Do **not** switch branches yourself; the "Scope and boundaries" section forbids it.
 
 ### 3. Determining release type and previous version
 
