@@ -3,8 +3,15 @@ name: "Releasing PR"
 on:
   pull_request:
     types: [closed]
-    paths-ignore:
-      - 'docs/**/*'
+    # No paths filter. A `paths-ignore: docs/**/*` used to live here as an
+    # optimization, but the promote PR now carries docs/changelogs/vX.Y.Z.md —
+    # and `Prepare stable branch` explicitly tolerates producing no tag-string
+    # changes ("digests already stable"). That combination can yield a docs-only
+    # promote PR, which the filter would drop: no finalize run, so no tag, no
+    # release, and no error anywhere. Filtering is left entirely to the `if:`
+    # gate below (merged + `release` label + release-bot author), which is what
+    # actually decides whether this workflow should do anything. The cost is a
+    # skipped job on unrelated closed PRs.
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
 concurrency:
