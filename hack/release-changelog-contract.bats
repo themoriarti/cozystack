@@ -114,7 +114,7 @@ job_block() {
   # Anywhere else it would let an unvalidated or missing changelog through as if
   # it were fine — in particular on Verify, which is the gate that decides whether
   # a fragment becomes the release body.
-  allowed="Generate changelog using AI|Refresh agent instructions from the dispatch ref"
+  allowed="Generate changelog using AI"
 
   offenders="$(printf '%s\n' "$block" | awk -v allowed="$allowed" '
     /^      - name: / {
@@ -239,15 +239,23 @@ job_block() {
   block="$(job_block promote "$PROMOTE")"
   [ -n "$block" ] || { echo "Could not locate the promote job in $PROMOTE" >&2; exit 1; }
 
-  printf '%s\n' "$block" | grep -q 'PRESERVED' || {
-    echo "The Prepare stable branch step no longer preserves an existing changelog." >&2
-    echo "A re-dispatch would force-push away a hand-written one." >&2
+  printf '%s\n' "$block" | grep -q 'changelog-preserve.sh' || {
+    echo "The Prepare stable branch step no longer calls changelog-preserve.sh." >&2
+    echo "A re-dispatch would force-push away a hand-written changelog." >&2
     exit 1
   }
-  printf '%s\n' "$block" | grep -qE 'git show "FETCH_HEAD:\$\{CL\}"' || {
-    echo "The preserve path no longer reads the changelog from the remote staging branch." >&2
+  # It must run BEFORE the branch is reset, or there is nothing left to rescue.
+  pres_line="$(printf '%s\n' "$block" | grep -n 'changelog-preserve.sh' | head -1 | cut -d: -f1)"
+  reset_line="$(printf '%s\n' "$block" | grep -n 'git checkout -B' | head -1 | cut -d: -f1)"
+  [ -n "$pres_line" ] && [ -n "$reset_line" ] && [ "$pres_line" -lt "$reset_line" ] || {
+    echo "changelog-preserve.sh does not run before 'git checkout -B'; by then the" >&2
+    echo "working tree has already been reset and there is nothing to preserve." >&2
     exit 1
   }
+  # The script itself is behaviour-tested against real git remotes in
+  # hack/release-changelog-behaviour.bats; this only pins that it is still wired in.
+  [ -x "$REPO_ROOT/hack/changelog-preserve.sh" ] || {
+    echo "hack/changelog-preserve.sh is missing or not executable." >&2; exit 1; }
 
   # And open-pr must not clobber what promote preserved.
   open_block="$(job_block open-pr "$PROMOTE")"
@@ -415,7 +423,7 @@ job_block() {
   block="$(job_block changelog "$PROMOTE")"
 
   overlay="$(printf '%s\n' "$block" | awk '
-    /^      - name: Refresh agent instructions from the dispatch ref$/ { inside = 1; next }
+    /^      - name: Refresh agent instructions$/ { inside = 1; next }
     /^      - name: / { inside = 0 }
     inside')"
   [ -n "$overlay" ] || {
@@ -425,25 +433,28 @@ job_block() {
     exit 1
   }
 
-  printf '%s\n' "$overlay" | grep -q 'docs/agents/changelog.md' || {
-    echo "The overlay step no longer refreshes docs/agents/changelog.md." >&2; exit 1; }
-  printf '%s\n' "$overlay" | grep -q 'hack/validate-changelog.sh' || {
-    echo "The overlay step no longer refreshes hack/validate-changelog.sh — the Verify" >&2
-    echo "step would fail with 'command not found' on an older rc tree." >&2
-    exit 1
-  }
-  printf '%s\n' "$overlay" | grep -q 'continue-on-error: true' || {
-    echo "The overlay step is fatal. A transient fetch failure would wedge the" >&2
-    echo "changelog job instead of degrading to the tag's own copy." >&2
+  printf '%s\n' "$overlay" | grep -q 'cp .release-tooling/docs/agents/changelog.md' || {
+    echo "The refresh step no longer overlays docs/agents/changelog.md from the" >&2
+    echo "tooling checkout." >&2
     exit 1
   }
 
-  # open-pr checks out the staging branch, which derives from the same rc tree.
-  open_block="$(job_block open-pr "$PROMOTE")"
-  printf '%s\n' "$open_block" | grep -q 'Ensure the changelog validator is present' || {
-    echo "open-pr does not ensure hack/validate-changelog.sh exists. Its validation" >&2
-    echo "steps would fail on a staging branch derived from an older rc tree, and" >&2
-    echo "take the promote PR down with them." >&2
+  # Every job that runs release tooling against an older checkout must source it
+  # from the dispatch ref. A script fetched by a script that is itself missing
+  # solves nothing, so this is done by a second actions/checkout, not by shell.
+  for job in promote changelog open-pr; do
+    jb="$(job_block "$job" "$PROMOTE")"
+    printf '%s\n' "$jb" | grep -q 'path: .release-tooling' || {
+      echo "Job '$job' has no .release-tooling checkout, but runs tooling that the" >&2
+      echo "rc tree does not carry — it would fail with 'command not found'." >&2
+      exit 1
+    }
+  done
+
+  # And that scratch path must never be committed: promote runs `git add -A`.
+  grep -qE '^\.release-tooling' "$REPO_ROOT/.gitignore" || {
+    echo ".release-tooling is not gitignored; promote's 'git add -A' would commit" >&2
+    echo "the entire tooling checkout onto the release branch." >&2
     exit 1
   }
 }

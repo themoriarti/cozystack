@@ -169,6 +169,23 @@ jobs:
           command -v yq >/dev/null \
             || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
 
+      # A second checkout of the DISPATCH ref, used only as a source of release
+      # tooling. The primary checkout above is an older commit (the rc tag, or a
+      # branch derived from it) and does not carry hack/validate-changelog.sh or
+      # the current docs/agents/changelog.md — and a script fetched by a script
+      # that is itself missing solves nothing, so this is done declaratively by
+      # actions/checkout rather than by shelling out to the repo's own tooling.
+      # Gitignored, so promote's `git add -A` never stages it.
+      - name: Checkout release tooling from the dispatch ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.ref_name }}
+          path: .release-tooling
+          sparse-checkout: |
+            hack
+            docs/agents
+          persist-credentials: false
+
       # Build the stable digest-vendored tree off the rc tree: the digests are
       # unchanged (they pin the rc's images, which finalize retags to stable);
       # only the cosmetic -rc.N substring in the image tag is rewritten to the
@@ -202,12 +219,12 @@ jobs:
           # dispatch's reviewed output. Losing either to a retry would replace
           # human-edited release notes with a fresh AI run, or with nothing.
           CL="docs/changelogs/v${STABLE_VERSION}.md"
-          PRESERVED=""
-          if git fetch -q origin "${STABLE_BRANCH}" 2>/dev/null \
-             && git cat-file -e "FETCH_HEAD:${CL}" 2>/dev/null; then
-            PRESERVED="$(mktemp)"
-            git show "FETCH_HEAD:${CL}" > "$PRESERVED"
+          PRESERVED="$(mktemp)"
+          if .release-tooling/hack/changelog-preserve.sh "${STABLE_BRANCH}" "${STABLE_VERSION}" "${PRESERVED}"; then
             echo "::notice::Preserving existing ${CL} from ${STABLE_BRANCH} across the rebuild."
+          else
+            rm -f "${PRESERVED}"
+            PRESERVED=""
           fi
           # -B resets the local branch so a re-dispatch starts clean.
           git checkout -B "${STABLE_BRANCH}"
@@ -360,42 +377,34 @@ jobs:
           token: ${{ steps.app-token-read.outputs.token }}
           persist-credentials: false
 
+      # A second checkout of the DISPATCH ref, used only as a source of release
+      # tooling. The primary checkout above is an older commit (the rc tag, or a
+      # branch derived from it) and does not carry hack/validate-changelog.sh or
+      # the current docs/agents/changelog.md — and a script fetched by a script
+      # that is itself missing solves nothing, so this is done declaratively by
+      # actions/checkout rather than by shelling out to the repo's own tooling.
+      # Gitignored, so promote's `git add -A` never stages it.
+      - name: Checkout release tooling from the dispatch ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.ref_name }}
+          path: .release-tooling
+          sparse-checkout: |
+            hack
+            docs/agents
+          persist-credentials: false
+
       # The agent reads docs/agents/changelog.md from the WORKING TREE, which is
       # the rc tag — a commit that predates this workflow. Every rc cut before
-      # this change carries the old §2, listing only two valid configurations and
-      # instructing the agent to STOP on anything else. A detached rc-tag checkout
-      # is exactly that "anything else", so a compliant agent would refuse to
-      # generate, silently, on every promotion of an existing rc.
-      #
-      # Overlay the current instructions from the ref this workflow was dispatched
-      # from. The changelog process is repo-level policy, not release content, so
-      # taking it from the dispatch ref rather than the tag is correct in its own
-      # right — the tag pins what was BUILT, not how we document it today.
-      #
-      # Best-effort: if the overlay fails the agent falls back to the tag's copy
-      # and, at worst, declines to generate — the degraded path, not a wedge.
-      - name: Refresh agent instructions from the dispatch ref
-        continue-on-error: true
-        env:
-          DISPATCH_REF: ${{ github.ref_name }}
+      # this change carries the old section 2, which lists only two valid
+      # configurations and instructs the agent to STOP on anything else. A
+      # detached rc-tag checkout is exactly that, so a COMPLIANT agent would
+      # silently decline to generate on every promotion of an existing rc.
+      # Overlay the current instructions so the agent reads today's contract.
+      - name: Refresh agent instructions
         run: |
-          set -eu
-          # hack/validate-changelog.sh is overlaid for the same reason: an rc tag
-          # cut before this workflow landed does not carry it, and the Verify step
-          # below would then die on "command not found".
-          FILES="docs/agents/changelog.md hack/validate-changelog.sh"
-          # shellcheck disable=SC2086
-          if git fetch -q origin "${DISPATCH_REF}" 2>/dev/null \
-             && git checkout -q FETCH_HEAD -- $FILES 2>/dev/null; then
-            echo "✅ Overlaid agent instructions + validator from ${DISPATCH_REF}."
-          # shellcheck disable=SC2086
-          elif git fetch -q origin main 2>/dev/null \
-             && git checkout -q FETCH_HEAD -- $FILES 2>/dev/null; then
-            echo "✅ Overlaid agent instructions + validator from main."
-          else
-            echo "::warning::Could not refresh docs/agents/changelog.md and hack/validate-changelog.sh; the agent will read the rc tag's copy, which may predate the promotion configuration in §2 and cause it to decline generation."
-          fi
-          chmod +x hack/validate-changelog.sh 2>/dev/null || true
+          cp .release-tooling/docs/agents/changelog.md docs/agents/changelog.md
+          echo "Refreshed docs/agents/changelog.md from ${GITHUB_REF_NAME}."
 
       # Skip generation when the changelog is already present in the rc tree — a
       # maintainer who wrote it by hand (or an earlier dispatch) has already
@@ -464,7 +473,7 @@ jobs:
         env:
           STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
         run: |
-          if REASON="$(hack/validate-changelog.sh "docs/changelogs/v${STABLE_VERSION}.md" "${STABLE_VERSION}" 2>&1)"; then
+          if REASON="$(.release-tooling/hack/validate-changelog.sh "docs/changelogs/v${STABLE_VERSION}.md" "${STABLE_VERSION}" 2>&1)"; then
             echo "present=true" >> "$GITHUB_OUTPUT"
             echo "✅ ${REASON}"
           else
@@ -528,28 +537,22 @@ jobs:
       # hand-written by a maintainer, or carried over from an earlier dispatch by
       # `promote`'s preserve step — and must win over a fresh AI run. Without this
       # check the artifact download below would silently overwrite human edits.
-      # The staging branch derives from the rc tree, so on any rc cut before this
-      # workflow landed it carries no hack/validate-changelog.sh and the checks
-      # below would die on "command not found" — taking the promote PR with them.
-      # Overlay it from the dispatch ref, exactly as the changelog job does.
-      - name: Ensure the changelog validator is present
-        continue-on-error: true
-        env:
-          DISPATCH_REF: ${{ github.ref_name }}
-        run: |
-          set -u
-          if [ -x hack/validate-changelog.sh ]; then
-            echo "✅ Validator already present on the staging branch."
-          elif git fetch -q origin "${DISPATCH_REF}" 2>/dev/null \
-               && git checkout -q FETCH_HEAD -- hack/validate-changelog.sh 2>/dev/null; then
-            echo "✅ Overlaid hack/validate-changelog.sh from ${DISPATCH_REF}."
-          elif git fetch -q origin main 2>/dev/null \
-               && git checkout -q FETCH_HEAD -- hack/validate-changelog.sh 2>/dev/null; then
-            echo "✅ Overlaid hack/validate-changelog.sh from main."
-          else
-            echo "::warning::Could not obtain hack/validate-changelog.sh; changelog validation will fail closed and the PR will open without one."
-          fi
-          chmod +x hack/validate-changelog.sh 2>/dev/null || true
+      # A second checkout of the DISPATCH ref, used only as a source of release
+      # tooling. The primary checkout above is an older commit (the rc tag, or a
+      # branch derived from it) and does not carry hack/validate-changelog.sh or
+      # the current docs/agents/changelog.md — and a script fetched by a script
+      # that is itself missing solves nothing, so this is done declaratively by
+      # actions/checkout rather than by shelling out to the repo's own tooling.
+      # Gitignored, so promote's `git add -A` never stages it.
+      - name: Checkout release tooling from the dispatch ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.ref_name }}
+          path: .release-tooling
+          sparse-checkout: |
+            hack
+            docs/agents
+          persist-credentials: false
 
       # Validated with the same script the changelog job uses, not a bare `-s`.
       # A pre-existing file reaches here by two routes that skip generation
@@ -565,7 +568,7 @@ jobs:
           CL="docs/changelogs/v${STABLE_VERSION}.md"
           if [ ! -s "$CL" ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
-          elif REASON="$(hack/validate-changelog.sh "$CL" "${STABLE_VERSION}" 2>&1)"; then
+          elif REASON="$(.release-tooling/hack/validate-changelog.sh "$CL" "${STABLE_VERSION}" 2>&1)"; then
             echo "present=true" >> "$GITHUB_OUTPUT"
             echo "✅ Changelog already on the staging branch and valid — keeping it, not overwriting with generated output. ${REASON}"
           else
@@ -596,7 +599,7 @@ jobs:
           STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
         run: |
           CL="docs/changelogs/v${STABLE_VERSION}.md"
-          if [ -s "$CL" ] && REASON="$(hack/validate-changelog.sh "$CL" "${STABLE_VERSION}" 2>&1)"; then
+          if [ -s "$CL" ] && REASON="$(.release-tooling/hack/validate-changelog.sh "$CL" "${STABLE_VERSION}" 2>&1)"; then
             echo "present=true" >> "$GITHUB_OUTPUT"
             echo "✅ ${REASON}"
           else
