@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
 PULL_REQUESTS="$REPO_ROOT/.github/workflows/pull-requests.yaml"
 TAGS="$REPO_ROOT/.github/workflows/tags.yaml"
+FINALIZE="$REPO_ROOT/.github/workflows/pull-requests-release.yaml"
 
 job_block() {
   awk -v job="  $1:" '
@@ -216,4 +217,22 @@ code_lines() {
   # knows the promote flow opens the PR earlier.
   grep -qF 'promote-rc.yaml::website-docs' "$TAGS"
   grep -qiF 'backstop' "$TAGS"
+}
+
+@test "finalize checkout does not persist credentials so the app-token tag push triggers tags.yaml" {
+  block="$(job_block finalize "$FINALIZE")"
+  [ -n "$block" ]
+  checkout="$(printf '%s\n' "$block" | awk '
+    /^      - name: Checkout repo$/ { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside')"
+  [ -n "$checkout" ]
+
+  # The one-line root-cause fix. Without persist-credentials:false the checkout
+  # persists GITHUB_TOKEN as http.extraheader, which silently defeats the app token
+  # each later `git remote set-url` injects onto the tag pushes — and a
+  # GITHUB_TOKEN-authenticated push creates no workflow run (anti-recursion), so
+  # tags.yaml's stable-tag backstops never fire (v1.6.0's tag never triggered it).
+  count="$(printf '%s\n' "$checkout" | code_lines | rg -cF 'persist-credentials: false' || true)"
+  [ "${count:-0}" -eq 1 ]
 }

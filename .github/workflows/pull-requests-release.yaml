@@ -81,6 +81,15 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          # Do NOT persist GITHUB_TOKEN as http.extraheader. Every tag/branch push
+          # below re-injects the app token via `git remote set-url`, but a persisted
+          # extraheader silently wins over the URL credential — so those pushes
+          # would authenticate as GITHUB_TOKEN, and a GITHUB_TOKEN push creates no
+          # workflow run (GitHub anti-recursion). That is exactly why v1.6.0's
+          # stable tag triggered no tags.yaml run (the generate-changelog and
+          # update-website-docs backstops never fired). With this false, the set-url
+          # app token authenticates, matching how promote-rc.yaml already pushes.
+          persist-credentials: false
 
       # Create the release tag at the merge commit — write-once.
       #
