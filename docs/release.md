@@ -11,7 +11,7 @@ You are about to:
 - Cut a patch release (`vX.Y.Z` with `Z > 0`).
 - Triage cherry-picks before a patch release.
 - Investigate why CI is misbehaving on a tag push.
-- Review a `Prepare release` PR.
+- Review a promote (release) PR.
 
 If you are about to generate a changelog only, jump straight to [`agents/changelog.md`](./agents/changelog.md).
 
@@ -25,7 +25,7 @@ There are three types of releases:
 - **Regular Releases** – Final versions (e.g., `v1.2.0`) that are feature-complete and thoroughly tested.
 - **Patch Releases** – Bugfix-only updates (e.g., `v1.2.1`) made after a stable release, based on a dedicated release branch.
 
-All three are matched by `tags.yaml`'s regex `^v\d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?$`. The tag push is the trigger for the whole pipeline. **Pre-release tags (`-alpha` / `-beta` / `-rc`) are cut with the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow** (manual dispatch from `main` or `release-X.Y`) — it pushes the tag as the CI app at the dispatch branch's tip, so GitHub fills `base_ref` (`tags.yaml`'s `Get base branch` step refuses tags pushed without a base) and the push triggers `tags.yaml` (a tag pushed with the default `GITHUB_TOKEN` would not). Stable `vX.Y.Z` tags are never pushed by hand at all — they are cut write-once by the promote flow at a PR merge commit.
+All three are matched by `tags.yaml`'s regex `^v\d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?$`. The tag push is the trigger for the whole pipeline. **Pre-release tags (`-alpha` / `-beta` / `-rc`) are cut with the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow** (manual dispatch from `main` or `release-X.Y`) — it pushes the tag as the CI app at the dispatch branch's tip, so GitHub fills `base_ref` (`tags.yaml`'s `Get base branch` step refuses tags pushed without a base) and the push triggers `tags.yaml` (a tag pushed with the default `GITHUB_TOKEN` would not). Stable `vX.Y.Z` tags are never pushed by hand at all — they are cut write-once by the promote flow at a PR merge commit. Only `-rc.N` pre-releases feed the promotion flow ([`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) accepts `vX.Y.Z-rc.N` alone); `-alpha.N` / `-beta.N` tags are built and published for download and validated on demand with the [`e2e-tag.yaml`](../.github/workflows/e2e-tag.yaml) button, but are never promoted to a stable release.
 
 ## Release Candidates
 
@@ -38,9 +38,7 @@ They are created directly in the `main` branch.
 An RC is typically tagged when all major features for the upcoming release have been merged into main and the release enters its testing phase.
 However, new features and changes can still be added before the regular release `vX.Y.0`.
 
-Each RC contributes to a cumulative set of release notes that will be finalized when `vX.Y.0` is released.
-After testing, if no critical issues remain, the regular release (`vX.Y.0`) is tagged from the last RC or a later commit in main.
-This begins the regular release process, creates a dedicated `release-X.Y` branch, and opens the way for patch releases.
+Each RC contributes to a cumulative set of release notes that will be finalized when `vX.Y.0` is released. After testing, if no critical issues remain, the last good rc is **promoted** to the regular release `vX.Y.0` — the exact rc images retagged by digest, never rebuilt and never tagged from a later commit (see [Regular Releases](#regular-releases)). Promotion cuts the write-once `vX.Y.0` tag at the promote PR's merge commit, ensures the dedicated `release-X.Y` maintenance branch, and opens the way for patch releases.
 
 ## Regular Releases
 
@@ -56,11 +54,11 @@ gitGraph
 A regular release sequence runs as follows:
 
 1. Cut a release candidate (`v1.2.0-rc.N`) from the last good commit on `main`: run the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow (manual dispatch **from `main`**) with the tag. It tags `main`'s HEAD as the CI app; `tags.yaml` then builds the rc images, publishes the rc prerelease, pushes the digest-vendored `release-1.2.0-rc.N` staging branch, and runs its mandatory `rc-e2e` job by calling [`e2e-tag.yaml`](../.github/workflows/e2e-tag.yaml) against that published tag.
-2. Wait for the rc's mandatory full E2E to pass, then complete the other checks in [Pre-release verification checklist](#pre-release-verification-checklist). If the latest `tags.yaml` run cannot provide a green `rc-e2e`, a successful manual dispatch of [`e2e-tag.yaml`](../.github/workflows/e2e-tag.yaml) for the same tag is equivalent gate evidence. New features and fixes can still land on `main` and be picked up by a later rc.
+2. Watch the rc's mandatory full E2E and wait for it to pass, then complete the other checks in [Pre-release verification checklist](#pre-release-verification-checklist). If the latest `tags.yaml` run cannot provide a green `rc-e2e`, a successful manual dispatch of [`e2e-tag.yaml`](../.github/workflows/e2e-tag.yaml) for the same tag is equivalent gate evidence. New features and fixes can still land on `main` and be picked up by a later rc. **Optional:** once the notes are worth reviewing, press the `Generate RC Changelog` button ([`changelog-rc.yaml`](../.github/workflows/changelog-rc.yaml)) to generate `docs/changelogs/v1.2.0.md` now and bank it on the `release-1.2.0-rc.N` staging branch — so there is time to review and hand-edit it before promotion. Skipping the button changes nothing; promotion generates the changelog itself.
 3. Once the checks are green, run the [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) workflow (manual dispatch) with that rc tag. Its `parse` job verifies E2E before any staging: it accepts a successful `rc-e2e` job in the latest `tags.yaml` push run for the tag, or any retained successful manual `e2e-tag.yaml` run whose expanded E2E job name targets the tag. The emergency `skip_e2e_gate` input bypasses this check, logs a loud warning, and marks the promote PR with ⚠️. Promotion is **transactional** — it performs no registry mutation at dispatch. It:
    1. Pushes the `release-1.2.0` branch: the rc's digest-vendored tree with the rc version substring rewritten to `1.2.0` (the digests are the rc's — unchanged).
    2. Drafts the `v1.2.0` release and uploads the (restamped) assets.
-   3. Generates `docs/changelogs/v1.2.0.md` (in a parallel job, detached at the rc tag) and commits it onto the `release-1.2.0` branch, so the changelog is reviewed as part of the promotion and finalize can publish the release with it already in place. Non-blocking: if generation fails the PR still opens, carrying a ⚠️ line that says the changelog is missing.
+   3. Generates `docs/changelogs/v1.2.0.md` (in a parallel job, detached at the rc tag) — or, if you pressed the rc-time `Generate RC Changelog` button, copies the file already banked on the `release-1.2.0-rc.N` staging branch instead of regenerating — and commits it onto the `release-1.2.0` branch, so the changelog is reviewed as part of the promotion and finalize can publish the release with it already in place. Non-blocking: if generation fails the PR still opens, carrying a ⚠️ line that says the changelog is missing.
    4. Opens the `cozystack/website` "update managed apps reference" PR (`update-docs-v1.2.0` branch), generating the docs from the `release-1.2.0` staging branch via `FETCH_REF`. Non-blocking, and **do not merge that PR until `v1.2.0` is published** — merging early breaks the live site's version routing (see [Phase 3](#phase-3--update-website-docs-now-the-backstop)).
    5. Opens the `chore(release): promote v1.2.0-rc.N -> v1.2.0` PR into `main`, labelled `release` only. The PR body records whether E2E was verified or bypassed, plus ✅/⚠️ changelog and website-docs lines. E2E does not run on this promote PR by default because the immutable rc already passed the mandatory full suite; a maintainer may add `full-e2e` to run it again. The retag itself is deferred to the merge (step 5) — so an abandoned promotion leaves no stable-named images and cannot wedge a re-promotion.
 
@@ -76,14 +74,14 @@ A regular release sequence runs as follows:
        merge release-1.2.0 id: "Pull Request"
    ```
 
-4. Maintainer reviews the PR and the draft release, confirms the E2E verification line is ✅ (or explicitly accepts its ⚠️ bypass), then merges it — **do not squash-merge**, the stable tag must attach to a real merge commit. GitHub removes the merged branch `release-1.2.0` (the repo has auto-delete-on-merge enabled).
+4. Maintainer reviews the PR and the draft release against the [Phase 4 checklist](#phase-4--review-and-merge-the-promote-pr): confirm the E2E-verification line is ✅ (or explicitly accept its ⚠️ bypass), the changelog line is ✅, and note the website-docs line — the `cozystack/website` docs PR that promotion parked, which stays unmerged for now. E2E does not run on this promote PR by default. Then merge — **do not squash-merge**, the stable tag must attach to a real merge commit. GitHub removes the merged branch `release-1.2.0` (the repo has auto-delete-on-merge enabled).
 5. CI workflow triggers on merge (this is where every irreversible side effect happens, after the rc E2E gate and PR review):
    1. Creates the tag `v1.2.0` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    2. Cuts the write-once `api/apps/v1alpha1/v1.2.0` Go-module tag at the same commit.
    3. Ensures the `release-1.2` maintenance branch exists at the tag commit.
    4. Publishes the release page (`draft` → `latest`), using `docs/changelogs/v1.2.0.md` from the merge commit as the release body.
    5. Retags the rc's images by digest to `v1.2.0` (and `:latest` only when `v1.2.0` is the newest published stable), and publishes the stable `cozy-installer` chart — no rebuild.
-6. The maintainer can now announce the release to the community.
+6. Once the release is published, merge the parked `cozystack/website` docs PR (opened back at promote time, step 3.iv) so the live site's version routing flips to `v1.2.0` — its versioned docs and `openapi.json` are on GitHub now. The maintainer can then announce the release to the community.
 
 ```mermaid
 gitGraph
@@ -145,8 +143,8 @@ gitGraph
    When all relevant patch commits are cherry-picked, the branch is ready for release.
 
 2. The maintainer cuts a release candidate (`v1.2.1-rc.N`) via the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow (manual dispatch **from `release-1.2`**), which tags that branch's `HEAD`. CI builds and publishes the rc, pushes the `release-1.2.1-rc.N` staging branch, and runs the mandatory full `rc-e2e` job against the published tag.
-3. Wait for `rc-e2e` to pass and complete the other release checks. A successful manual `e2e-tag.yaml` run for `v1.2.1-rc.N` is also valid evidence if the latest `tags.yaml` run does not carry a green `rc-e2e`.
-4. Once the checks are green, run [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) (manual dispatch) with that rc tag. The dispatch first gates on the latest tag-push `rc-e2e` or a successful tag-correlated manual E2E run, then pushes the `release-1.2.1` branch (rc digests, tag string rewritten to `1.2.1`), drafts the `v1.2.1` release with the restamped assets, and opens the promote PR into `release-1.2` with only the `release` label. The promote PR records ✅ verified or ⚠️ bypassed and runs no E2E by default; add `full-e2e` manually to force a repeat. As with a regular release the retag is deferred to the merge — no registry mutation at dispatch.
+3. Watch `rc-e2e` and wait for it to pass, then complete the other release checks. A successful manual `e2e-tag.yaml` run for `v1.2.1-rc.N` is also valid evidence if the latest `tags.yaml` run does not carry a green `rc-e2e`. **Optional:** press the `Generate RC Changelog` button ([`changelog-rc.yaml`](../.github/workflows/changelog-rc.yaml)) to generate `docs/changelogs/v1.2.1.md` at rc time and bank it on the rc staging branch; promotion then reuses it instead of regenerating.
+4. Once the checks are green, run [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) (manual dispatch) with that rc tag. It runs the same five jobs as a regular promotion: the dispatch first gates on the latest tag-push `rc-e2e` or a successful tag-correlated manual E2E run (`skip_e2e_gate` overrides it), then pushes the `release-1.2.1` branch (rc digests, tag string rewritten to `1.2.1`), drafts the `v1.2.1` release with the restamped assets, generates or picks up `docs/changelogs/v1.2.1.md` and commits it onto that branch, opens the parked `cozystack/website` docs PR (updating the existing `v1.2/` directory in place, since a patch does not promote `next/`), and opens the promote PR into `release-1.2` with only the `release` label. The promote PR body carries the same ✅/⚠️ E2E, changelog, and website-docs lines and runs no E2E by default; add `full-e2e` manually to force a repeat. As with a regular release the retag is deferred to the merge — no registry mutation at dispatch.
 
    ```mermaid
    gitGraph
@@ -168,20 +166,20 @@ gitGraph
 
    Finally, when release is confirmed, the release sequence goes on.
 
-5. Maintainer reviews the PR, confirms the E2E verification line, and merges it — **do not squash-merge**. GitHub removes the merged branch `release-1.2.1` (auto-delete-on-merge is enabled).
+5. Maintainer reviews the PR against the [Phase 4 checklist](#phase-4--review-and-merge-the-promote-pr), confirms the E2E-verification and changelog lines and notes the parked website-docs line, and merges it — **do not squash-merge**. GitHub removes the merged branch `release-1.2.1` (auto-delete-on-merge is enabled).
 6. CI workflow triggers on merge (all irreversible side effects, after the rc E2E gate and PR review):
    1. Creates the tag `v1.2.1` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    2. Cuts the write-once `api/apps/v1alpha1/v1.2.1` Go-module tag at the same commit.
    3. Publishes the release page (`draft` → `latest`; `latest` moves only if `v1.2.1` is the newest published stable).
    4. Retags the rc's images by digest to `v1.2.1` and publishes the stable `cozy-installer` chart — no rebuild.
-7. The maintainer can now announce the release to the community.
+7. Once the release is published, merge the parked `cozystack/website` docs PR, then announce the release to the community.
 
 ## What CI does during the release process
 
 The numbered process above is implemented by seven workflows, including the reusable/manual [`e2e-tag.yaml`](../.github/workflows/e2e-tag.yaml), plus the reusable [`changelog-generate.yaml`](../.github/workflows/changelog-generate.yaml) that two of them share to produce the changelog. Knowing which job does what makes the failure modes much easier to diagnose.
 
 1. [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) — manual dispatch (from `main` or `release-X.Y`): the sole entry point for creating a pre-release tag. Validates the `-alpha`/`-beta`/`-rc` tag, then pushes it (write-once, at the branch tip) as the CI app so `tags.yaml` fires. Stable tags are never created here.
-2. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on an rc tag push: `prepare-release` builds and publishes the rc and pushes its digest-pinned staging branch, then the mandatory `rc-e2e` job calls `e2e-tag.yaml` in the same run. `generate-changelog` and `update-website-docs` also live here but are **backstops only** — both are normally produced at promotion time (see 4); on a stable tag push each self-skips or no-ops when the promote flow already did the work. These stable-tag backstops only fire because finalize pushes the stable tag with the CI app token (a `GITHUB_TOKEN` push triggers no run — see 5).
+2. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on any pre-release tag push: `prepare-release` builds and publishes the pre-release and pushes its digest-pinned staging branch, then — **only for `-rc.N` tags** — the mandatory `rc-e2e` job calls `e2e-tag.yaml` in the same run (`-alpha.N` / `-beta.N` skip it and are validated on demand with `e2e-tag.yaml`'s manual button). `generate-changelog` and `update-website-docs` also live here but are **backstops only** — both are normally produced at promotion time (see 4); on a stable tag push each self-skips or no-ops when the promote flow already did the work. These stable-tag backstops only fire because finalize pushes the stable tag with the CI app token (a `GITHUB_TOKEN` push triggers no run — see 5).
 3. [`e2e-tag.yaml`](../.github/workflows/e2e-tag.yaml) — reusable from `tags.yaml::rc-e2e` and manually dispatchable for a published tag. It resolves the tag's published disk plus digest-pinned tree and runs the full install, OpenAPI, and Chainsaw suite. Its dispatch run title is the constant workflow name, so the promote gate correlates a manual run through the successful tag-bearing E2E job name rather than the title.
 4. [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — manual dispatch. Five jobs: `parse` validates the rc tag and requires green full-E2E evidence before any staging; `promote` stages the `release-X.Y.Z` tree (rc digests, tag string rewritten to stable) and drafts the stable release; `changelog` calls the reusable `changelog-generate.yaml` **in parallel** to produce `docs/changelogs/vX.Y.Z.md` (regenerating it, or copying an rc-time changelog already committed to the `release-X.Y.Z-rc.N` staging branch by `changelog-rc.yaml` — see 7); `website-docs` (needs `parse`, `promote`) opens the `cozystack/website` docs PR from the staging branch via `FETCH_REF` (see [Phase 3](#phase-3--update-website-docs-now-the-backstop)); `open-pr` joins them, commits the changelog onto the staging branch, and opens the `release-X.Y.Z` promote PR with the `release` label but no automatic `full-e2e`. So the changelog and website docs are reviewed as part of the promotion, the already-checked rc suite is not repeated by default, and the PR body carries ✅ verified or ⚠️ bypassed plus ✅/⚠️ changelog and website-docs lines. Both `changelog` and `website-docs` are non-blocking. No registry mutation — transactional.
 5. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires when the `release-X.Y.Z` PR merges; finalizes the release: cuts the write-once stable + Go-module tags, publishes the release **with the merged changelog as its body**, then retags the rc images to stable by digest (`:latest` gated on newest-stable) and publishes the stable chart.
@@ -244,11 +242,12 @@ This tag-time `update-website-docs` job stays as the **backstop**. It runs with 
 
 If anyone changes the website Makefile to write somewhere else (e.g. `static/`, `i18n/`), the `git add` list must grow in **both** jobs or the PR silently drops files.
 
-### Phase 4 — review and merge `chore(release): cut vX.Y.Z`
+### Phase 4 — review and merge the promote PR
 
-Reviewer checklist:
+Reviewer checklist for the `chore(release): promote vX.Y.Z-rc.N -> vX.Y.Z` PR:
 
 - [ ] The PR body says `✅ RC full e2e was verified`; if it says the gate was bypassed, obtain explicit maintainer acceptance or add `full-e2e` and wait for that opt-in run.
+- [ ] The PR body's **website-docs line** is present: if ✅, the `cozystack/website` docs PR is open and **parked** — do NOT merge it until `vX.Y.Z` is published (see [Phase 3](#phase-3--update-website-docs-now-the-backstop)); if ⚠️, the tag-time backstop will backfill it after finalize.
 - [ ] Diff is digest pins + image tags only — nothing else.
 - [ ] No accidental config drift (a value file you don't recognize).
 - [ ] If any chart bumped, check the new digest pulls — `crane manifest ghcr.io/cozystack/cozystack/<name>@<digest>` should return.
@@ -552,6 +551,7 @@ For RCs and final releases, run this before merging the release PR. Each item is
 - [ ] **For every flux / helm-controller / kubevirt-operator / cert-manager bump:** paste the upstream breaking-changes section of the bump's CHANGELOG into the PR body before merge.
 - [ ] **After cutting the tag,** watch `pull-requests-release.yaml::Finalize Release`. If it fails on `Draft release for v... not found`, undraft the release manually and file the workflow regression — this has been a known recurring failure since the `Publish draft release` step lost its explicit `github-token` in refactor `66a756b6`.
 - [ ] **The promote PR carries `docs/changelogs/vX.Y.Z.md` and it was verified** per [Changelog pre-publish verification](#changelog-pre-publish-verification). Finalize publishes this file as the release body, so verifying it before merge is verifying the release notes.
+- [ ] **The `cozystack/website` docs PR stays parked until publish.** Promotion opens it early; merging it before the GitHub release for `vX.Y.Z` is live 404s the new version's docs and API links. Merge it right after finalize publishes the release (regular-release step 6, patch step 7).
 
 ## CI failures release engineers commonly hit
 
@@ -610,10 +610,13 @@ Sometimes the work that has to land before a release is a 40-commit grab bag (CI
 - [`agents/changelog.md`](./agents/changelog.md) — canonical changelog generation process.
 - [`agents/contributing.md`](./agents/contributing.md) — commit/PR conventions, backport label semantics.
 - [`agents/releasing.md`](./agents/releasing.md) — pointer file for AI agents handling release tasks.
-- [`.github/workflows/tags.yaml`](../.github/workflows/tags.yaml) — tag-push pipeline.
+- [`.github/workflows/cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) — the sole entry point for cutting a pre-release tag as the CI app.
+- [`.github/workflows/tags.yaml`](../.github/workflows/tags.yaml) — tag-push pipeline (rc build + mandatory `rc-e2e`; stable-tag changelog/website backstops).
 - [`.github/workflows/e2e-tag.yaml`](../.github/workflows/e2e-tag.yaml) — mandatory rc and manual published-tag full E2E lane.
 - [`.github/workflows/pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — merge-finalize pipeline.
 - [`.github/workflows/promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — rc → stable promotion.
+- [`.github/workflows/changelog-rc.yaml`](../.github/workflows/changelog-rc.yaml) — optional rc-time changelog button.
+- [`.github/workflows/changelog-generate.yaml`](../.github/workflows/changelog-generate.yaml) — reusable changelog-generation core shared by promote-rc and changelog-rc.
 - [`.github/workflows/nightly.yaml`](../.github/workflows/nightly.yaml) — nightly: mirror `main` OCIR→GHCR + full e2e.
 - [`hack/nightly-mirror.sh`](../hack/nightly-mirror.sh) — cross-registry image mirror used by the nightly.
 - [`agents/image-refs.md`](./agents/image-refs.md) — where image references live, what their tags mean, and the invariants promotion and mirroring rely on.
