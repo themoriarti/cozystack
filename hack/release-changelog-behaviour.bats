@@ -31,6 +31,9 @@
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PRESERVE="$REPO_ROOT/hack/changelog-preserve.sh"
 VALIDATE="$REPO_ROOT/hack/validate-changelog.sh"
+PARSE_RC="$REPO_ROOT/hack/parse-rc-tag.sh"
+SELECT="$REPO_ROOT/hack/select-changelog-source.sh"
+PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
 FINALIZE="$REPO_ROOT/.github/workflows/pull-requests-release.yaml"
 
 # A bare "remote" plus a working clone, wired the way promote-rc.yaml sees them.
@@ -74,6 +77,69 @@ Fixture changelog.
 
 **Full Changelog**: https://github.com/cozystack/cozystack/compare/v1.0.0...v${version}
 EOF
+}
+
+# A changelog that hack/validate-changelog.sh REJECTS: header + release-link
+# comment but no '## ' section and no compare link — the realistic shape of a
+# truncated AI run or a botched hand-commit.
+write_invalid_changelog() {
+  dest="$1"; version="$2"
+  mkdir -p "$(dirname "$dest")"
+  cat > "$dest" <<EOF
+<!--
+https://github.com/cozystack/cozystack/releases/tag/v${version}
+-->
+
+# v${version} (2026-07-24)
+
+Truncated fixture — no sections, no compare link.
+EOF
+}
+
+# The rc-tag parser is shared by changelog-rc.yaml and mirrored inline by the
+# reusable changelog-generate.yaml. It must REJECT whitespace outright, not strip
+# it: a stripped 'v1. 6.0-rc.2' silently becomes a different tag, and a caller
+# keying its concurrency lane on the raw input would race two spellings of the
+# same tag to push the same staging branch. Execute it on the adversarial inputs
+# from the review directly.
+@test "parse-rc-tag: accepts a canonical rc tag and rejects whitespace / malformed ones" {
+  [ -x "$PARSE_RC" ] || { echo "hack/parse-rc-tag.sh missing or not executable" >&2; exit 1; }
+
+  # Canonical tag: exactly the three reconstructed key=value lines.
+  out="$("$PARSE_RC" v1.6.0-rc.2)" || { echo "parse-rc-tag rejected a valid rc tag" >&2; exit 1; }
+  want="rc_tag=v1.6.0-rc.2
+stable_version=1.6.0
+rc_branch=release-1.6.0-rc.2"
+  [ "$out" = "$want" ] || {
+    echo "parse-rc-tag output is wrong for v1.6.0-rc.2." >&2
+    echo "want:" >&2; printf '%s\n' "$want" | sed 's/^/  /' >&2
+    echo "got:"  >&2; printf '%s\n' "$out"  | sed 's/^/  /' >&2
+    exit 1
+  }
+
+  # Every adversarial input must be REJECTED (exit non-zero) AND write nothing to
+  # stdout, so a caller's `>> "$GITHUB_OUTPUT"` never gets a stray line from a
+  # partially-accepted parse.
+  tab="$(printf '\t')"
+  for bad in \
+    'v1. 6.0-rc.2' \
+    ' v1.6.0-rc.2' \
+    'v1.6.0-rc.2 ' \
+    "v1.6.0-rc.2${tab}" \
+    'v1.6.0' \
+    'v1.6.0-rc' \
+    '1.6.0-rc.2' \
+    'v1.6.0-rc.2x' \
+    ''; do
+    if o="$("$PARSE_RC" "$bad" 2>/dev/null)"; then
+      echo "parse-rc-tag ACCEPTED an invalid input: '$bad'" >&2
+      exit 1
+    fi
+    [ -z "$o" ] || {
+      echo "parse-rc-tag rejected '$bad' but still wrote to stdout: '$o'" >&2
+      exit 1
+    }
+  done
 }
 
 @test "preserve: rescues a hand-written changelog from an existing staging branch" {
@@ -185,6 +251,190 @@ EOF
     exit 1
   }
   [ ! -f "$tmp/c.md" ] || { echo "preserve left an empty artefact behind" >&2; exit 1; }
+  return 0
+}
+
+@test "pickup: changelog-preserve.sh fetches an rc-time changelog from the rc staging branch" {
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+  make_fixture "$tmp"
+
+  # changelog-rc.yaml committed the changelog onto the rc staging branch
+  # release-1.6.0-rc.2 at rc time (docs/changelogs/vX.Y.Z.md — the stable name).
+  (
+    cd "$tmp/work"
+    git checkout -qb release-1.6.0-rc.2
+    write_changelog docs/changelogs/v1.6.0.md 1.6.0
+    echo "RC-TIME MARKER" >> docs/changelogs/v1.6.0.md
+    git add -A && git commit -qm "docs: add changelog for v1.6.0"
+    git push -q origin HEAD:refs/heads/release-1.6.0-rc.2
+    git checkout -q main
+    rm -f docs/changelogs/v1.6.0.md
+  )
+
+  # The generation core (changelog-generate.yaml) does exactly this to COPY the
+  # rc-time changelog into the deliverable path instead of regenerating it — it
+  # runs `mkdir -p docs/changelogs` first (git prunes the emptied dir on the
+  # `checkout main` above), so mirror that.
+  out="$tmp/work/docs/changelogs/v1.6.0.md"
+  ( cd "$tmp/work" && mkdir -p docs/changelogs && "$PRESERVE" release-1.6.0-rc.2 1.6.0 docs/changelogs/v1.6.0.md ) || {
+    echo "pickup reported nothing to fetch, but the rc staging branch has a changelog" >&2
+    exit 1
+  }
+  [ -s "$out" ] || { echo "pickup exited 0 but wrote no file" >&2; exit 1; }
+  grep -q 'RC-TIME MARKER' "$out" || {
+    echo "picked-up file is not the rc-time changelog" >&2; exit 1; }
+  # And it must be publishable — the generation core validates it next.
+  "$VALIDATE" "$out" 1.6.0 >/dev/null 2>&1 || {
+    echo "picked-up changelog does not pass the validator" >&2; exit 1; }
+}
+
+# hack/select-changelog-source.sh is the validate-then-fall-through the reusable
+# core delegates to. Execute it for real against the three cases that matter, so a
+# regression (e.g. dropping a validation, or letting an invalid source win) is
+# caught by outcome rather than by a grep that a dead block could satisfy.
+@test "select-source: a valid rc-tag-tree changelog wins over the staging branch" {
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+  make_fixture "$tmp"
+
+  # A DIFFERENT valid changelog on the rc staging branch, to prove the tag tree wins.
+  (
+    cd "$tmp/work"
+    git checkout -qb release-1.6.0-rc.2
+    write_changelog docs/changelogs/v1.6.0.md 1.6.0
+    echo "BRANCH MARKER" >> docs/changelogs/v1.6.0.md
+    git add -A && git commit -qm "branch changelog"
+    git push -q origin HEAD:refs/heads/release-1.6.0-rc.2
+    git checkout -q main
+    rm -f docs/changelogs/v1.6.0.md
+  )
+  # A valid changelog in the working tree (the rc tag tree).
+  ( cd "$tmp/work" && write_changelog docs/changelogs/v1.6.0.md 1.6.0 && echo "TAG-TREE MARKER" >> docs/changelogs/v1.6.0.md )
+
+  out="$( cd "$tmp/work" && "$SELECT" 1.6.0 release-1.6.0-rc.2 )" || { echo "select-source failed" >&2; exit 1; }
+  src="$(printf '%s\n' "$out" | sed -n 's/^source=//p' | tail -n1)"
+  [ "$src" = rc-tag ] || {
+    echo "expected source=rc-tag; got '$src'. Full output:" >&2; printf '%s\n' "$out" | sed 's/^/  /' >&2; exit 1; }
+  grep -q 'TAG-TREE MARKER' "$tmp/work/docs/changelogs/v1.6.0.md" || {
+    echo "the rc-tag-tree changelog was not the one selected" >&2; exit 1; }
+}
+
+@test "select-source: an invalid rc-tag-tree changelog falls through to a valid staging branch" {
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+  make_fixture "$tmp"
+
+  # A VALID changelog on the rc staging branch.
+  (
+    cd "$tmp/work"
+    git checkout -qb release-1.6.0-rc.2
+    write_changelog docs/changelogs/v1.6.0.md 1.6.0
+    echo "BRANCH MARKER" >> docs/changelogs/v1.6.0.md
+    git add -A && git commit -qm "branch changelog"
+    git push -q origin HEAD:refs/heads/release-1.6.0-rc.2
+    git checkout -q main
+    rm -f docs/changelogs/v1.6.0.md
+  )
+  # An INVALID changelog in the working tree — must be discarded, not win.
+  ( cd "$tmp/work" && write_invalid_changelog docs/changelogs/v1.6.0.md 1.6.0 )
+
+  out="$( cd "$tmp/work" && "$SELECT" 1.6.0 release-1.6.0-rc.2 )" || { echo "select-source failed" >&2; exit 1; }
+  src="$(printf '%s\n' "$out" | sed -n 's/^source=//p' | tail -n1)"
+  [ "$src" = rc-branch ] || {
+    echo "expected source=rc-branch (invalid tag tree must fall through); got '$src'." >&2
+    printf '%s\n' "$out" | sed 's/^/  /' >&2; exit 1; }
+  printf '%s\n' "$out" | grep -q '::warning::' || {
+    echo "no loud ::warning:: for the discarded invalid tag-tree changelog" >&2; exit 1; }
+  grep -q 'BRANCH MARKER' "$tmp/work/docs/changelogs/v1.6.0.md" || {
+    echo "the valid rc-staging-branch changelog was not copied into place" >&2; exit 1; }
+}
+
+@test "select-source: invalid in both the tag tree and the staging branch falls through to generate" {
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+  make_fixture "$tmp"
+
+  # An INVALID changelog on the rc staging branch.
+  (
+    cd "$tmp/work"
+    git checkout -qb release-1.6.0-rc.2
+    write_invalid_changelog docs/changelogs/v1.6.0.md 1.6.0
+    git add -A && git commit -qm "invalid branch changelog"
+    git push -q origin HEAD:refs/heads/release-1.6.0-rc.2
+    git checkout -q main
+    rm -f docs/changelogs/v1.6.0.md
+  )
+  # An INVALID changelog in the working tree too.
+  ( cd "$tmp/work" && write_invalid_changelog docs/changelogs/v1.6.0.md 1.6.0 )
+
+  out="$( cd "$tmp/work" && "$SELECT" 1.6.0 release-1.6.0-rc.2 )" || { echo "select-source failed" >&2; exit 1; }
+  src="$(printf '%s\n' "$out" | sed -n 's/^source=//p' | tail -n1)"
+  [ "$src" = none ] || {
+    echo "expected source=none (both invalid -> generate); got '$src'." >&2
+    printf '%s\n' "$out" | sed 's/^/  /' >&2; exit 1; }
+  # Both discards must be reported loudly.
+  [ "$(printf '%s\n' "$out" | grep -c '::warning::')" -eq 2 ] || {
+    echo "expected exactly two ::warning:: lines (one per discarded invalid source)." >&2
+    printf '%s\n' "$out" | sed 's/^/  /' >&2; exit 1; }
+  # The invalid file must not be left behind to poison a later step.
+  [ ! -f "$tmp/work/docs/changelogs/v1.6.0.md" ] || {
+    echo "an invalid changelog was left on disk instead of being discarded" >&2; exit 1; }
+}
+
+# promote-rc.yaml's rc-tag parse is github-script (JS), so mirror its exact policy
+# under node and run the adversarial inputs from the review through it: whitespace
+# is REJECTED, never trimmed-and-accepted. The greps keep the mirror honest.
+@test "promote-rc parse: rejects whitespace-bearing rc tags (mirrors the workflow's github-script)" {
+  command -v node >/dev/null || { echo "node unavailable; skipping"; return 0; }
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+
+  cat > "$tmp/parse.js" <<'JS'
+function parse(rc) {
+  if (/\s/.test(rc)) return 'reject:whitespace';
+  const m = rc.match(/^v(\d+)\.(\d+)\.(\d+)-rc\.(\d+)$/);
+  if (!m) return 'reject:format';
+  return 'accept:' + m[1] + '.' + m[2] + '.' + m[3];
+}
+const lines = process.argv.slice(2).map((a) => a + '=' + parse(a));
+require('fs').writeFileSync(1, lines.join('\n') + '\n');
+JS
+
+  tab="$(printf '\t')"
+  node "$tmp/parse.js" \
+    'v1.6.0-rc.2' \
+    ' v1.6.0-rc.2' \
+    'v1.6.0-rc.2 ' \
+    "v1.6.0-rc.2${tab}" \
+    'v1. 6.0-rc.2' \
+    'v1.6.0' > "$tmp/out.txt" 2>"$tmp/err.txt" || { echo "node failed:" >&2; cat "$tmp/err.txt" >&2; exit 1; }
+
+  want="v1.6.0-rc.2=accept:1.6.0
+ v1.6.0-rc.2=reject:whitespace
+v1.6.0-rc.2 =reject:whitespace
+v1.6.0-rc.2${tab}=reject:whitespace
+v1. 6.0-rc.2=reject:whitespace
+v1.6.0=reject:format"
+  got="$(cat "$tmp/out.txt")"
+  [ "$got" = "$want" ] || {
+    echo "promote parse policy mismatch." >&2
+    echo "want:" >&2; printf '%s\n' "$want" | sed 's/^/  /' >&2
+    echo "got:"  >&2; printf '%s\n' "$got"  | sed 's/^/  /' >&2
+    exit 1
+  }
+
+  # The mirror must match what promote-rc.yaml actually does: reject whitespace,
+  # and NOT trim-and-accept.
+  grep -qF '/\s/.test(rc)' "$PROMOTE" || {
+    echo "promote-rc.yaml's parse no longer rejects whitespace with /\\s/.test(rc)." >&2; exit 1; }
+  grep -qF '.trim()' "$PROMOTE" && {
+    echo "promote-rc.yaml's parse still trims the rc tag; policy diverges from the changelog job." >&2; exit 1; }
   return 0
 }
 

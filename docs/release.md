@@ -177,13 +177,14 @@ gitGraph
 
 ## What CI does during the release process
 
-The numbered process above is implemented by five workflows. Knowing which job does what makes the failure modes much easier to diagnose.
+The numbered process above is implemented by six workflows, plus the reusable [`changelog-generate.yaml`](../.github/workflows/changelog-generate.yaml) that two of them share to produce the changelog. Knowing which job does what makes the failure modes much easier to diagnose.
 
 1. [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) — manual dispatch (from `main` or `release-X.Y`): the sole entry point for creating a pre-release tag. Validates the `-alpha`/`-beta`/`-rc` tag, then pushes it (write-once, at the branch tip) as the CI app so `tags.yaml` fires. Stable tags are never created here.
 2. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on an rc tag push: runs `prepare-release`, then `update-website-docs`. `generate-changelog` also lives here but is a **backstop only** — the changelog is normally produced at promotion time (see 3), and this job self-skips when it is already on `main`.
-3. [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — manual dispatch. Three jobs: `promote` stages the `release-X.Y.Z` tree (rc digests, tag string rewritten to stable) and drafts the stable release; `changelog` generates `docs/changelogs/vX.Y.Z.md` **in parallel**; `open-pr` joins them, commits the changelog onto the staging branch, and opens the `release-X.Y.Z` promote PR. So the changelog is reviewed as part of the promotion, and is on the base branch before the release is ever published. No registry mutation — transactional.
+3. [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — manual dispatch. Three jobs: `promote` stages the `release-X.Y.Z` tree (rc digests, tag string rewritten to stable) and drafts the stable release; `changelog` calls the reusable `changelog-generate.yaml` **in parallel** to produce `docs/changelogs/vX.Y.Z.md` (regenerating it, or copying an rc-time changelog already committed to the `release-X.Y.Z-rc.N` staging branch by `changelog-rc.yaml` — see 6); `open-pr` joins them, commits the changelog onto the staging branch, and opens the `release-X.Y.Z` promote PR. So the changelog is reviewed as part of the promotion, and is on the base branch before the release is ever published. No registry mutation — transactional.
 4. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires when the `release-X.Y.Z` PR merges; finalizes the release: cuts the write-once stable + Go-module tags, publishes the release **with the merged changelog as its body**, then retags the rc images to stable by digest (`:latest` gated on newest-stable) and publishes the stable chart.
 5. [`update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — fires on pushes to `main` that touch `docs/changelogs/v*.md`; syncs that content into the corresponding GitHub Release body. No longer the primary path (finalize sets the body directly, which is race-free and works for maintenance lines too) — this now covers later edits to a published changelog and manual re-syncs via `workflow_dispatch`.
+6. [`changelog-rc.yaml`](../.github/workflows/changelog-rc.yaml) — manual dispatch, **optional**: generate the changelog at rc time instead of waiting for promotion, while there is still time to review it. It calls the same reusable [`changelog-generate.yaml`](../.github/workflows/changelog-generate.yaml) and commits the result to the `release-X.Y.Z-rc.N` staging branch as `docs/changelogs/vX.Y.Z.md`; the promote-time `changelog` job then copies that file instead of running the AI again. Skipping this workflow changes nothing — promote generates the changelog itself, exactly as before.
 
 ### Phase 1 — `prepare-release` (hard gate)
 
@@ -203,9 +204,9 @@ Things that look surprising in the diff but are normal:
 - **Switched registry**: if a self-built image moved from `docker.io` to `ghcr.io`, the registry portion of the digest changes — that's a deliberate move, not a regression.
 - **`targetVersion` is NOT touched by the release PR.** Platform migration `targetVersion` is bumped earlier in a feature commit (e.g. `[platform] Bump migration targetVersion to 39 for migration 38`). The release PR only re-pins the `platform-migrations` image digest.
 
-### Phase 2 — the changelog (generated at promotion, not here)
+### Phase 2 — the changelog (generated at rc time or promotion, not here)
 
-The changelog for `vX.Y.Z` is produced by [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml)'s `changelog` job and committed onto the `release-X.Y.Z` staging branch by `open-pr`, so it rides the promote PR and is on the base branch the moment the release publishes. Finalize then uses that file verbatim as the GitHub Release body. Generating it here — on the stable tag push — would be too late by construction: that tag is created by finalize, which has already published the release.
+The changelog for `vX.Y.Z` is produced by [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml)'s `changelog` job (a thin call to the reusable [`changelog-generate.yaml`](../.github/workflows/changelog-generate.yaml)) and committed onto the `release-X.Y.Z` staging branch by `open-pr`, so it rides the promote PR and is on the base branch the moment the release publishes. Finalize then uses that file verbatim as the GitHub Release body. Generating it here — on the stable tag push — would be too late by construction: that tag is created by finalize, which has already published the release. It can also be produced earlier, at rc time, via the optional [`changelog-rc.yaml`](../.github/workflows/changelog-rc.yaml) button — which runs the same reusable core and commits the file to the `release-X.Y.Z-rc.N` staging branch, from which the promote-time `changelog` job copies it (validated) instead of regenerating.
 
 The `changelog` job runs **in parallel** with `promote`, detached at the rc tag (the "promotion" configuration in §2 of [`agents/changelog.md`](./agents/changelog.md)), using a separate **read-only** GitHub App token for the AI step so the model cannot mutate the repo even with `--allow-all-tools`. Every write — the commit onto the staging branch and the PR — happens in `open-pr` under a write-scoped token.
 
@@ -385,7 +386,7 @@ This rule generalizes to any monotonic-counter state: schema versions, feature-f
 
 ### Where the canonical process lives
 
-[`agents/changelog.md`](./agents/changelog.md) is the source of truth. Read it end-to-end before generating; do not infer the process from past commits or memory. The CI runs it under Copilot via `promote-rc.yaml::changelog` (and, as a backstop, `tags.yaml::generate-changelog`); locally the same prompt is replayable by following the doc directly.
+[`agents/changelog.md`](./agents/changelog.md) is the source of truth. Read it end-to-end before generating; do not infer the process from past commits or memory. The CI runs it under Copilot via the reusable `changelog-generate.yaml` — called by `promote-rc.yaml::changelog` at promote time and by the optional `changelog-rc.yaml` at rc time — and, as a backstop, `tags.yaml::generate-changelog`; locally the same prompt is replayable by following the doc directly.
 
 ### Common changelog failure modes
 
@@ -543,7 +544,7 @@ For RCs and final releases, run this before merging the release PR. Each item is
 | Symptom | Class | Diagnosis | Block release? |
 |---------|-------|-----------|----------------|
 | `Draft release for vX.Y.Z not found` on every release-* merge | Workflow regression — `Publish draft release` lost its `github-token` in a past refactor; default `GITHUB_TOKEN` cannot list drafts | At `pull-requests-release.yaml:163`. Undraft manually, file the fix | No |
-| Changelog Copilot job returns 402 | Token quota — `COPILOT_GITHUB_TOKEN` premium-request quota empty | All tag CI runs that day fail the changelog phase | No — `continue-on-error: true`, generate changelog by hand following [`agents/changelog.md`](./agents/changelog.md) |
+| Changelog Copilot job returns 402 | Token quota — `COPILOT_GITHUB_TOKEN` premium-request quota empty | Both changelog entry points hit it: the optional rc-time `changelog-rc` dispatch and the promote-time `changelog` job (both call the reusable `changelog-generate.yaml`), plus the `tags.yaml` backstop | No — `continue-on-error: true` on the AI step, generate changelog by hand following [`agents/changelog.md`](./agents/changelog.md) |
 | E2E `kubernetes-test` fails with `CSINode does not contain driver csi.kubevirt.io` | Test ordering bug | Tenant's `kubernetes-${test_name}-csi` HelmRelease still installing when NFS PVC is created. Fix: wait for `csinode/<node>` to advertise the driver before creating the PVC | Yes — flaky and masks real CSI bugs |
 | `tenant-root` HR in perpetual upgrade-rollback loop after OIDC patch | Real bug at the intersection of #2602's readiness change and the cozystack reconcile cadence | Look for `rate: Wait(n=1) would exceed context deadline` in operator logs; multiple tenant child HRs stuck `InProgress` | Yes |
 | `cozy-dashboard` ImagePullBackOff from `cozystack-ui:latest` | Registry flake | Known noisy on some OCI mirrors; not currently in the prepull set | No — retry |

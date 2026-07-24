@@ -38,38 +38,35 @@ concurrency:
   group: promote-rc
   cancel-in-progress: false
 
-jobs:
-  promote:
-    name: Promote ${{ inputs.rc_tag }}
-    runs-on: [oracle-vm-4cpu-16gb-x86-64]
-    timeout-minutes: 45
-    permissions:
-      contents: write
-      packages: write
-      pull-requests: write
+# Read-only by default; each job widens only what it needs (see per-job blocks).
+permissions:
+  contents: read
 
-    # Consumed by open-pr, so the rc tag is parsed and validated exactly once.
-    # (rc_branch is deliberately not exported: the changelog job checks out the
-    # rc *tag*, not the staging branch, and derives it from its own validated
-    # parse — see the checkout comment in that job.)
+jobs:
+  # Cheap front door: validate the dispatch input ONCE and derive every release
+  # identifier, before any heavy job starts. Both `promote` and `changelog`
+  # depend on this, so they still run in parallel with each other (this job takes
+  # seconds) while consuming ONE validated tag — no divergent second parse.
+  # Whitespace is rejected outright (not trimmed), matching hack/parse-rc-tag.sh
+  # and the reusable core: a non-canonical spelling is an immediate dispatch
+  # failure, so promote and the changelog job can never disagree about whether the
+  # tag is valid — the divergence that previously left a promote PR with no
+  # changelog.
+  parse:
+    name: Parse and validate rc tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       rc_tag: ${{ steps.parse.outputs.rc_tag }}
+      rc_version: ${{ steps.parse.outputs.rc_version }}
       stable_tag: ${{ steps.parse.outputs.stable_tag }}
       stable_version: ${{ steps.parse.outputs.stable_version }}
       stable_branch: ${{ steps.parse.outputs.stable_branch }}
+      rc_branch: ${{ steps.parse.outputs.rc_branch }}
       line: ${{ steps.parse.outputs.line }}
-
     steps:
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
-          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
-          owner: cozystack
-          # Scope the token to this repo only — it never touches other repos.
-          repositories: ${{ github.event.repository.name }}
-
       # Validate the dispatch input against a strict rc pattern before it ever
       # reaches a shell or an API call. Derives the stable version, the rc
       # staging branch, and the maintenance line.
@@ -80,7 +77,16 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
-            const rc = process.env.RC_TAG.trim();
+            const rc = process.env.RC_TAG;
+            // Reject whitespace outright rather than trimming it. Trimming would
+            // accept ' v1.4.0-rc.2 ' here while the parallel changelog job — which
+            // rejects whitespace — refuses the same input, so promote would push
+            // the stable branch and open-pr would open a PR with no changelog. One
+            // policy everywhere: non-canonical spelling = dispatch failure.
+            if (/\s/.test(rc)) {
+              core.setFailed(`rc_tag '${rc}' must not contain whitespace`);
+              return;
+            }
             const m = rc.match(/^v(\d+)\.(\d+)\.(\d+)-rc\.(\d+)$/);
             if (!m) {
               core.setFailed(`rc_tag '${rc}' must match 'vX.Y.Z-rc.N'`);
@@ -96,6 +102,36 @@ jobs:
             core.setOutput('stable_branch', `release-${version}`);
             core.setOutput('line', `${maj}.${min}`);
 
+  promote:
+    name: Promote ${{ needs.parse.outputs.rc_tag }}
+    needs: parse
+    runs-on: [oracle-vm-4cpu-16gb-x86-64]
+    timeout-minutes: 45
+    permissions:
+      contents: write # push the release-X.Y.Z staging branch, stage the draft release
+      packages: write # read image manifests for asset staging (retag runs in finalize)
+      pull-requests: write # reserved for parity; the PR is opened in open-pr
+
+    # open-pr reads these from `promote`, which passes the parse job's validated
+    # outputs straight through.
+    outputs:
+      rc_tag: ${{ needs.parse.outputs.rc_tag }}
+      stable_tag: ${{ needs.parse.outputs.stable_tag }}
+      stable_version: ${{ needs.parse.outputs.stable_version }}
+      stable_branch: ${{ needs.parse.outputs.stable_branch }}
+      line: ${{ needs.parse.outputs.line }}
+
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          # Scope the token to this repo only — it never touches other repos.
+          repositories: ${{ github.event.repository.name }}
+
       # Gate: the rc must exist as a (draft) release and the stable tag must NOT
       # exist yet. Refuse to promote twice or to an already-shipped version.
       - name: Validate rc is promotable
@@ -103,8 +139,8 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const rcTag     = '${{ steps.parse.outputs.rc_tag }}';
-            const stableTag = '${{ steps.parse.outputs.stable_tag }}';
+            const rcTag     = '${{ needs.parse.outputs.rc_tag }}';
+            const stableTag = '${{ needs.parse.outputs.stable_tag }}';
             const releases  = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner, repo: context.repo.repo, per_page: 100
             });
@@ -150,7 +186,7 @@ jobs:
       - name: Checkout rc staging branch
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ steps.parse.outputs.rc_branch }}
+          ref: ${{ needs.parse.outputs.rc_branch }}
           fetch-depth: 0
           fetch-tags: true
           token: ${{ steps.app-token.outputs.token }}
@@ -194,10 +230,10 @@ jobs:
       - name: Prepare stable branch
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
-          RC_VERSION: ${{ steps.parse.outputs.rc_version }}
-          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
-          STABLE_BRANCH: ${{ steps.parse.outputs.stable_branch }}
-          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+          RC_VERSION: ${{ needs.parse.outputs.rc_version }}
+          STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
+          STABLE_BRANCH: ${{ needs.parse.outputs.stable_branch }}
+          RC_TAG: ${{ needs.parse.outputs.rc_tag }}
         run: |
           git config user.name  "cozystack-ci[bot]"
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
@@ -266,23 +302,23 @@ jobs:
       - name: Stage rc assets
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+          RC_TAG: ${{ needs.parse.outputs.rc_tag }}
         run: |
           mkdir -p _out/assets
           gh release download "${RC_TAG}" --dir _out/assets --clobber
 
       - name: Restamp version-stamped assets
         env:
-          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+          STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
         run: |
           make manifests assets-cozypkg openapi-json COZYSTACK_VERSION="${STABLE_VERSION}"
 
       - name: Create draft stable release and upload assets
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          STABLE_TAG: ${{ steps.parse.outputs.stable_tag }}
-          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
-          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+          STABLE_TAG: ${{ needs.parse.outputs.stable_tag }}
+          STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
+          RC_TAG: ${{ needs.parse.outputs.rc_tag }}
         run: |
           # Draft now; pull-requests-release.yaml publishes it on PR merge.
           gh release view "${STABLE_TAG}" >/dev/null 2>&1 \
@@ -293,8 +329,9 @@ jobs:
           # Restamp step above.
           make upload_assets VERSION="${STABLE_TAG}" COZYSTACK_VERSION="${STABLE_VERSION}"
 
-  # ── Changelog: generated HERE, at promote time, so it rides the promote PR and
-  #    is on the base branch the moment the release publishes.
+  # ── Changelog: generated by the reusable changelog-generate.yaml, at promote
+  #    time, so it rides the promote PR and is on the base branch the moment the
+  #    release publishes.
   #
   #    Previously this lived in tags.yaml::generate-changelog, gated on the stable
   #    tag push. Under the promote flow that tag is created by
@@ -303,193 +340,38 @@ jobs:
   #    public. Moving generation here is the only fix; re-gating the tag-triggered
   #    job cannot help.
   #
+  #    The generation logic is factored into .github/workflows/changelog-generate.yaml
+  #    (workflow_call) and shared with changelog-rc.yaml, the rc-time button. The
+  #    OBSERVABLE behavior here is unchanged: same detached rc-tag checkout, same
+  #    read-only token for the AI step, same validator gate, same artifact name
+  #    (changelog-vX.Y.Z) that `open-pr` downloads, same non-blocking failure
+  #    tolerance. It gains one thing — the reusable workflow's skip check also
+  #    looks at the rc STAGING branch (release-X.Y.Z-rc.N): if changelog-rc.yaml
+  #    already generated the changelog at rc time, this COPIES it instead of
+  #    running the AI pass again.
+  #
   #    Runs in PARALLEL with `promote`: generation is AI-driven and slow, while
   #    `promote` spends most of its wall clock downloading and re-uploading the
-  #    heavy Talos assets. Neither needs the other's result, so both start at
-  #    once and `open-pr` joins them. The rc tag is re-derived here with a plain
-  #    regex rather than waiting on `promote`'s validate step, which would
-  #    serialize the two jobs and defeat the point.
+  #    heavy Talos assets. Both depend only on the cheap `parse` job (seconds), so
+  #    they still start together and `open-pr` joins them. It is handed the tag
+  #    `parse` already validated (needs.parse.outputs.rc_tag) rather than the raw
+  #    dispatch input, so promote and this job cannot diverge on whether the tag
+  #    is valid — a whitespace-bearing input fails `parse`, taking the whole
+  #    promotion down, instead of promote succeeding while this job rejects it and
+  #    the PR opens with no changelog. `secrets` are passed explicitly, matching
+  #    the reusable workflow's declared interface.
   changelog:
     name: Generate changelog
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    needs: parse
     permissions:
       contents: read
-    outputs:
-      present: ${{ steps.changelog_status.outputs.present }}
-    steps:
-      # Read-only token for the AI step. Minting a separate scoped token means
-      # generation cannot push branches, open PRs, or mutate any repository even
-      # with --allow-all-tools, regardless of whether the agent follows the
-      # prompt's instructions. `open-pr` owns every write.
-      - name: Generate read-only GitHub App token
-        id: app-token-read
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
-          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
-          owner: cozystack
-          permission-contents: read
-          permission-pull-requests: read
-          permission-metadata: read
-
-      - name: Parse rc tag
-        id: parse
-        env:
-          RC_TAG: ${{ inputs.rc_tag }}
-        run: |
-          set -euo pipefail
-          # Trim, matching the github-script parse in `promote` (RC_TAG.trim()).
-          # Without this a dispatch input with a stray space passes there and
-          # fails here — silently costing the changelog while the promotion runs on.
-          RC_TAG="$(printf '%s' "${RC_TAG}" | tr -d '[:space:]')"
-          if [[ ! "${RC_TAG}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-rc\.([0-9]+)$ ]]; then
-            echo "::error::rc_tag '${RC_TAG}' must match 'vX.Y.Z-rc.N'"
-            exit 1
-          fi
-          VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
-          # Re-emit the tag from the matched groups rather than passing
-          # inputs.rc_tag through: the checkout `ref` below then consumes a value
-          # this step reconstructed from a strict pattern, never raw dispatch
-          # input, so a crafted rc_tag cannot reach `actions/checkout`.
-          {
-            echo "stable_version=${VERSION}"
-            echo "rc_tag=v${VERSION}-rc.${BASH_REMATCH[4]}"
-          } >> "$GITHUB_OUTPUT"
-
-      # Detached at the rc TAG, not the rc staging branch. Two reasons:
-      #
-      # 1. docs/agents/changelog.md §2 is a hard gate — it permits exactly two
-      #    working-tree states (on `main`, or detached at the release tag) and
-      #    instructs the agent to STOP otherwise. A staging-branch checkout is
-      #    neither, so a compliant agent would refuse to generate anything on the
-      #    normal path. §2 has been extended to name this configuration too.
-      # 2. The staging branch carries digest-vendoring commits that are not
-      #    release content. Detaching at the tag makes "use the rc tag as the
-      #    upper bound" a property of the checkout rather than an instruction the
-      #    prompt has to talk the agent into honouring.
-      - name: Checkout rc tag
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ steps.parse.outputs.rc_tag }}
-          fetch-depth: 0
-          fetch-tags: true
-          token: ${{ steps.app-token-read.outputs.token }}
-          persist-credentials: false
-
-      # A second checkout of the DISPATCH ref, used only as a source of release
-      # tooling. The primary checkout above is an older commit (the rc tag, or a
-      # branch derived from it) and does not carry hack/validate-changelog.sh or
-      # the current docs/agents/changelog.md — and a script fetched by a script
-      # that is itself missing solves nothing, so this is done declaratively by
-      # actions/checkout rather than by shelling out to the repo's own tooling.
-      # Gitignored, so promote's `git add -A` never stages it.
-      - name: Checkout release tooling from the dispatch ref
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ github.ref_name }}
-          path: .release-tooling
-          sparse-checkout: |
-            hack
-            docs/agents
-          persist-credentials: false
-
-      # The agent reads docs/agents/changelog.md from the WORKING TREE, which is
-      # the rc tag — a commit that predates this workflow. Every rc cut before
-      # this change carries the old section 2, which lists only two valid
-      # configurations and instructs the agent to STOP on anything else. A
-      # detached rc-tag checkout is exactly that, so a COMPLIANT agent would
-      # silently decline to generate on every promotion of an existing rc.
-      # Overlay the current instructions so the agent reads today's contract.
-      - name: Refresh agent instructions
-        run: |
-          cp .release-tooling/docs/agents/changelog.md docs/agents/changelog.md
-          echo "Refreshed docs/agents/changelog.md from ${GITHUB_REF_NAME}."
-
-      # Skip generation when the changelog is already present in the rc tree — a
-      # maintainer who wrote it by hand (or an earlier dispatch) has already
-      # produced the deliverable, and regenerating would discard hand edits. This
-      # is the documented escape hatch for the non-blocking failure mode below.
-      - name: Check if changelog already exists
-        id: check_changelog
-        env:
-          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
-        run: |
-          if [ -s "docs/changelogs/v${STABLE_VERSION}.md" ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "✅ docs/changelogs/v${STABLE_VERSION}.md already in the rc tree — skipping generation."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Setup Node.js
-        if: steps.check_changelog.outputs.exists == 'false'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-
-      - name: Install GitHub Copilot CLI
-        if: steps.check_changelog.outputs.exists == 'false'
-        run: npm i -g @github/copilot
-
-      # Non-blocking by decision: a flaky AI step must not wedge a promotion that
-      # is otherwise ready. The promote PR then opens WITHOUT a changelog, and the
-      # PR body says so explicitly (see `open-pr`) so the reviewer catches it.
-      #
-      # Upper bound is the rc TAG, not HEAD and not the staging branch: the branch
-      # carries digest-vendoring commits that are not release content, and the
-      # stable tag does not exist yet (finalize cuts it post-merge).
-      - name: Generate changelog using AI
-        if: steps.check_changelog.outputs.exists == 'false'
-        continue-on-error: true
-        timeout-minutes: 30
-        env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
-          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
-          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
-        run: |
-          copilot \
-            --prompt "Generate the release changelog for the upcoming stable release v${STABLE_VERSION}, which is being promoted from the release candidate ${RC_TAG}. The repository is checked out in detached HEAD at the ${RC_TAG} tag — the 'promotion' configuration in section 2 of docs/agents/changelog.md. IMPORTANT: the v${STABLE_VERSION} tag does NOT exist yet; it is created only after the promotion PR merges. Use ${RC_TAG} as the upper bound in every git command (for example 'git log v<previous>..${RC_TAG}'), never HEAD. Write the file as docs/changelogs/v${STABLE_VERSION}.md and use v${STABLE_VERSION} — not ${RC_TAG} — in the header, in the 'Full Changelog' link, and in the leading release-link comment (the HTML comment at the very top of the file). Follow the instructions in @docs/agents/changelog.md exactly, including the 'Scope and boundaries' section at the top. Your deliverable is the single file docs/changelogs/v${STABLE_VERSION}.md — write it and exit; this workflow handles committing and opening the PR." \
-            --allow-all-tools --allow-all-paths < /dev/null
-
-      # Structural validation, not just "non-empty". The AI step is allowed to
-      # fail, and a run that dies partway (timeout, quota exhaustion mid-stream)
-      # can leave a fragment behind. A bare `-s` test would call that present,
-      # commit it, advertise it as valid in the PR body, and finalize would
-      # publish it verbatim as the release notes.
-      #
-      # The predicates live in hack/validate-changelog.sh so they can be tested
-      # directly against real shipped changelogs — an earlier inline version of
-      # this check asserted a `# Cozystack vX.Y.Z` header and a 20-line floor,
-      # both of which reject every PATCH changelog in the tree (they use
-      # `# vX.Y.Z (date)`, and v1.5.1 is a complete 19-line release). That threw
-      # away good output and told the operator generation had failed.
-      #
-      # A rejected changelog is treated exactly like "not generated": warn and
-      # take the degraded path, never fail the job — generation is non-blocking.
-      - name: Verify changelog
-        id: changelog_status
-        env:
-          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
-        run: |
-          if REASON="$(.release-tooling/hack/validate-changelog.sh "docs/changelogs/v${STABLE_VERSION}.md" "${STABLE_VERSION}" 2>&1)"; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "✅ ${REASON}"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Changelog not usable (${REASON}). The promote PR will open WITHOUT a changelog — commit docs/changelogs/v${STABLE_VERSION}.md to the PR branch before merging, or the published release will have empty notes."
-          fi
-
-      # Hand the file to `open-pr`, which owns every write to the staging branch.
-      - name: Upload changelog artifact
-        if: steps.changelog_status.outputs.present == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: changelog-v${{ steps.parse.outputs.stable_version }}
-          path: docs/changelogs/v${{ steps.parse.outputs.stable_version }}.md
-          retention-days: 7
-          if-no-files-found: error
+    uses: ./.github/workflows/changelog-generate.yaml
+    with:
+      rc_tag: ${{ needs.parse.outputs.rc_tag }}
+    secrets:
+      COZYSTACK_CI_APP_ID: ${{ secrets.COZYSTACK_CI_APP_ID }}
+      COZYSTACK_CI_PRIVATE_KEY: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
   # Join point: commits the changelog onto the staging branch `promote` pushed,
   # then opens the release PR. Split out of `promote` so changelog generation can
@@ -510,8 +392,8 @@ jobs:
     if: ${{ !cancelled() && needs.promote.result == 'success' }}
     timeout-minutes: 15
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write # commit the changelog onto the staging branch
+      pull-requests: write # open (or refresh) the promote PR
     steps:
       - name: Generate GitHub App token
         id: app-token
