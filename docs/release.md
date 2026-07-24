@@ -221,7 +221,7 @@ Known failure modes:
 
 - Copilot quota exhausted (`COPILOT_GITHUB_TOKEN` 402). Refill or rotate, then re-dispatch.
 - AI step timeout (hard 30-min cap).
-- Output truncated or whitespace-only — caught by the `Verify changelog` step, which asserts the `# Cozystack vX.Y.Z` header, the compare link, and a plausible line count, and downgrades to the missing-changelog path rather than shipping a fragment as release notes.
+- Output truncated or whitespace-only — caught by the `Verify changelog` step (`hack/validate-changelog.sh`), which accepts either header convention (`# Cozystack vX.Y.Z` for a minor or `# vX.Y.Z (<date>)` for a patch), and requires the leading release-link comment pointing at `releases/tag/vX.Y.Z`, a `compare/...vX.Y.Z` link ending in this version, and at least one `## ` section — deliberately with no line-count floor, since a complete short patch changelog (v1.5.1 ships in 19 lines) must not be rejected as a fragment. It downgrades to the missing-changelog path rather than shipping a fragment as release notes.
 
 **`tags.yaml::generate-changelog` is the backstop.** It self-skips when the changelog is already on `main`. It earns its keep in two cases: generation failed during promotion, or the promote PR targeted `release-X.Y` (a patch release) so the file never reached `main`. In the second case it **ports the reviewed file from the tag commit verbatim** rather than regenerating — a second AI pass there would spend quota and then overwrite already-published, already-reviewed release notes.
 
