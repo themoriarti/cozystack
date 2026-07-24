@@ -7,6 +7,7 @@
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
 PULL_REQUESTS="$REPO_ROOT/.github/workflows/pull-requests.yaml"
+TAGS="$REPO_ROOT/.github/workflows/tags.yaml"
 
 job_block() {
   awk -v job="  $1:" '
@@ -122,4 +123,97 @@ code_lines() {
   [ "${count:-0}" -eq 1 ]
   count="$(printf '%s\n' "$e2e_header" | code_lines | rg -cF "&& contains(github.event.pull_request.labels.*.name, 'full-e2e')" || true)"
   [ "${count:-0}" -eq 1 ]
+}
+
+# ── promote-time website docs contract ──────────────────────────────────────
+# The website "update managed apps reference" PR is opened at PROMOTE time from
+# the staging branch (via FETCH_REF) instead of only at tag time. These pins are
+# executable/structural (code_lines strips comments) so a commented-out step,
+# guard, or body line can never satisfy them. The one deliberate exception is the
+# tags.yaml backstop-comment pin, which asserts a COMMENT is present.
+
+@test "promote-rc website-docs job depends on parse and promote" {
+  block="$(job_block website-docs "$PROMOTE")"
+  [ -n "$block" ]
+
+  count="$(printf '%s\n' "$block" | code_lines | rg -cF '    needs: [parse, promote]' || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # It must run after the staging branch exists — website-docs is ordered after
+  # promote in the file, and promote is what pushes release-X.Y.Z.
+  website_line="$(code_lines < "$PROMOTE" | rg -n '^  website-docs:$' | awk -F: 'NR == 1 { print $1 }')"
+  promote_line="$(code_lines < "$PROMOTE" | rg -n '^  promote:$' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$website_line" ] && [ -n "$promote_line" ]
+  [ "$promote_line" -lt "$website_line" ]
+}
+
+@test "website-docs fetches docs from the staging branch via FETCH_REF, not the stable tag" {
+  block="$(job_block website-docs "$PROMOTE")"
+  [ -n "$block" ]
+
+  # The load-bearing invocation shape: update-all pinned to the staging branch.
+  count="$(printf '%s\n' "$block" | code_lines | rg -cF 'make update-all RELEASE_TAG="$TAG" FETCH_REF="$SRC_REF"' || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # SRC_REF must be the stable staging branch (which exists at promote time), never
+  # the stable tag (which finalize only creates post-merge).
+  count="$(printf '%s\n' "$block" | code_lines | rg -cF 'SRC_REF: ${{ needs.parse.outputs.stable_branch }}' || true)"
+  [ "${count:-0}" -ge 1 ]
+  count="$(printf '%s\n' "$block" | code_lines | rg -cF 'FETCH_REF="${{ needs.parse.outputs.stable_tag }}"' || true)"
+  [ "${count:-0}" -eq 0 ]
+}
+
+@test "website-docs guards against a website checkout that predates FETCH_REF" {
+  block="$(job_block website-docs "$PROMOTE")"
+  guard="$(printf '%s\n' "$block" | awk '
+    /^      - name: Require FETCH_REF support/ { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside')"
+  [ -n "$guard" ]
+
+  # It detects support by probing the website Makefile, and fails loudly when
+  # absent — never warn-and-continue into stub-doc generation.
+  printf '%s\n' "$guard" | code_lines | rg -qF "grep -q '^FETCH_REF' Makefile"
+  printf '%s\n' "$guard" | code_lines | rg -qF 'exit 1'
+}
+
+@test "website-docs checkout does not persist credentials (app-token push, extraheader trap)" {
+  block="$(job_block website-docs "$PROMOTE")"
+  checkout="$(printf '%s\n' "$block" | awk '
+    /^      - name: Checkout website repo$/ { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside')"
+  [ -n "$checkout" ]
+
+  count="$(printf '%s\n' "$checkout" | code_lines | rg -cF 'persist-credentials: false' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$checkout" | code_lines | rg -cF 'repository: cozystack/website' || true)"
+  [ "${count:-0}" -eq 1 ]
+}
+
+@test "website-docs PR body carries the DO-NOT-MERGE-until-finalize contract" {
+  block="$(job_block website-docs "$PROMOTE")"
+  # Explicit merge-timing wording in the body the job opens on cozystack/website.
+  printf '%s\n' "$block" | code_lines | rg -qF 'DO NOT MERGE until'
+}
+
+@test "promote PR body carries a website-docs ✅/⚠️ status line" {
+  block="$(job_block open-pr "$PROMOTE")"
+  [ -n "$block" ]
+
+  count="$(printf '%s\n' "$block" | code_lines | rg -cF 'WEBSITE_DOCS_RESULT: ${{ needs.website-docs.result }}' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$block" | code_lines | rg -cF '          ${WEBSITE_NOTE}' || true)"
+  [ "${count:-0}" -eq 1 ]
+  # Both outcomes must be expressible.
+  printf '%s\n' "$block" | code_lines | rg -qF 'WEBSITE_NOTE="✅'
+  printf '%s\n' "$block" | code_lines | rg -qF 'WEBSITE_NOTE="⚠️'
+}
+
+@test "tags.yaml update-website-docs documents that it is now the backstop" {
+  # Deliberately a COMMENT-presence pin (not code_lines): the backstop status is
+  # documented in a comment above the tag-time job so a maintainer reading it
+  # knows the promote flow opens the PR earlier.
+  grep -qF 'promote-rc.yaml::website-docs' "$TAGS"
+  grep -qiF 'backstop' "$TAGS"
 }

@@ -509,13 +509,185 @@ jobs:
       COZYSTACK_CI_PRIVATE_KEY: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
       COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
+  # ── Website docs: open the cozystack/website "update managed apps reference" PR
+  #    at PROMOTE time, not tag time. tags.yaml::update-website-docs still fires on
+  #    the stable tag push as a backstop (see the comment there), but that is too
+  #    late for a reviewer AND it fetched README content from the stable tag, which
+  #    does not exist until finalize pushes it. This job fetches from the
+  #    release-X.Y.Z STAGING BRANCH `promote` just pushed — via the website
+  #    Makefile's FETCH_REF variable — so the docs are ready to review alongside the
+  #    promote PR while the stable tag is still unborn.
+  #
+  #    needs [parse, promote]: the staging branch must exist before FETCH_REF can
+  #    resolve, and `promote` is what pushes it.
+  #
+  #    CRITICAL MERGE-TIMING CONTRACT: the website PR this opens must NOT be merged
+  #    before pull-requests-release.yaml finalize publishes the release. Merging it
+  #    early flips the site's latest-version pointer to a version whose versioned
+  #    docs and openapi are not on GitHub yet, so every version-pin and API link for
+  #    the new version 404s until the release lands. The PR body states this in bold
+  #    and the promote PR body carries a matching reminder line (assembled in
+  #    open-pr from this job's result).
+  #
+  #    Non-blocking for promotion: any failure here — including the FETCH_REF-support
+  #    guard below — surfaces as a ⚠️ line in the promote PR body (open-pr reads
+  #    needs.website-docs.result) and never blocks the promotion. The tag-time
+  #    backstop backfills the same branch.
+  website-docs:
+    name: Update website docs
+    runs-on: ubuntu-latest
+    needs: [parse, promote]
+    timeout-minutes: 20
+    permissions:
+      contents: read # all writes go to cozystack/website through the app token, never this repo's GITHUB_TOKEN
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          # No `repositories:` scope: this token must reach cozystack/website, not
+          # just this repo (matches tags.yaml::update-website-docs).
+          owner: cozystack
+
+      - name: Checkout website repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: cozystack/website
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          # Do not persist the token as http.extraheader. The Commit and push step
+          # re-injects the app token via `git remote set-url`, so the app token (not
+          # a persisted credential) authenticates the push — the same handling
+          # promote-rc's other checkouts use, and precisely the extraheader trap
+          # pull-requests-release.yaml's finalize was bitten by.
+          persist-credentials: false
+
+      # GUARD — refuse to run the promote-time path against a website checkout that
+      # does not understand FETCH_REF yet (before website PR feat/prerelease-fetch-ref
+      # merges). Without FETCH_REF, `make update-all RELEASE_TAG=$TAG FETCH_REF=$REF`
+      # silently ignores the unknown command-line variable and falls back to
+      # BRANCH=RELEASE_TAG=$TAG — a stable tag finalize has NOT created yet. The
+      # pre-FETCH_REF update_apps.sh then fetches READMEs from that nonexistent ref,
+      # warns-and-continues, and commits STUB docs — reopening the exact old-bad
+      # behaviour this move exists to kill. Fail loudly instead; the tag-time
+      # backstop still backfills once the tag (and, by then, FETCH_REF) exist.
+      - name: Require FETCH_REF support in the website checkout
+        run: |
+          if ! grep -q '^FETCH_REF' Makefile; then
+            echo "::warning title=website docs skipped::cozystack/website main has no FETCH_REF support yet (PR feat/prerelease-fetch-ref not merged). Refusing to generate docs from the not-yet-created stable tag; tags.yaml::update-website-docs will backfill at tag time."
+            exit 1
+          fi
+
+      # v0 for a 0.x line, else vX.Y — mirrors the website Makefile routing and
+      # tags.yaml's promote decision. Only a new minor/major (directory absent)
+      # promotes next/ → vX.Y/; a patch updates the existing directory in place.
+      - name: Determine if this release promotes next/
+        id: promote
+        env:
+          VERSION: ${{ needs.parse.outputs.stable_version }}
+        run: |
+          MAJOR="${VERSION%%.*}"
+          MINOR="$(echo "$VERSION" | cut -d. -f2)"
+          if [ "$MAJOR" = "0" ]; then
+            DOC_VERSION="v0"
+          else
+            DOC_VERSION="v${MAJOR}.${MINOR}"
+          fi
+          if [ -d "content/en/docs/${DOC_VERSION}" ]; then
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            echo "content/en/docs/${DOC_VERSION}/ already exists — patch release, updating in place, skipping release-next."
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+            echo "New minor/major release ${DOC_VERSION} — will promote next/ → ${DOC_VERSION}/."
+          fi
+
+      # Refresh the trunk pins from the staging ref BEFORE release-next snapshots
+      # next/ into vX.Y/, so the new version directory inherits fresh Talos /
+      # cozystack pins from release-X.Y.Z instead of a stale next.yaml (the v1.6
+      # talos-pin incident class). Promote path only — a patch leaves the trunk
+      # untouched.
+      - name: Refresh trunk version pins from the staging ref
+        if: steps.promote.outputs.promote == 'true'
+        env:
+          SRC_REF: ${{ needs.parse.outputs.stable_branch }}
+          TAG: ${{ needs.parse.outputs.stable_tag }}
+        run: ./hack/update_versions.sh --dest data/versions/next.yaml --branch "$SRC_REF" --cozystack-tag "$TAG"
+
+      - name: Promote next/ to released version
+        if: steps.promote.outputs.promote == 'true'
+        env:
+          TAG: ${{ needs.parse.outputs.stable_tag }}
+        run: make release-next RELEASE_TAG="$TAG"
+
+      # FETCH_REF pins the content fetch to the staging branch (which exists); TAG
+      # still routes the output directory (vX.Y vs next) and stamps versions. The
+      # stable tag is deliberately NOT the fetch ref — it does not exist until
+      # finalize.
+      - name: Update docs from the staging branch
+        env:
+          TAG: ${{ needs.parse.outputs.stable_tag }}
+          SRC_REF: ${{ needs.parse.outputs.stable_branch }}
+        run: make update-all RELEASE_TAG="$TAG" FETCH_REF="$SRC_REF"
+
+      - name: Commit and push
+        id: commit
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ needs.parse.outputs.stable_version }}
+        run: |
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/cozystack/website"
+          git add content hugo.yaml data/versions
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BRANCH="update-docs-v${VERSION}"
+          # Same mutable-branch idiom as tags.yaml: rebuild the branch from the
+          # current tree and force-push. No-op above when nothing changed.
+          git branch -D "$BRANCH" 2>/dev/null || true
+          git checkout -b "$BRANCH"
+          git commit --signoff -m "[docs] Update managed apps reference for v${VERSION}"
+          git push --force --set-upstream origin "$BRANCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open or refresh the website PR
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ needs.parse.outputs.stable_version }}
+          TAG: ${{ needs.parse.outputs.stable_tag }}
+        run: |
+          BRANCH="update-docs-v${VERSION}"
+          TITLE="[docs] Update managed apps reference for ${TAG}"
+          # Body assembled with printf so paragraphs carry no YAML-block leading
+          # indentation (which would render as code blocks). The DO NOT MERGE
+          # paragraph is load-bearing: merging early breaks the live site.
+          BODY="$(printf '%s\n\n%s\n\n%s' \
+            "Automated docs update for release \`${TAG}\`, generated at PROMOTE time from the \`release-${VERSION}\` staging branch (fetched via FETCH_REF; the stable tag \`${TAG}\` does not exist yet)." \
+            "⛔ **DO NOT MERGE until \`${TAG}\` is published.** This PR is opened before the release exists. Merging it before pull-requests-release.yaml finalize publishes \`${TAG}\` flips the site's latest-version pointer to a version whose versioned docs and openapi.json are not on GitHub yet — every version-pin and API link for the new version 404s until the release lands. Park this PR until the GitHub release for \`${TAG}\` is live, then merge." \
+            "Opened early on purpose so the docs can be reviewed alongside the promote PR. tags.yaml::update-website-docs re-runs at tag time as a backstop and no-ops (\"No changes to commit\") when this already did the work.")"
+          PR_STATE="$(gh pr view "$BRANCH" --repo cozystack/website --json state --jq .state 2>/dev/null || echo "")"
+          if [ "$PR_STATE" = "OPEN" ]; then
+            gh pr edit "$BRANCH" --repo cozystack/website --title "$TITLE" --body "$BODY"
+            echo "Refreshed the open website PR for ${BRANCH}."
+          else
+            gh pr create --repo cozystack/website \
+              --title "$TITLE" --body "$BODY" \
+              --head "$BRANCH" --base main
+          fi
+
   # Join point: commits the changelog onto the staging branch `promote` pushed,
   # then opens the release PR. Split out of `promote` so changelog generation can
   # run concurrently with the asset staging rather than after it.
   open-pr:
     name: Open promote PR
     runs-on: ubuntu-latest
-    needs: [promote, changelog]
+    needs: [promote, changelog, website-docs]
     # `needs` alone would SKIP this job whenever `changelog` fails, which would
     # leave the staging branch pushed and the draft release staged but no promote
     # PR at all — the exact wedge the non-blocking design exists to prevent.
@@ -524,7 +696,10 @@ jobs:
     # the job timeout) is still fatal, and an npm or Copilot outage is precisely
     # the scenario this must survive. Gate on `promote` alone and let the
     # `needs.changelog.outputs.present` guards below degrade to the documented
-    # "PR opens with the ⚠️ body" path.
+    # "PR opens with the ⚠️ body" path. `website-docs` is in `needs` for the same
+    # reason and read the same way — a failed website-docs (or the FETCH_REF guard
+    # tripping) must degrade to a ⚠️ line in the promote PR body, never block it —
+    # so this `if:` deliberately gates on `promote` only, not on website-docs.
     if: ${{ !cancelled() && needs.promote.result == 'success' }}
     timeout-minutes: 15
     permissions:
@@ -662,6 +837,8 @@ jobs:
           # not just what the AI produced.
           CHANGELOG_PRESENT: ${{ (steps.existing.outputs.present == 'true' || steps.usable.outputs.present == 'true') && 'true' || 'false' }}
           E2E_VERIFICATION: ${{ needs.promote.outputs.e2e_verification }}
+          # website-docs is non-blocking; its result drives a ✅/⚠️ line only.
+          WEBSITE_DOCS_RESULT: ${{ needs.website-docs.result }}
         run: |
           # Target the maintenance line if it exists, else main.
           BASE=main
@@ -682,13 +859,23 @@ jobs:
           else
             E2E_NOTE="⚠️ **RC e2e gate bypassed** — this promotion did not verify green full e2e evidence for \`${RC_TAG}\`."
           fi
+          # website-docs is non-blocking: state its outcome where the reviewer is
+          # looking, and — on success — repeat the DO-NOT-MERGE-early contract so
+          # nobody merges the website PR before this release is finalized.
+          if [ "${WEBSITE_DOCS_RESULT}" = "success" ]; then
+            WEBSITE_NOTE="✅ Website docs PR opened/refreshed on \`cozystack/website\` (branch \`update-docs-v${STABLE_VERSION}\`), generated from the \`${STABLE_BRANCH}\` staging branch. **Do NOT merge that PR until \`${STABLE_TAG}\` is published** — merging it early flips the site's latest-version pointer to an unpublished version and 404s its docs/API links (see the PR body)."
+          else
+            WEBSITE_NOTE="⚠️ **Website docs not updated** — the website-docs job did not succeed (result: \`${WEBSITE_DOCS_RESULT}\`; e.g. \`cozystack/website\` main not yet on FETCH_REF). Promotion is unaffected; tags.yaml::update-website-docs will backfill the docs PR at tag time. Check the promote run's website-docs job."
+          fi
           BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. The tree pins the rc's images by digest. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit, retags those digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishes the stable cozy-installer chart, and publishes the release — so the stable artifacts are bit-for-bit the rc that passed e2e. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit.
 
           ${E2E_NOTE}
 
           ℹ️ E2E already ran against the immutable rc, so this promote PR does not run E2E by default. A maintainer may add the \`full-e2e\` label to run the full suite again.
 
-          ${CHANGELOG_NOTE}"
+          ${CHANGELOG_NOTE}
+
+          ${WEBSITE_NOTE}"
           # `gh pr view <branch>` resolves CLOSED PRs too. After a promote PR was
           # closed unmerged and the rc re-dispatched, editing that dead PR would
           # "succeed" and no new PR would ever be opened — the promotion reports

@@ -110,8 +110,10 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
   block="$(job_block open-pr "$PROMOTE")"
   [ -n "$block" ] || { echo "Could not locate the open-pr job in $PROMOTE" >&2; exit 1; }
 
-  printf '%s\n' "$block" | grep -q 'needs: \[promote, changelog\]' || {
-    echo "open-pr no longer declares 'needs: [promote, changelog]'." >&2
+  # Tolerate extra needs (e.g. website-docs) appended to the list — the load-
+  # bearing part is that open-pr still depends on both promote and changelog.
+  printf '%s\n' "$block" | grep -qE 'needs: \[promote, changelog(,|\])' || {
+    echo "open-pr no longer declares 'needs: [promote, changelog...]'." >&2
     exit 1
   }
 

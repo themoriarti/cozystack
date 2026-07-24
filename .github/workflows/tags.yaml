@@ -591,6 +591,16 @@ jobs:
             }
 
 
+  # BACKSTOP ONLY. The cozystack/website "update managed apps reference" PR is now
+  # normally opened earlier, at PROMOTE time, by promote-rc.yaml::website-docs —
+  # which fetches README content from the release-X.Y.Z staging branch (via the
+  # website Makefile's FETCH_REF) so the docs are reviewable alongside the promote
+  # PR while the stable tag is still unborn. This tag-time job stays as the
+  # backstop for the degraded paths (promote's website-docs failed or ran against
+  # a pre-FETCH_REF website): it fires on the stable tag push, force-pushes the
+  # SAME update-docs-vX.Y.Z branch, and no-ops into "No changes to commit" when
+  # promote already did the work. Behaviour is deliberately unchanged — at tag time
+  # the stable tag exists, so its BRANCH=RELEASE_TAG fetch resolves.
   update-website-docs:
     name: Update Website Docs
     # bash + git + yq + gh against the website repo — no docker: GitHub-hosted.
