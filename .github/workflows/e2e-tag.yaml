@@ -3,10 +3,10 @@ name: E2E Release Tag
 # Validate the installable release closure for an existing version tag.
 #
 # Every RC must pass this lane after tags.yaml has published the prerelease and
-# pushed its release-X.Y.Z-rc.N digest-pinned staging branch. A later PR wires
-# that mandatory post-cut check into the release process. The workflow_dispatch
-# trigger is the manual validation button for published alpha, beta, RC, and
-# stable releases.
+# pushed its release-X.Y.Z-rc.N digest-pinned staging branch — tags.yaml's
+# rc-e2e job calls this workflow as that mandatory post-cut check. The
+# workflow_dispatch trigger is the manual validation button for published
+# alpha, beta, RC, and stable releases.
 #
 # This lane validates published tags only; draft and promote-time validation are
 # explicitly out of scope because release checks run at RC publication time.

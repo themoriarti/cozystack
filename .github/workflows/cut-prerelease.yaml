@@ -215,8 +215,10 @@ jobs:
           # Push HEAD straight to a tag ref: no local tag object, non-forced. The
           # branch-tip anchoring makes GitHub populate the push event's base_ref
           # (tags.yaml's Get-base-branch step requires it); non-forced makes the
-          # tag write-once at the git layer. tags.yaml takes it from here (build +
-          # e2e + draft pre-release + staging branch).
+          # tag write-once at the git layer. tags.yaml takes it from here: every
+          # pre-release is built, drafted, and given a staging branch; rc tags
+          # then run mandatory full E2E. Alpha/beta tags use e2e-tag.yaml's
+          # manual dispatch when validation is wanted.
           git push origin "HEAD:refs/tags/$TAG"
           echo "Pushed $TAG at $local_head from '$REF_NAME'."
-          echo "tags.yaml will now build, e2e, and draft the pre-release."
+          echo "tags.yaml will now build and draft the pre-release and create its staging branch; rc tags also run mandatory full E2E."
