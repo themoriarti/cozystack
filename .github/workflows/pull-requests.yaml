@@ -5,7 +5,10 @@ env:
   REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `labeled` makes the promote PR's manual full-e2e opt-in actionable after
+    # the bot opens it. The plan/resolve guards below discard every other label
+    # event before it can launch build or E2E work.
+    types: [opened, synchronize, reopened, labeled]
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
 concurrency:
@@ -25,6 +28,7 @@ jobs:
   plan:
     name: Plan build
     runs-on: ubuntu-latest
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e'
     permissions:
       contents: read
     outputs:
@@ -444,7 +448,9 @@ jobs:
   resolve_assets:
     name: "Resolve assets"
     runs-on: ubuntu-latest
-    if: contains(github.event.pull_request.labels.*.name, 'release')
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'release')
+      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e')
     outputs:
       disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
@@ -533,7 +539,20 @@ jobs:
       packages: read
       checks: write
     needs: ["finalize", "build-talos", "resolve_assets"]
-    if: ${{ !cancelled() && (needs.finalize.result == 'success' || needs.resolve_assets.result == 'success') }}
+    # Regular PRs still enter through finalize. A release-labelled promote PR
+    # enters through resolve_assets only when a maintainer explicitly adds
+    # full-e2e; without that label the immutable rc's already-green suite is not
+    # repeated. The labeled trigger above makes that post-open opt-in start a run.
+    if: |
+      !cancelled()
+      && (
+        needs.finalize.result == 'success'
+        || (
+          needs.resolve_assets.result == 'success'
+          && contains(github.event.pull_request.labels.*.name, 'release')
+          && contains(github.event.pull_request.labels.*.name, 'full-e2e')
+        )
+      )
 
     steps:
       - name: Generate GitHub App token

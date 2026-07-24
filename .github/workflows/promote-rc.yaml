@@ -8,13 +8,13 @@ name: Promote RC
 # Promotion is TRANSACTIONAL: this dispatch performs NO registry mutation. It
 # only pushes the release-X.Y.Z staging branch (the rc's digest-vendored tree
 # with the rc version substring rewritten to stable), drafts the stable release
-# with restamped assets, and opens the release-X.Y.Z PR (labelled full-e2e).
+# with restamped assets, and opens the release-X.Y.Z PR. The rc's mandatory full
+# e2e is verified before staging; the promote PR does not repeat it by default.
 # Every irreversible registry side effect — retagging the rc's images to the
 # stable tag by digest, moving :latest, publishing the stable cozy-installer
-# chart — happens in pull-requests-release.yaml finalize, AFTER the PR's e2e has
-# passed and the PR has merged. An abandoned promotion therefore leaves nothing
-# but an overwritable draft + branch: no stable-named bytes, nothing to wedge a
-# later re-promotion.
+# chart — happens in pull-requests-release.yaml finalize, AFTER the PR has merged.
+# An abandoned promotion therefore leaves nothing but an overwritable draft +
+# branch: no stable-named bytes, nothing to wedge a later re-promotion.
 #
 # Triggered manually once an rc has gone green. The stable git tag is never
 # pushed by a human and never force-moved — it is created only at PR merge,
@@ -27,6 +27,11 @@ on:
         description: "Release-candidate tag to promote, e.g. v1.4.0-rc.2"
         required: true
         type: string
+      skip_e2e_gate:
+        description: "BYPASS the required green rc E2E check (emergency use only)"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   # Serialize ALL promotions. Keying on the rc tag would parallelize the
@@ -57,6 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read # list tags.yaml / e2e-tag.yaml runs and their jobs for the rc E2E gate
       contents: read
     outputs:
       rc_tag: ${{ steps.parse.outputs.rc_tag }}
@@ -66,6 +72,7 @@ jobs:
       stable_branch: ${{ steps.parse.outputs.stable_branch }}
       rc_branch: ${{ steps.parse.outputs.rc_branch }}
       line: ${{ steps.parse.outputs.line }}
+      e2e_verification: ${{ steps.e2e-gate.outputs.verification || steps.e2e-bypass.outputs.verification }}
     steps:
       # Validate the dispatch input against a strict rc pattern before it ever
       # reaches a shell or an API call. Derives the stable version, the rc
@@ -102,6 +109,134 @@ jobs:
             core.setOutput('stable_branch', `release-${version}`);
             core.setOutput('line', `${maj}.${min}`);
 
+      # Keep the check in this front-door job: both staging paths already need
+      # parse, so a red/missing rc E2E stops promote and changelog before either
+      # can write anything. GitHub's jobs API names a called-workflow job as
+      # "<caller job name> / <called workflow job name>"; direct dispatch jobs
+      # expose only the called job name. The suffix matcher deliberately accepts
+      # both forms.
+      #
+      # e2e-tag.yaml has no run-name and its workflow name is constant, so a
+      # dispatch run's title cannot identify inputs.tag. The expanded E2E job
+      # name is the strongest API-visible correlator because it embeds the exact
+      # validated tag. Its failure modes are Actions retention/deletion removing
+      # the run/job metadata, or a future rename of that job without updating
+      # this matcher; either case fails closed and can be recovered by running
+      # the E2E Release Tag button again.
+      - name: Verify green RC E2E
+        id: e2e-gate
+        if: ${{ !inputs.skip_e2e_gate }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const rcTag = process.env.RC_TAG;
+            const expectedJob = `E2E ${rcTag} (full suite)`;
+            const matchesE2EJob = (name) =>
+              name === expectedJob || name.endsWith(` / ${expectedJob}`);
+            const jobsForRun = (runId) => github.paginate(
+              github.rest.actions.listJobsForWorkflowRun,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+                filter: 'latest',
+                per_page: 100
+              }
+            );
+
+            // Evidence A: only the latest tags.yaml push run for this tag counts.
+            const tagRunsResponse = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'tags.yaml',
+              branch: rcTag,
+              event: 'push',
+              per_page: 100
+            });
+            const latestTagRun = tagRunsResponse.data.workflow_runs.find(
+              (run) => run.head_branch === rcTag
+            );
+            let tagEvidence = `no tags.yaml push run found with head_branch '${rcTag}'`;
+            if (latestTagRun) {
+              const jobs = await jobsForRun(latestTagRun.id);
+              const matches = jobs.filter((job) => matchesE2EJob(job.name));
+              tagEvidence = `latest tags.yaml run ${latestTagRun.html_url} (${latestTagRun.status}/${latestTagRun.conclusion || 'no conclusion'}), matching jobs: ${
+                matches.length
+                  ? matches.map((job) => `'${job.name}'=${job.conclusion || job.status}`).join(', ')
+                  : 'none'
+              }`;
+              core.info(`Evidence A: ${tagEvidence}`);
+              if (matches.some((job) => job.conclusion === 'success')) {
+                core.setOutput('verification', 'verified');
+                core.notice(`✅ Verified green rc E2E for ${rcTag} via the latest tags.yaml run.`);
+                await core.summary
+                  .addRaw(`✅ RC full E2E verified for \`${rcTag}\` via the latest \`tags.yaml\` run.`)
+                  .write();
+                return;
+              }
+            } else {
+              core.info(`Evidence A: ${tagEvidence}`);
+            }
+
+            // Evidence B: dispatch run titles are all "E2E Release Tag", so walk
+            // retained successful dispatch runs and correlate by the expanded
+            // tag-bearing job name instead.
+            const dispatchRuns = await github.paginate(
+              github.rest.actions.listWorkflowRuns,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'e2e-tag.yaml',
+                event: 'workflow_dispatch',
+                status: 'success',
+                per_page: 100
+              }
+            );
+            let dispatchMatch;
+            for (const run of dispatchRuns) {
+              const jobs = await jobsForRun(run.id);
+              const job = jobs.find(
+                (candidate) =>
+                  matchesE2EJob(candidate.name) &&
+                  candidate.conclusion === 'success'
+              );
+              if (job) {
+                dispatchMatch = {run, job};
+                break;
+              }
+            }
+
+            if (dispatchMatch) {
+              core.info(
+                `Evidence B: ${dispatchMatch.run.html_url}, job '${dispatchMatch.job.name}'=${dispatchMatch.job.conclusion}`
+              );
+              core.setOutput('verification', 'verified');
+              core.notice(`✅ Verified green rc E2E for ${rcTag} via an e2e-tag.yaml workflow_dispatch run.`);
+              await core.summary
+                .addRaw(`✅ RC full E2E verified for \`${rcTag}\` via a manual \`e2e-tag.yaml\` run.`)
+                .write();
+              return;
+            }
+
+            const dispatchEvidence = `${dispatchRuns.length} retained successful e2e-tag.yaml workflow_dispatch run(s), none with a successful '${expectedJob}' job`;
+            core.info(`Evidence B: ${dispatchEvidence}`);
+            core.setFailed(
+              `RC '${rcTag}' has no green full E2E evidence. Checked evidence A: ${tagEvidence}. Checked evidence B: ${dispatchEvidence}. Run the "E2E Release Tag" Actions button for '${rcTag}', or re-dispatch Promote RC with skip_e2e_gate=true only if you intentionally accept the emergency bypass.`
+            );
+
+      - name: Bypass RC E2E gate (emergency override)
+        id: e2e-bypass
+        if: ${{ inputs.skip_e2e_gate }}
+        env:
+          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+        run: |
+          echo "verification=bypassed" >> "$GITHUB_OUTPUT"
+          echo "::warning title=RC E2E GATE BYPASSED::Promoting ${RC_TAG} without verified green full E2E evidence."
+          printf '## ⚠️ RC E2E gate bypassed\n\n`%s` is being promoted without verified green full E2E evidence.\n' "$RC_TAG" >> "$GITHUB_STEP_SUMMARY"
+
   promote:
     name: Promote ${{ needs.parse.outputs.rc_tag }}
     needs: parse
@@ -120,6 +255,7 @@ jobs:
       stable_version: ${{ needs.parse.outputs.stable_version }}
       stable_branch: ${{ needs.parse.outputs.stable_branch }}
       line: ${{ needs.parse.outputs.line }}
+      e2e_verification: ${{ needs.parse.outputs.e2e_verification }}
 
     steps:
       - name: Generate GitHub App token
@@ -525,6 +661,7 @@ jobs:
           # branch, or generated this run. The PR body must reflect what merged,
           # not just what the AI produced.
           CHANGELOG_PRESENT: ${{ (steps.existing.outputs.present == 'true' || steps.usable.outputs.present == 'true') && 'true' || 'false' }}
+          E2E_VERIFICATION: ${{ needs.promote.outputs.e2e_verification }}
         run: |
           # Target the maintenance line if it exists, else main.
           BASE=main
@@ -540,7 +677,16 @@ jobs:
           else
             CHANGELOG_NOTE="⚠️ **No changelog in this PR** — automatic generation failed. Commit \`docs/changelogs/v${STABLE_VERSION}.md\` to this branch before merging, or \`${STABLE_TAG}\` publishes with an empty release body."
           fi
-          BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. The tree pins the rc's images by digest. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit, retags those digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishes the stable cozy-installer chart, and publishes the release — so the stable artifacts are bit-for-bit the rc that passed e2e. The \`full-e2e\` label forces the full suite on this PR. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit.
+          if [ "${E2E_VERIFICATION}" = "verified" ]; then
+            E2E_NOTE="✅ RC full e2e was verified for \`${RC_TAG}\` before promotion."
+          else
+            E2E_NOTE="⚠️ **RC e2e gate bypassed** — this promotion did not verify green full e2e evidence for \`${RC_TAG}\`."
+          fi
+          BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. The tree pins the rc's images by digest. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit, retags those digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishes the stable cozy-installer chart, and publishes the release — so the stable artifacts are bit-for-bit the rc that passed e2e. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit.
+
+          ${E2E_NOTE}
+
+          ℹ️ E2E already ran against the immutable rc, so this promote PR does not run E2E by default. A maintainer may add the \`full-e2e\` label to run the full suite again.
 
           ${CHANGELOG_NOTE}"
           # `gh pr view <branch>` resolves CLOSED PRs too. After a promote PR was
@@ -563,7 +709,10 @@ jobs:
               echo "::warning::The open PR for ${STABLE_BRANCH} has a hand-edited body — leaving it untouched. Changelog status this run: ${CHANGELOG_PRESENT}."
             fi
           else
+            # Release-labelled promote PRs deliberately omit full-e2e: the rc
+            # gate above already checked the immutable candidate. Adding the
+            # label later is the explicit maintainer opt-in for a repeat run.
             gh pr create --base "$BASE" --head "${STABLE_BRANCH}" \
               --title "chore(release): promote ${RC_TAG} -> ${STABLE_TAG}" \
-              --body "$BODY" --label release --label full-e2e
+              --body "$BODY" --label release
           fi
