@@ -2,9 +2,11 @@
 set -eu
 
 # Script to run unit tests for all Helm charts.
-# It iterates through directories in packages/apps, packages/extra,
-# packages/system, and packages/library and runs the 'test' Makefile
-# target if it exists.
+# It iterates through directories in packages/apps, packages/core,
+# packages/extra, packages/system, and packages/library and runs the 'test'
+# Makefile target if it exists. Keep this list in step with the loop below:
+# packages/core carries suites of its own, so dropping it to match a stale
+# comment would silently stop running them.
 
 FAILED_DIRS_FILE="$(mktemp)"
 trap 'rm -f "$FAILED_DIRS_FILE"' EXIT
