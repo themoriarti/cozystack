@@ -576,7 +576,7 @@ ALLOW
 
   files=$(image_ref_files packages)
   echo "$files" | grep -q '^packages/system/objectstorage-controller/values.yaml$'
-  echo "$files" | grep -q '^packages/system/monitoring/images/grafana.tag$'
+  echo "$files" | grep -q '^packages/system/grafana-operator/images/grafana-dashboards.tag$'
   echo "$files" | grep -q '^packages/system/multus/templates/multus-daemonset-thick.yml$'
 
   # And it must not reach into vendored charts, whose values `make update`
@@ -595,6 +595,6 @@ ALLOW
   . hack/lib/image-refs.sh
 
   refs=$(collect_image_refs packages)
-  echo "$refs" | grep -q 'cozystack/grafana@sha256:\|cozystack/grafana:[^ ]*@sha256:'
+  echo "$refs" | grep -q 'cozystack/grafana-dashboards@sha256:\|cozystack/grafana-dashboards:[^ ]*@sha256:'
   echo "$refs" | grep -q 'multus-cni'
 }

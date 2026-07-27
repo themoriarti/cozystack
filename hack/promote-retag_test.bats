@@ -154,9 +154,10 @@
     return "$rc"
   fi
 
-  # grafana lives in packages/system/monitoring/images/grafana.tag, and
+  # grafana-dashboards lives in
+  # packages/system/grafana-operator/images/grafana-dashboards.tag, and
   # multus-cni is sed'd into packages/system/multus/templates/*.yml. Neither is
   # reachable from any values.yaml.
-  grep -q 'cozystack/grafana:v9.9.9' "$tmp/out"
+  grep -q 'cozystack/grafana-dashboards:v9.9.9' "$tmp/out"
   grep -q 'cozystack/multus-cni:v9.9.9' "$tmp/out"
 }
