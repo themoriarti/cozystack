@@ -118,6 +118,12 @@ jobs:
   generate:
     name: Generate changelog
     needs: parse
+    # Explicit, matching promote-rc.yaml's identical call: a caller's grant is the
+    # ceiling for every job in the called workflow, and the docs describe an
+    # omitted block as "the default permissions for the GITHUB_TOKEN" rather than
+    # this workflow's own top-level block. Spelling it out removes the ambiguity.
+    permissions:
+      contents: read
     uses: ./.github/workflows/changelog-generate.yaml
     with:
       rc_tag: ${{ needs.parse.outputs.rc_tag }}

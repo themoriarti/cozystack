@@ -41,6 +41,13 @@ concurrency:
 # checking out the pinned tree require only repository contents read access.
 # Draft releases are not part of this lane's contract. The public GHCR images
 # referenced by that tree need no package token.
+#
+# CALLERS MUST GRANT `contents: read` AND `checks: write`. A caller's permissions
+# are the ceiling for every job here, and GitHub validates that ceiling when it
+# creates the run, before any `if:` is evaluated — so the `checks: write` the e2e
+# job below declares for its dispatch-only breakpoint has to be granted even by a
+# caller whose invocation can never reach that step. Granting less does not
+# degrade the breakpoint; it fails the caller's entire workflow run at startup.
 permissions:
   contents: read
 

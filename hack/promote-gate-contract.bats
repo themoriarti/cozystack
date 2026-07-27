@@ -243,3 +243,42 @@ code_lines() {
   count="$(printf '%s\n' "$checkout" | code_lines | grep -cF 'persist-credentials: false' || true)"
   [ "${count:-0}" -eq 1 ]
 }
+
+# ── rc-e2e's reusable-workflow permission ceiling ────────────────────────────
+# tags.yaml runs only on tag pushes, so no PR lane can ever exercise these two
+# facts together. They are pinned here because getting them wrong does not
+# degrade gracefully: a caller that grants less than the called workflow's jobs
+# declare fails GitHub's STATIC validation at run creation, taking down the whole
+# tags.yaml run — build, draft release and staging branch included — for every
+# tag push, rc or stable.
+
+@test "rc-e2e grants the ceiling e2e-tag.yaml's jobs declare" {
+  E2E_TAG="$REPO_ROOT/.github/workflows/e2e-tag.yaml"
+  [ -f "$E2E_TAG" ]
+
+  rc_e2e="$(job_block rc-e2e "$TAGS")"
+  [ -n "$rc_e2e" ]
+  printf '%s\n' "$rc_e2e" | code_lines | grep -qF 'uses: ./.github/workflows/e2e-tag.yaml'
+
+  # Every permission any job in the called workflow declares must be granted by
+  # the caller. Assert the pair explicitly, in both files, so removing either side
+  # surfaces here instead of at the next release.
+  e2e_job="$(job_block e2e "$E2E_TAG")"
+  [ -n "$e2e_job" ]
+  printf '%s\n' "$e2e_job" | code_lines | grep -qF 'checks: write'
+
+  printf '%s\n' "$rc_e2e" | code_lines | grep -qF 'contents: read'
+  printf '%s\n' "$rc_e2e" | code_lines | grep -qF 'checks: write'
+}
+
+@test "the promote gate's expected job name matches e2e-tag.yaml's job name" {
+  E2E_TAG="$REPO_ROOT/.github/workflows/e2e-tag.yaml"
+
+  # The gate correlates evidence by exact job name, which makes rc.1 vs rc.11
+  # unambiguous — and makes a rename on either side fail the gate closed, blocking
+  # promotion until someone notices. Cheap to pin, expensive to debug.
+  count="$(code_lines < "$PROMOTE" | grep -cF 'E2E ${rcTag} (full suite)' || true)"
+  [ "${count:-0}" -ge 1 ]
+  count="$(code_lines < "$E2E_TAG" | grep -cF 'E2E ${{ inputs.tag }} (full suite)' || true)"
+  [ "${count:-0}" -eq 1 ]
+}
