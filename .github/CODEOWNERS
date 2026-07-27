@@ -51,6 +51,20 @@
 /cmd/backup-controller/                      @androndo @lllamnyp
 /cmd/backupstrategy-controller/              @androndo @lllamnyp
 
+# --- Flux ---
+/packages/system/fluxcd/                     @kingdonb @kvaps @lllamnyp
+/packages/system/fluxcd-operator/            @kingdonb @kvaps @lllamnyp
+
+# --- GPU ---
+/packages/system/hami/                       @lexfrei @kvaps
+/packages/system/gpu-operator/               @lexfrei @kvaps
+/dashboards/gpu/                             @lexfrei @kvaps
+
+# --- Storage and metrics plumbing ---
+/packages/system/metrics-server/             @nbykov0 @IvanHunters
+/packages/system/seaweedfs/                  @nbykov0 @IvanHunters
+/packages/extra/seaweedfs/                   @nbykov0 @sircthulhu
+
 # --- cozystack-api / controller / lineage webhook ---
 /packages/system/cozystack-api/              @IvanHunters @kvaps @lllamnyp
 /packages/system/cozystack-controller/       @IvanHunters @kvaps @lllamnyp
