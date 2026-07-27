@@ -30,7 +30,7 @@ When the user asks to generate a changelog, follow these steps in the specified 
 
 **CHECKLIST - All actions that must be completed:**
 - [ ] Step 1: Update information from remote (git fetch)
-- [ ] Step 2: Check current branch (must be main)
+- [ ] Step 2: Check the working tree is at one of the valid starting points listed in Step 2
 - [ ] Step 3: Determine release type and previous version (minor vs patch release)
 - [ ] Step 4: Determine versions and analyze existing changelogs
 - [ ] Step 5: Get the list of commits for the release period
@@ -52,7 +52,7 @@ git fetch --tags --force --prune
 
 This is necessary to get up-to-date information about tags and commits from the remote repository.
 
-### 2. Checking current branch
+### 2. Checking the working tree
 
 Verify the working tree is at a sensible starting point. Three configurations are valid:
 

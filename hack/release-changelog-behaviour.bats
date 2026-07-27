@@ -36,6 +36,33 @@ SELECT="$REPO_ROOT/hack/select-changelog-source.sh"
 PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
 FINALIZE="$REPO_ROOT/.github/workflows/pull-requests-release.yaml"
 
+# Body of a top-level workflow job, so an assertion about one job cannot be
+# satisfied — or broken — by an unrelated one. Same shape as the contract suite's.
+job_block() {
+  awk -v job="  $1:" '
+    $0 == job { inside = 1; next }
+    /^  [a-z0-9_-]+:$/ { inside = 0 }
+    inside' "$2"
+}
+
+# One named step, for pins about a specific script rather than about a job. The
+# parse job is ~180 lines, most of them the e2e gate, so a job-scoped negative
+# pin still fires on string handling that has nothing to do with tag policy.
+step_block() {
+  awk -v name="      - name: $1" '
+    $0 == name { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside' "$2"
+}
+
+# Executable lines only: a YAML comment mentioning the pinned pattern must not
+# satisfy — or break — a pin. Same helper the contract suite uses.
+code_lines() {
+  local rc=0
+  grep -v '^[[:space:]]*#' || rc=$?
+  [ "$rc" -le 1 ]
+}
+
 # A bare "remote" plus a working clone, wired the way promote-rc.yaml sees them.
 # Everything lives under one temp dir the caller removes.
 make_fixture() {
@@ -430,10 +457,14 @@ v1.6.0=reject:format"
   }
 
   # The mirror must match what promote-rc.yaml actually does: reject whitespace,
-  # and NOT trim-and-accept.
-  grep -qF '/\s/.test(rc)' "$PROMOTE" || {
+  # and NOT trim-and-accept. Scoped to the parse STEP, not the parse job: the job
+  # also holds the e2e gate's github-script, whose own string handling would
+  # otherwise trip a negative pin about tag policy.
+  parse_step="$(step_block 'Parse and validate rc tag' "$PROMOTE")"
+  [ -n "$parse_step" ] || { echo "promote-rc.yaml has no 'Parse and validate rc tag' step." >&2; exit 1; }
+  printf '%s\n' "$parse_step" | code_lines | grep -qF '/\s/.test(rc)' || {
     echo "promote-rc.yaml's parse no longer rejects whitespace with /\\s/.test(rc)." >&2; exit 1; }
-  grep -qF '.trim()' "$PROMOTE" && {
+  printf '%s\n' "$parse_step" | code_lines | grep -qF '.trim()' && {
     echo "promote-rc.yaml's parse still trims the rc tag; policy diverges from the changelog job." >&2; exit 1; }
   return 0
 }

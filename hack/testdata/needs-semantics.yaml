@@ -1,4 +1,4 @@
-# Fixture for hack/release-changelog-contract.bats: proves, by RUNNING it, the
+# Fixture for hack/release-changelog-behaviour.bats: proves, by RUNNING it, the
 # GitHub Actions semantics promote-rc.yaml depends on — that a job needing a
 # FAILED job still runs when its `if:` gates only on a different, successful one.
 # Mirrors the promote / changelog / open-pr shapes exactly.
