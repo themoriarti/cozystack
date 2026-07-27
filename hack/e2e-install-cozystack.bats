@@ -117,7 +117,6 @@
     --namespace cozy-system \
     --create-namespace \
     --set cozystackOperator.helmReleaseInterval=30s \
-    --wait \
     --timeout 2m
 
   # The pre-install hook (cozy-system-labeler) must have stamped the PSA and
@@ -127,8 +126,39 @@
   kubectl get ns cozy-system -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' | grep -qx privileged
   kubectl get ns cozy-system -o jsonpath='{.metadata.labels.cozystack\.io/system}' | grep -qx true
 
-  # Verify the operator deployment is available
-  kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
+  # Wait for the ROLLOUT, not for condition=Available: once maxUnavailable
+  # reaches replicas the minimum available replica count is 0, so Available
+  # reports True with no pod running and a broken operator image passes in
+  # milliseconds, surfacing minutes later as a CRD timeout that blames the wrong
+  # component. `rollout status` reads updated and available replicas directly,
+  # and stays correct whatever strategy the chart carries.
+  #
+  # It still only proves a container started, not that the operator is healthy:
+  # there is no readiness probe, so one that starts and then dies mid-install
+  # passes here and is caught by the CRD waits below instead.
+  #
+  # This is the only readiness gate for the operator, since the helm step above
+  # drops --wait, so the timeout must cover scheduling and a cold pull of an
+  # image that is not in the prepull set.
+  kubectl rollout status deployment/cozystack-operator -n cozy-system --timeout=5m || {
+    echo "=== deployment/cozystack-operator rollout did not complete ==="
+    kubectl get deployment/cozystack-operator -n cozy-system -o yaml 2>&1 || true
+    echo "=== cozy-system pods ==="
+    kubectl get pods -n cozy-system -o wide 2>&1 || true
+    # The two shapes this gate exists to catch need different evidence, and
+    # neither is in `get pods -o wide`. ImagePullBackOff produces no logs at
+    # all, and CrashLoopBackOff puts the stack trace in the container that
+    # already died, so describe carries the first and --previous the second.
+    echo "=== cozystack-operator pod detail ==="
+    kubectl describe pod -n cozy-system -l app=cozystack-operator 2>&1 || true
+    echo "=== cozystack-operator logs ==="
+    kubectl logs -n cozy-system -l app=cozystack-operator --all-containers --tail=50 2>&1 || true
+    echo "=== cozystack-operator logs, previous container ==="
+    kubectl logs -n cozy-system -l app=cozystack-operator --all-containers --previous --tail=50 2>&1 || true
+    echo "=== cozy-system events ==="
+    kubectl get events -n cozy-system --sort-by=.lastTimestamp 2>&1 | tail -30 || true
+    false
+  }
 
   # Wait for operator to install CRDs (happens at startup before reconcile loop).
   # kubectl wait fails immediately if the CRD does not exist yet, so poll until it appears first.
