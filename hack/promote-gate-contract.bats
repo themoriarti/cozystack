@@ -30,8 +30,15 @@ input_block() {
     inside { print }' "$2"
 }
 
+# Comment-stripping filter for the pins below. POSIX `grep` only: the unit-test
+# runner has no ripgrep, and a missing filter used to be swallowed by `|| true`,
+# silently reducing every pin to "0 matches" instead of failing on the real
+# cause. grep exits 1 when nothing is selected (legitimate for an empty block)
+# and 2 on an actual error, so only the latter propagates.
 code_lines() {
-  rg -v '^[[:space:]]*#' || true
+  local rc=0
+  grep -v '^[[:space:]]*#' || rc=$?
+  [ "$rc" -le 1 ]
 }
 
 @test "green rc E2E gate is in parse before promote and gates its DAG edge" {
@@ -40,17 +47,17 @@ code_lines() {
   [ -n "$parse_block" ]
   [ -n "$promote_block" ]
 
-  count="$(printf '%s\n' "$parse_block" | code_lines | rg -cF '      - name: Verify green RC E2E' || true)"
+  count="$(printf '%s\n' "$parse_block" | code_lines | grep -cF '      - name: Verify green RC E2E' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$parse_block" | code_lines | rg -cF '      actions: read' || true)"
+  count="$(printf '%s\n' "$parse_block" | code_lines | grep -cF '      actions: read' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$promote_block" | code_lines | rg -cF '    needs: parse' || true)"
+  count="$(printf '%s\n' "$promote_block" | code_lines | grep -cF '    needs: parse' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  parse_line="$(code_lines < "$PROMOTE" | rg -n '^  parse:$' | awk -F: 'NR == 1 { print $1 }')"
-  promote_line="$(code_lines < "$PROMOTE" | rg -n '^  promote:$' | awk -F: 'NR == 1 { print $1 }')"
+  parse_line="$(code_lines < "$PROMOTE" | grep -n '^  parse:$' | awk -F: 'NR == 1 { print $1 }')"
+  promote_line="$(code_lines < "$PROMOTE" | grep -n '^  promote:$' | awk -F: 'NR == 1 { print $1 }')"
   [ -n "$parse_line" ]
   [ -n "$promote_line" ]
   [ "$parse_line" -lt "$promote_line" ]
@@ -60,19 +67,19 @@ code_lines() {
   block="$(input_block skip_e2e_gate "$PROMOTE")"
   [ -n "$block" ]
 
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF '      skip_e2e_gate:' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF '      skip_e2e_gate:' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF '        default: false' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF '        default: false' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF '        type: boolean' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF '        type: boolean' || true)"
   [ "${count:-0}" -eq 1 ]
 
   parse_block="$(job_block parse "$PROMOTE")"
-  count="$(printf '%s\n' "$parse_block" | code_lines | rg -cF '        if: ${{ !inputs.skip_e2e_gate }}' || true)"
+  count="$(printf '%s\n' "$parse_block" | code_lines | grep -cF '        if: ${{ !inputs.skip_e2e_gate }}' || true)"
   [ "${count:-0}" -eq 1 ]
-  count="$(printf '%s\n' "$parse_block" | code_lines | rg -cF '        if: ${{ inputs.skip_e2e_gate }}' || true)"
+  count="$(printf '%s\n' "$parse_block" | code_lines | grep -cF '        if: ${{ inputs.skip_e2e_gate }}' || true)"
   [ "${count:-0}" -eq 1 ]
 }
 
@@ -80,10 +87,10 @@ code_lines() {
   block="$(job_block open-pr "$PROMOTE")"
   [ -n "$block" ]
 
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF -- '--body "$BODY" --label release' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF -- '--body "$BODY" --label release' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF -- '--label full-e2e' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF -- '--label full-e2e' || true)"
   [ "${count:-0}" -eq 0 ]
 }
 
@@ -91,38 +98,38 @@ code_lines() {
   promote_block="$(job_block promote "$PROMOTE")"
   open_block="$(job_block open-pr "$PROMOTE")"
 
-  count="$(printf '%s\n' "$promote_block" | code_lines | rg -cF '      e2e_verification: ${{ needs.parse.outputs.e2e_verification }}' || true)"
+  count="$(printf '%s\n' "$promote_block" | code_lines | grep -cF '      e2e_verification: ${{ needs.parse.outputs.e2e_verification }}' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$open_block" | code_lines | rg -cF '          E2E_VERIFICATION: ${{ needs.promote.outputs.e2e_verification }}' || true)"
+  count="$(printf '%s\n' "$open_block" | code_lines | grep -cF '          E2E_VERIFICATION: ${{ needs.promote.outputs.e2e_verification }}' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$open_block" | code_lines | rg -cF '            E2E_NOTE="✅ RC full e2e was verified' || true)"
+  count="$(printf '%s\n' "$open_block" | code_lines | grep -cF '            E2E_NOTE="✅ RC full e2e was verified' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$open_block" | code_lines | rg -cF '            E2E_NOTE="⚠️ **RC e2e gate bypassed**' || true)"
+  count="$(printf '%s\n' "$open_block" | code_lines | grep -cF '            E2E_NOTE="⚠️ **RC e2e gate bypassed**' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$open_block" | code_lines | rg -cF '          ${E2E_NOTE}' || true)"
+  count="$(printf '%s\n' "$open_block" | code_lines | grep -cF '          ${E2E_NOTE}' || true)"
   [ "${count:-0}" -eq 1 ]
 }
 
 @test "release PR E2E is a working manual full-e2e label opt-in" {
-  count="$(code_lines < "$PULL_REQUESTS" | rg -cF '    types: [opened, synchronize, reopened, labeled]' || true)"
+  count="$(code_lines < "$PULL_REQUESTS" | grep -cF '    types: [opened, synchronize, reopened, labeled]' || true)"
   [ "${count:-0}" -eq 1 ]
 
   plan_header="$(job_header plan "$PULL_REQUESTS")"
-  count="$(printf '%s\n' "$plan_header" | code_lines | rg -cF "    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e'" || true)"
+  count="$(printf '%s\n' "$plan_header" | code_lines | grep -cF "    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e'" || true)"
   [ "${count:-0}" -eq 1 ]
 
   resolve_header="$(job_header resolve_assets "$PULL_REQUESTS")"
-  count="$(printf '%s\n' "$resolve_header" | code_lines | rg -cF "github.event.label.name == 'full-e2e'" || true)"
+  count="$(printf '%s\n' "$resolve_header" | code_lines | grep -cF "github.event.label.name == 'full-e2e'" || true)"
   [ "${count:-0}" -eq 1 ]
 
   e2e_header="$(job_header e2e "$PULL_REQUESTS")"
-  count="$(printf '%s\n' "$e2e_header" | code_lines | rg -cF "needs.resolve_assets.result == 'success'" || true)"
+  count="$(printf '%s\n' "$e2e_header" | code_lines | grep -cF "needs.resolve_assets.result == 'success'" || true)"
   [ "${count:-0}" -eq 1 ]
-  count="$(printf '%s\n' "$e2e_header" | code_lines | rg -cF "&& contains(github.event.pull_request.labels.*.name, 'full-e2e')" || true)"
+  count="$(printf '%s\n' "$e2e_header" | code_lines | grep -cF "&& contains(github.event.pull_request.labels.*.name, 'full-e2e')" || true)"
   [ "${count:-0}" -eq 1 ]
 }
 
@@ -137,13 +144,13 @@ code_lines() {
   block="$(job_block website-docs "$PROMOTE")"
   [ -n "$block" ]
 
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF '    needs: [parse, promote]' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF '    needs: [parse, promote]' || true)"
   [ "${count:-0}" -eq 1 ]
 
   # It must run after the staging branch exists — website-docs is ordered after
   # promote in the file, and promote is what pushes release-X.Y.Z.
-  website_line="$(code_lines < "$PROMOTE" | rg -n '^  website-docs:$' | awk -F: 'NR == 1 { print $1 }')"
-  promote_line="$(code_lines < "$PROMOTE" | rg -n '^  promote:$' | awk -F: 'NR == 1 { print $1 }')"
+  website_line="$(code_lines < "$PROMOTE" | grep -n '^  website-docs:$' | awk -F: 'NR == 1 { print $1 }')"
+  promote_line="$(code_lines < "$PROMOTE" | grep -n '^  promote:$' | awk -F: 'NR == 1 { print $1 }')"
   [ -n "$website_line" ] && [ -n "$promote_line" ]
   [ "$promote_line" -lt "$website_line" ]
 }
@@ -153,14 +160,14 @@ code_lines() {
   [ -n "$block" ]
 
   # The load-bearing invocation shape: update-all pinned to the staging branch.
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF 'make update-all RELEASE_TAG="$TAG" FETCH_REF="$SRC_REF"' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF 'make update-all RELEASE_TAG="$TAG" FETCH_REF="$SRC_REF"' || true)"
   [ "${count:-0}" -eq 1 ]
 
   # SRC_REF must be the stable staging branch (which exists at promote time), never
   # the stable tag (which finalize only creates post-merge).
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF 'SRC_REF: ${{ needs.parse.outputs.stable_branch }}' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF 'SRC_REF: ${{ needs.parse.outputs.stable_branch }}' || true)"
   [ "${count:-0}" -ge 1 ]
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF 'FETCH_REF="${{ needs.parse.outputs.stable_tag }}"' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF 'FETCH_REF="${{ needs.parse.outputs.stable_tag }}"' || true)"
   [ "${count:-0}" -eq 0 ]
 }
 
@@ -174,8 +181,8 @@ code_lines() {
 
   # It detects support by probing the website Makefile, and fails loudly when
   # absent — never warn-and-continue into stub-doc generation.
-  printf '%s\n' "$guard" | code_lines | rg -qF "grep -q '^FETCH_REF' Makefile"
-  printf '%s\n' "$guard" | code_lines | rg -qF 'exit 1'
+  printf '%s\n' "$guard" | code_lines | grep -qF "grep -q '^FETCH_REF' Makefile"
+  printf '%s\n' "$guard" | code_lines | grep -qF 'exit 1'
 }
 
 @test "website-docs checkout does not persist credentials (app-token push, extraheader trap)" {
@@ -186,29 +193,29 @@ code_lines() {
     inside')"
   [ -n "$checkout" ]
 
-  count="$(printf '%s\n' "$checkout" | code_lines | rg -cF 'persist-credentials: false' || true)"
+  count="$(printf '%s\n' "$checkout" | code_lines | grep -cF 'persist-credentials: false' || true)"
   [ "${count:-0}" -eq 1 ]
-  count="$(printf '%s\n' "$checkout" | code_lines | rg -cF 'repository: cozystack/website' || true)"
+  count="$(printf '%s\n' "$checkout" | code_lines | grep -cF 'repository: cozystack/website' || true)"
   [ "${count:-0}" -eq 1 ]
 }
 
 @test "website-docs PR body carries the DO-NOT-MERGE-until-finalize contract" {
   block="$(job_block website-docs "$PROMOTE")"
   # Explicit merge-timing wording in the body the job opens on cozystack/website.
-  printf '%s\n' "$block" | code_lines | rg -qF 'DO NOT MERGE until'
+  printf '%s\n' "$block" | code_lines | grep -qF 'DO NOT MERGE until'
 }
 
 @test "promote PR body carries a website-docs ✅/⚠️ status line" {
   block="$(job_block open-pr "$PROMOTE")"
   [ -n "$block" ]
 
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF 'WEBSITE_DOCS_RESULT: ${{ needs.website-docs.result }}' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF 'WEBSITE_DOCS_RESULT: ${{ needs.website-docs.result }}' || true)"
   [ "${count:-0}" -eq 1 ]
-  count="$(printf '%s\n' "$block" | code_lines | rg -cF '          ${WEBSITE_NOTE}' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF '          ${WEBSITE_NOTE}' || true)"
   [ "${count:-0}" -eq 1 ]
   # Both outcomes must be expressible.
-  printf '%s\n' "$block" | code_lines | rg -qF 'WEBSITE_NOTE="✅'
-  printf '%s\n' "$block" | code_lines | rg -qF 'WEBSITE_NOTE="⚠️'
+  printf '%s\n' "$block" | code_lines | grep -qF 'WEBSITE_NOTE="✅'
+  printf '%s\n' "$block" | code_lines | grep -qF 'WEBSITE_NOTE="⚠️'
 }
 
 @test "tags.yaml update-website-docs documents that it is now the backstop" {
@@ -233,6 +240,6 @@ code_lines() {
   # each later `git remote set-url` injects onto the tag pushes — and a
   # GITHUB_TOKEN-authenticated push creates no workflow run (anti-recursion), so
   # tags.yaml's stable-tag backstops never fire (v1.6.0's tag never triggered it).
-  count="$(printf '%s\n' "$checkout" | code_lines | rg -cF 'persist-credentials: false' || true)"
+  count="$(printf '%s\n' "$checkout" | code_lines | grep -cF 'persist-credentials: false' || true)"
   [ "${count:-0}" -eq 1 ]
 }
