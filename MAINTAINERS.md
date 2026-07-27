@@ -12,6 +12,27 @@
 | Nikita Bykov | [@nbykov0](https://github.com/nbykov0) | Independent | Maintainer of ARM and stuff |
 | Matthieu Robin | [@matthieu-robin](https://github.com/matthieu-robin) | Hidora | Managed Applications, Platform Quality & Benchmarking |
 | Mattia Eleuteri | [@mattia-eleuteri](https://github.com/mattia-eleuteri) | Hidora | CSI, Storage, Networking & Security |
+| Aleksei Sviridkin | [@lexfrei](https://github.com/lexfrei) | Ænix | Release engineering, CI, Talos tooling, security pipeline |
+| Daniil Miasnikov | [@myasnikovdaniil](https://github.com/myasnikovdaniil) | Ænix | Platform, API, CI/CD, project infrastructure |
+| Ivan Okhotnikov | [@IvanHunters](https://github.com/IvanHunters) | Ænix | Monitoring, Dashboard, cozystack-api |
+
+## Reviewers
+
+Reviewers own a specific area of the codebase rather than the project as a
+whole: they review and approve changes to that area, and carry write access for
+it, without the project-wide responsibilities of a maintainer. The role, and the
+process for entering it, is defined in
+[CONTRIBUTOR_LADDER.md](https://github.com/cozystack/cozystack/blob/main/CONTRIBUTOR_LADDER.md).
+
+The authoritative mapping from an area to the people who own it is
+[`.github/CODEOWNERS`](https://github.com/cozystack/cozystack/blob/main/.github/CODEOWNERS);
+this table names the people and is kept in step with it.
+
+| Reviewer | GitHub Username | Company | Area |
+| -------- | --------------- | ------- | ---- |
+| Kirill Ilin | [@sircthulhu](https://github.com/sircthulhu) | Ænix | Controllers, Keycloak, system operators |
+| Andrey Kolkov | [@androndo](https://github.com/androndo) | Independent | Backups |
+| — | [@scooby87](https://github.com/scooby87) | — | Virtualization (KubeVirt, vm-instance, vm-disk) |
 
 ## Emeritus Maintainers
 
