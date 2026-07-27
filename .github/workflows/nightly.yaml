@@ -120,8 +120,9 @@ jobs:
         with:
           ref: ${{ steps.resolve.outputs.sha }}
           fetch-depth: 1
-          # These jobs copy the checkout into /tmp/$SANDBOX_NAME; don't leave the
-          # checkout token in .git/config to be copied along with it.
+          # Nothing after checkout needs the git token — the mirror steps
+          # authenticate to the registries directly — so don't leave it in
+          # .git/config.
           persist-credentials: false
 
       # Pull the digest-vendored tree build-main baked (but never committed).
@@ -272,14 +273,8 @@ jobs:
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
 
-      - name: Prepare workspace
-        run: |
-          rm -rf "/tmp/$SANDBOX_NAME"
-          cp -r "${{ github.workspace }}" "/tmp/$SANDBOX_NAME"
-
       - name: Prepare environment
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           attempt=0
           until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
             attempt=$((attempt + 1))
@@ -289,7 +284,6 @@ jobs:
 
       - name: Install Cozystack into sandbox
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
             echo "❌ Install failed (no retry — diagnostics below)"
             echo "::group::HelmRelease status"
@@ -307,14 +301,12 @@ jobs:
 
       - name: Run OpenAPI tests
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
 
       # Always the FULL app suite — a nightly has no diff to scope against, so
       # Test Impact Analysis does not apply (empty CHAINSAW_SUITES = whole suite).
       - name: Run E2E tests (full suite)
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES=""; then
             echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
@@ -330,7 +322,6 @@ jobs:
       - name: Collect chainsaw report
         if: always()
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           mkdir -p _out
           docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
             _out/chainsaw-report.xml || true
@@ -340,13 +331,12 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: chainsaw-report
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
+          path: _out/chainsaw-report.xml
           if-no-files-found: ignore
 
       - name: Collect report
         if: always()
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
 
       - name: Upload cozyreport.tgz
@@ -354,13 +344,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cozyreport
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+          path: _out/cozyreport.tgz
           if-no-files-found: warn
 
       - name: Tear down sandbox
         if: always()
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-
-      - name: Remove workspace
-        if: always()
-        run: rm -rf "/tmp/$SANDBOX_NAME"
