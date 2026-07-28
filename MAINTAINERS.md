@@ -29,8 +29,8 @@ this table names the people and is kept in step with it.
 | Reviewer | GitHub Username | Company | Area |
 | -------- | --------------- | ------- | ---- |
 | Kirill Ilin | [@sircthulhu](https://github.com/sircthulhu) | Ænix | Controllers, Keycloak, system operators |
-| Andrey Kolkov | [@androndo](https://github.com/androndo) | Independent | Backups |
-| — | [@scooby87](https://github.com/scooby87) | — | Virtualization (KubeVirt, vm-instance, vm-disk) |
+| Andrey Kolkov | [@androndo](https://github.com/androndo) | Ænix | Backups |
+| Aleksei Artamonov | [@scooby87](https://github.com/scooby87) | Ænix | Virtualization (KubeVirt, vm-instance, vm-disk) |
 
 ## Emeritus Maintainers
 
