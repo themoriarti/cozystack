@@ -105,6 +105,12 @@ prevlog_prioritize() {
   # Compared, not matched: the namespace arrives from the caller and would otherwise
   # be a basic regular expression, so a `.` in it would match namespaces it does not
   # name. Field-scoped, so a pod merely named like the prefix is not promoted.
+  #
+  # Smaller residual, not none: `awk -v` expands backslash escapes in the value it
+  # assigns, so a namespace containing `\t` would arrive as a real tab. Namespaces
+  # are DNS labels, so it cannot happen here -- but the class is narrowed rather
+  # than closed, and a comment claiming otherwise is the kind of thing a later
+  # reader trusts instead of rechecking.
   _pp_rows=$(cat)
   printf '%s\n' "$_pp_rows" | awk -F'|' -v p="$_pp_ns" '$1 == p' || true
   printf '%s\n' "$_pp_rows" | awk -F'|' -v p="$_pp_ns" 'NF && $1 != p' || true
@@ -404,6 +410,26 @@ if [ "$KEPT" -lt "$TOTAL" ]; then
   log "reached COZY_PREVLOG_MAX=$MAX cap; $((TOTAL - KEPT)) more restarted container(s) NOT captured"
 fi
 
+# Once per run, not once per container. The bound is the same for every log this
+# capture writes, so repeating it per file put up to COZY_PREVLOG_MAX copies of one
+# sentence into capture-notes.txt -- the file a reader holding only the artifact
+# opens first, and the one place where the lines that explain a short capture have
+# to be findable. Burying them under twelve identical tail notes is a cost paid by
+# the reader for information they already had after the first. The sibling in
+# hack/cozyreport.sh states the same fact once per pod directory for the same
+# reason.
+#
+# Stated before the loop rather than after it: the loop body runs in a subshell, so
+# nothing it sets survives, and a capture killed by the outer backstop mid-walk
+# would lose an after-the-loop note entirely -- on exactly the run where knowing
+# the logs are tail-bounded matters most.
+#
+# Suppressed on -1, which asks kubectl for the whole log: "holds at most the last
+# -1 lines" describes a bound that was never applied.
+if [ "$KEPT" -gt 0 ] && [ "$TAIL" != "-1" ]; then
+  log "every previous-instance log in this directory holds at most the last $TAIL lines (COZY_PREVLOG_TAIL=$TAIL); anything earlier was never requested"
+fi
+
 printf '%s\n' "$SELECTED" | while IFS='|' read -r ns pod container kind restarts; do
   [ -n "$ns" ] || continue
   file="$OUT/$(prevlog_logfile_name "$ns" "$pod" "$container")"
@@ -449,10 +475,24 @@ printf '%s\n' "$SELECTED" | while IFS='|' read -r ns pod container kind restarts
   # machine, but dropping it loses evidence -- and the whole point of this script
   # is that nothing is lost in silence. Copied whole, not reduced: with no klog
   # preamble to skip, every line here is a warning of its own.
-  if [ -n "$err" ] && [ -s "$err" ] && [ -s "$file" ]; then
-    log "$(basename "$file"): kubectl returned this log and also said:"
+  # NOT gated on the log being non-empty. A read that exits 0, writes nothing and
+  # still emits a warning is the one shape where dropping the message costs most:
+  # the branch below then reports "produced no output", which is a positive claim
+  # about the container made while kubectl was speaking. The refusal path keeps its
+  # own handling further down; this copy is about preserving what was said, whatever
+  # the read returned.
+  if [ -n "$err" ] && [ -s "$err" ] && { [ -s "$file" ] || [ "$rc" -eq 0 ]; }; then
+    if [ -s "$file" ]; then
+      log "$(basename "$file"): kubectl returned this log and also said:"
+    else
+      log "$(basename "$file"): kubectl returned no log, exited 0, and said:"
+    fi
     while IFS= read -r _warn_line; do log "  $_warn_line"; done < "$err"
   fi
+  # Remembered before the scratch file is removed: the branches below still need to
+  # know whether kubectl spoke, and by then there is nothing left to ask.
+  err_had_output=""
+  if [ -n "$err" ] && [ -s "$err" ]; then err_had_output=1; fi
   [ -z "$err" ] || rm -f "$err"
   if [ "$rc" -ne 0 ] && [ ! -s "$file" ]; then
     # Nothing landed. Report WHY instead of assuming one cause: exit 124 is our
@@ -484,7 +524,15 @@ printf '%s\n' "$SELECTED" | while IFS='|' read -r ns pod container kind restarts
     # looks exactly like this -- so name it rather than leaving a silent gap that
     # reads as "never attempted".
     rm -f "$file"
-    log "previous instance for $ns/$pod [$container] produced no output"
+    # "Produced no output" is a claim about the container, so it may only be made
+    # when kubectl itself said nothing. When it did speak, the message is already
+    # in capture-notes.txt above and the two lines have to agree rather than one
+    # asserting silence the other just contradicted.
+    if [ -n "$err_had_output" ]; then
+      log "previous instance for $ns/$pod [$container] returned no log, though kubectl exited 0 and wrote the message above"
+    else
+      log "previous instance for $ns/$pod [$container] produced no output"
+    fi
     continue
   fi
   if [ "$rc" -ne 0 ]; then
@@ -492,7 +540,16 @@ printf '%s\n' "$SELECTED" | while IFS='|' read -r ns pod container kind restarts
     # evidence we came for. Keep it and mark it truncated; deleting a partial
     # capture would throw away the only copy of a log that is already gone from
     # the cluster.
-    log "previous-instance log for $ns/$pod [$container] is TRUNCATED (kubectl exit $rc)${reason:+: $reason}"
+    # Same three-way split as the in-file marker below, not a bare exit status.
+    # 124 and 137 are this script's own clock; anything else is kubectl failing on
+    # its own terms. Reporting "kubectl exit 124" here while the marker inside the
+    # file names the timeout puts two sentences about ONE read in two files that
+    # disagree, and this is the one a reader meets first.
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      log "previous-instance log for $ns/$pod [$container] is TRUNCATED: the read was cut off by $(prevlog_cutoff_desc "$rc" "$PREVLOG_READ_TIMEOUT" "$PREVLOG_BOUND")"
+    else
+      log "previous-instance log for $ns/$pod [$container] is TRUNCATED: kubectl exited $rc part way through${reason:+: $reason}"
+    fi
   fi
   # Why this file is not the whole log, stated inside it. Which reason applies
   # depends on how the read ended: `--tail` drops the OLDEST lines, a killed read
@@ -505,8 +562,8 @@ printf '%s\n' "$SELECTED" | while IFS='|' read -r ns pod container kind restarts
     # run out. Naming the timeout for both would put a cause in the artifact that
     # was never observed, which is the same defect as the tail note claiming a
     # clean window: a confident explanation that happens to be false. The adjacent
-    # log() line already draws this distinction; the in-file marker has to draw it
-    # too, or the two disagree about the same read.
+    # log() line above draws the same distinction, and both have to: they describe
+    # one read in two places a reader compares.
     if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
       prevlog_append_note "$file" \
         "[capture-previous-logs] TRUNCATED: this log ends here because the read was cut off by $(prevlog_cutoff_desc "$rc" "$PREVLOG_READ_TIMEOUT" "$PREVLOG_BOUND"), not because the container stopped writing"
@@ -516,22 +573,17 @@ printf '%s\n' "$SELECTED" | while IFS='|' read -r ns pod container kind restarts
     fi
   fi
 
-  if [ "$TAIL" != "-1" ]; then
-    # Recorded whatever the outcome was, not only on a clean read: a capture cut
-    # short at its END also lost its OLDEST lines to `--tail`, and naming one bound
-    # while the other stays silent tells the reader the file starts where the
-    # container did.
-    #
-    # Recorded beside the log rather than inside it. A log read in full is a
-    # complete artifact, and these platforms log JSON per line, so a trailing
-    # prose line breaks every parser that could read the file before. The notes
-    # file already exists for exactly this kind of statement, and it is what a
-    # reader holding only the uploaded artifact opens first.
-    #
-    # Not on -1, which asks kubectl for the whole log: a note reading "holds at
-    # most the last -1 lines" describes a bound that was never applied.
-    log "$(basename "$file") holds at most the last $TAIL lines (COZY_PREVLOG_TAIL=$TAIL); anything earlier was never requested"
-  fi
+  # The `--tail` bound applies to this file as it does to every other one here,
+  # and it is stated ONCE for the whole capture above the loop rather than once per
+  # container. It still has to be stated for a capture cut short at its END, since
+  # such a file lost its OLDEST lines to `--tail` as well and naming only the end
+  # would tell the reader the file starts where the container did -- but that is
+  # what the run-level line covers, and it covers it without putting twelve copies
+  # of one sentence into the file a reader opens first.
+  #
+  # Recorded beside the log rather than inside it, wherever it is recorded: a log
+  # read in full is a complete artifact, these platforms log JSON per line, and a
+  # trailing prose line breaks every parser that could read the file before.
   # Echo as well as archive. The archive is for later; the failing job's log is
   # where whoever is triaging the red run is already looking.
   # "last -1 lines" would be nonsense; -1 means the whole log was requested.

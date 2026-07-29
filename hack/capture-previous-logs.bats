@@ -250,6 +250,12 @@ case "$1" in
       # cause in the artifact that was never observed.
       # A refusal with a message, used to prove the reason is lost only when the
       # scratch file cannot be created -- not because the stub stayed quiet.
+      # Exits 0, writes NO log, and still emits a warning. The shape where dropping
+      # the message costs most: the script would otherwise report "produced no
+      # output", a claim about the container made while kubectl was speaking.
+      warned_empty)
+        echo 'Warning: results are partial, 3 of 7 shards answered' >&2
+        exit 0 ;;
       norefusal)
         echo 'Error from server (BadRequest): previous terminated container "postgres" not found' >&2
         exit 1 ;;
@@ -537,6 +543,32 @@ STUB
   rm -rf "$tmp"
 }
 
+@test "a clean read that logged nothing keeps what kubectl said about it" {
+  tmp="$(mktemp -d)"
+  stub="$tmp/bin"; mkdir -p "$stub"; prevlog_stub_dir "$stub"
+  out="$tmp/previous-logs"
+
+  PATH="$stub:$PATH" PREVLOG_STUB_ROWS='tenant-test|db-0|postgres|container|4' \
+    PREVLOG_STUB_LOG_MODE=warned_empty sh "$SCRIPT" "$out" tenant-test >/dev/null 2>&1
+
+  # kubectl exited 0, returned no log, and still spoke. Gating the warning copy on
+  # the log being non-empty drops the message entirely, and the next line then
+  # reports "produced no output" -- a positive statement about the container,
+  # manufactured while kubectl was in the middle of contradicting it.
+  grep -q 'results are partial' "$out/capture-notes.txt" || {
+    echo "FAIL: kubectl spoke on an empty read and the message was dropped"
+    cat "$out/capture-notes.txt"
+    false
+  }
+  # And the two lines must agree: no bare claim of silence beside a quoted message.
+  if grep -q 'produced no output' "$out/capture-notes.txt"; then
+    echo "FAIL: reported silence in the same file that quotes what kubectl said"
+    cat "$out/capture-notes.txt"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
 @test "a partial capture still records the tail bound it was read under" {
   tmp="$(mktemp -d)"
   stub="$tmp/bin"; mkdir -p "$stub"; prevlog_stub_dir "$stub"
@@ -553,6 +585,36 @@ STUB
     cat "$out/capture-notes.txt"
     false
   }
+  rm -rf "$tmp"
+}
+
+@test "the tail bound is stated once for the run, not once per container" {
+  tmp="$(mktemp -d)"
+  stub="$tmp/bin"; mkdir -p "$stub"; prevlog_stub_dir "$stub"
+  out="$tmp/previous-logs"
+
+  PATH="$stub:$PATH" PREVLOG_STUB_ROWS='tenant-test|db-0|postgres|container|4
+tenant-test|db-0|sidecar|container|2
+cozy-system|api-0|app|container|1' \
+    sh "$SCRIPT" "$out" tenant-test >/dev/null 2>&1
+
+  # The bound is identical for every log the capture writes, so repeating it per
+  # container put up to COZY_PREVLOG_MAX copies of one sentence into the file a
+  # reader holding only the artifact opens FIRST -- the same file that has to make
+  # a short capture's reasons findable. Three containers, one statement.
+  n=$(grep -c 'holds at most the last' "$out/capture-notes.txt" || true)
+  if [ "$n" -ne 1 ]; then
+    echo "FAIL: expected exactly one tail-bound note for the run, found $n"
+    cat "$out/capture-notes.txt"
+    false
+  fi
+  # Still says which bound, and still applies to the whole directory rather than
+  # to one named file, or the reader cannot tell which logs it covers.
+  grep -q 'every previous-instance log in this directory holds at most the last 200 lines' \
+    "$out/capture-notes.txt"
+  # Three captures really did happen, so the single note is not an artefact of the
+  # walk having stopped after one.
+  [ "$(grep -c . "$out/capture-notes.txt")" -gt 1 ]
   rm -rf "$tmp"
 }
 
@@ -649,6 +711,20 @@ STUB
   if grep -q 'SIGKILL' "$file"; then
     echo "FAIL: hedged a 124, which only timeout produces"
     cat "$file"
+    false
+  fi
+  # capture-notes.txt describes the SAME read and has to agree with the marker in
+  # the log. Asserting only on the .log left the notes free to call a 124 "kubectl
+  # exit 124" -- a status this script's own clock produced, attributed to kubectl,
+  # in the file a reader opens first.
+  grep -q 'cut off by' "$out/capture-notes.txt" || {
+    echo "FAIL: the notes describe a timeout as a plain kubectl exit"
+    cat "$out/capture-notes.txt"
+    false
+  }
+  if grep -q 'TRUNCATED (kubectl exit' "$out/capture-notes.txt"; then
+    echo "FAIL: the notes and the log disagree about the same read"
+    cat "$out/capture-notes.txt"
     false
   fi
   rm -rf "$tmp"
