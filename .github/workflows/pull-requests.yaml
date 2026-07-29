@@ -905,10 +905,16 @@ jobs:
   #     in e2e-fork.yaml can set it.
   # REQUIRES main branch protection to require the "E2E Tests" status context —
   # see docs/agents/e2e-testing.md §10.
+  #
+  # The `labeled` guard must stay in lockstep with `plan`'s: this job runs if and
+  # only if `plan` runs. `labeled` events other than full-e2e are discarded there,
+  # so without the same guard this job would run with plan *skipped*, read
+  # PLAN_RESULT != 'success', and post "E2E Tests" = failure — clobbering an
+  # already-green required status every time anyone labels an open PR.
   e2e-report:
     name: "Report E2E status"
     needs: ["plan", "e2e"]
-    if: ${{ always() && !github.event.pull_request.head.repo.fork }}
+    if: ${{ always() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
