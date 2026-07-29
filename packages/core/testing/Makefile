@@ -68,13 +68,10 @@ exec:  ## Opens an interactive shell in the sandbox container.
 	docker exec -ti "${SANDBOX_NAME}" bash
 
 apply: delete
-	mkdir -p /tmp/${SANDBOX_NAME}
-	chmod 777 /tmp/${SANDBOX_NAME}
 	docker run \
 		-d --rm --name "${SANDBOX_NAME}" --privileged \
 		-e TALOSCONFIG=/workspace/talosconfig \
 		-e KUBECONFIG=/workspace/kubeconfig \
-		-e SANDBOX_NAME=${SANDBOX_NAME} \
 		"$$(yq .e2e.image values.yaml)" \
 		--timeout 30m
 	docker cp "${ROOT_DIR}/." "${SANDBOX_NAME}":/workspace

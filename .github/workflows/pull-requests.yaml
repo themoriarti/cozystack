@@ -590,14 +590,8 @@ jobs:
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
 
       # ▸ Prepare environment
-      - name: Prepare workspace
-        run: |
-          rm -rf /tmp/$SANDBOX_NAME
-          cp -r ${{ github.workspace }} /tmp/$SANDBOX_NAME
-
       - name: Prepare environment
         run: |
-          cd /tmp/$SANDBOX_NAME
           attempt=0
           until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
             attempt=$((attempt + 1))
@@ -612,7 +606,6 @@ jobs:
       # ▸ Install Cozystack
       - name: Install Cozystack into sandbox
         run: |
-          cd /tmp/$SANDBOX_NAME
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
             echo "❌ Install failed (no retry — see diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
@@ -641,7 +634,6 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          cd /tmp/$SANDBOX_NAME
           git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/changed.txt
           apps=$(./hack/select-e2e.sh /tmp/changed.txt)
           echo "Selected apps: ${apps:-<none>}"
@@ -654,7 +646,6 @@ jobs:
 
       - name: Run OpenAPI tests
         run: |
-          cd /tmp/$SANDBOX_NAME
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
 
       # ▸ Run E2E tests (Chainsaw, scoped by Test Impact Analysis)
@@ -675,7 +666,6 @@ jobs:
           SELECTED_APPS: ${{ steps.select.outputs.apps }}
           FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
         run: |
-          cd /tmp/$SANDBOX_NAME
           if [ "$FULL_E2E" = "true" ] || [ -z "$SELECTED_APPS" ]; then
             suites=""        # empty => test-chainsaw runs the whole suite
             echo "Running full chainsaw suite"
@@ -709,7 +699,6 @@ jobs:
       - name: Collect chainsaw report
         if: always()
         run: |
-          cd /tmp/$SANDBOX_NAME
           mkdir -p _out
           docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
             _out/chainsaw-report.xml || true
@@ -719,14 +708,13 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: chainsaw-report
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
+          path: _out/chainsaw-report.xml
           if-no-files-found: ignore
 
       # ▸ Collect debug information (always runs)
       - name: Collect report
         if: always()
         run: |
-          cd /tmp/$SANDBOX_NAME
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
 
       - name: Upload cozyreport.tgz
@@ -734,12 +722,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cozyreport
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+          path: _out/cozyreport.tgz
 
       - name: Collect images list
         if: always()
         run: |
-          cd /tmp/$SANDBOX_NAME
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-images || true
 
       - name: Upload image list
@@ -747,7 +734,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: image-list
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
+          path: _out/images.txt
 
       # ▸ Open an SSH breakpoint to the failing sandbox so maintainers can attach,
       #   inspect Talos/Cozystack state and resume with `breakpoint resume`.
@@ -802,7 +789,3 @@ jobs:
       - name: Tear down sandbox
         if: always()
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-
-      - name: Remove workspace
-        if: always()
-        run: rm -rf /tmp/$SANDBOX_NAME
