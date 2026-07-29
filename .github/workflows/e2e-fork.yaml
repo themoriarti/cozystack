@@ -410,13 +410,8 @@ jobs:
         run: |
           yq -i ".cozystackOperator.platformSourceUrl = \"oci://${REGISTRY}/cozystack-packages\"" packages/core/installer/values.yaml
           yq -i ".cozystackOperator.platformSourceRef = \"digest=${PACKAGES_DIGEST}\"" packages/core/installer/values.yaml
-      - name: Prepare workspace
-        run: |
-          rm -rf "/tmp/$SANDBOX_NAME"
-          cp -r "${{ github.workspace }}" "/tmp/$SANDBOX_NAME"
       - name: Prepare environment
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           attempt=0
           until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
             attempt=$((attempt + 1))
@@ -425,7 +420,6 @@ jobs:
           done
       - name: Install Cozystack into sandbox
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
             echo "❌ Install failed (no retry — diagnostics below)"
             echo "::group::HelmRelease status"
@@ -442,7 +436,6 @@ jobs:
           fi
       - name: Run OpenAPI tests
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
       # Test-Impact Analysis: select only the Chainsaw suites the PR diff
       # affects. The changed-file list is resolve's TRUSTED base-repo listFiles
@@ -458,7 +451,6 @@ jobs:
         env:
           CHANGED_B64: ${{ needs.resolve.outputs.changed_b64 }}
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           printf '%s' "$CHANGED_B64" | base64 -d > /tmp/changed.txt
           echo "Changed files:"; sed 's/^/  /' /tmp/changed.txt
           apps="$(./hack/select-e2e.sh /tmp/changed.txt)"
@@ -479,7 +471,6 @@ jobs:
           SELECTED_APPS: ${{ steps.select.outputs.apps }}
           FULL_E2E: ${{ needs.resolve.outputs.full_e2e }}
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           if [ "$FULL_E2E" = "true" ] || [ -z "$SELECTED_APPS" ]; then
             suites=""        # empty => test-chainsaw runs the whole suite
             echo "Running full chainsaw suite"
@@ -508,7 +499,6 @@ jobs:
       - name: Collect chainsaw report
         if: always()
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           mkdir -p _out
           docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
             _out/chainsaw-report.xml || true
@@ -517,26 +507,22 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: chainsaw-report
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
+          path: _out/chainsaw-report.xml
           if-no-files-found: ignore
       - name: Collect report
         if: always()
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
       - name: Upload cozyreport.tgz
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cozyreport
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+          path: _out/cozyreport.tgz
           if-no-files-found: warn
       - name: Tear down sandbox
         if: always()
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-      - name: Remove workspace
-        if: always()
-        run: rm -rf "/tmp/$SANDBOX_NAME"
 
   # Flip the pending "E2E Tests" commit status posted by `resolve` to its
   # terminal state. Always runs (so a failed publish/e2e turns the status red
