@@ -28,7 +28,13 @@ tests:
     asserts:
       - matchRegex:
           path: data["daemon-config.json"]
-          pattern: '"multusMasterCNI": "05-cilium\.conflist"'
+          # Anchored to the top level of the JSON object, whose keys the template
+          # writes at four spaces: the same text nested inside another key
+          # satisfies an unanchored match while the effective value points
+          # somewhere else. This pins the position the template produces, which
+          # is as far as a pattern can go -- deciding which key is effective
+          # needs a JSON parser, and helm-unittest has none.
+          pattern: '(?m)^    "multusMasterCNI": "05-cilium\.conflist"'
 
   # A quoted "false" is a non-empty string; a truthiness test would read it as
   # on. The value is compared as text.
