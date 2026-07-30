@@ -27,7 +27,7 @@ that POSTs to the sidecar and polls the action log.
 | `00-helpers.sh` | Shared bash helpers and env defaults; sourced by every step. | n/a |
 | `01-create-strategy.sh` | Creates the cluster-scoped `Altinity` strategy that wraps `clickhouse-backup`. | admin |
 | `02-create-backupclass.sh` | Maps `apps.cozystack.io/ClickHouse` to that strategy. | admin |
-| `03-create-bucket.sh` | Provisions a `Bucket` and caches its S3 coordinates into `.bucket-info.env` (chmod 600; raw access keys). `cleanup.sh` removes this file. | tenant |
+| `03-create-bucket.sh` | Provisions a `Bucket`, caches its S3 coordinates into `.bucket-info.env` (chmod 600; raw access keys), and copies the S3 endpoint CA into a per-release Secret so the sidecar can verify a self-signed endpoint. `cleanup.sh` removes both. | tenant |
 | `04-create-clickhouse.sh` | Provisions a `ClickHouse` instance with `backup.enabled=true` (chart emits the backup-s3 Secret + sidecar) and writes a sentinel row. | tenant |
 | `05-create-backupjob.sh` | Submits a `BackupJob` and waits for Succeeded. | tenant |
 | `06-restore-in-place.sh` | Drops the sentinel and restores into the same instance via `RestoreJob`. | tenant |
@@ -44,7 +44,7 @@ All variables come from `00-helpers.sh`:
 
 | Variable | Default | Description |
 |---|---|---|
-| `NAMESPACE` | `tenant-test` | Tenant namespace for the demo. |
+| `NAMESPACE` | `tenant-root` | Tenant namespace for the demo. `tenant-root` because the S3 client is the `clickhouse-backup` sidecar inside the tenant and cozystack's shared SeaweedFS lives there; an isolated tenant's Cilium egress allowlist blocks its Pods from reaching `tenant-root`'s SeaweedFS. |
 | `CLICKHOUSE_NAME` | `clickhouse-test` | Source ClickHouse application name. |
 | `CLICKHOUSE_RESTORE_NAME` | `clickhouse-restore` | Target ClickHouse for the to-copy restore. |
 | `BUCKET_NAME` | `clickhouse-backups` | Cozystack `Bucket` to provision. |
@@ -53,6 +53,11 @@ All variables come from `00-helpers.sh`:
 | `BACKUPJOB_NAME` | `clickhouse-backup-job` | BackupJob name. |
 | `RESTOREJOB_INPLACE_NAME` | `clickhouse-restore-inplace` | In-place RestoreJob name. |
 | `RESTOREJOB_TOCOPY_NAME` | `clickhouse-restore-to-copy` | To-copy RestoreJob name. |
+| `S3_ENDPOINT` | *(from BucketInfo)* | Overrides the S3 endpoint the sidecar uses. `BucketInfo` advertises the **external** ingress URL, which in-cluster Pods cannot always reach or TLS-validate; set `https://seaweedfs-s3.tenant-root:8333` to use the in-cluster endpoint. |
+| `S3_CA_SECRET` | `seaweedfs-ca-cert` | Secret holding the S3 endpoint's CA. Step 03 copies its CA into a per-release Secret wired to `backup.endpointCA`, so the sidecar can verify a self-signed endpoint. Auto-discovered from the seaweedfs cert-manager `Certificate` if this name is absent. Set to `""` on a publicly-trusted endpoint to skip the copy and leave `backup.endpointCA` unset. |
+| `S3_CA_NAMESPACE` | `tenant-root` | Namespace of `S3_CA_SECRET`. Independent of `NAMESPACE`: the shared SeaweedFS and its CA live in `tenant-root` even when the demo runs elsewhere. |
+| `S3_CA_KEY` | `ca.crt` | Key inside `S3_CA_SECRET` holding the PEM bundle. |
+| `CH_CA_SECRET_NAME` | `clickhouse-backup-s3-ca` | Per-release Secret the CA is copied into; referenced by `backup.endpointCA`. |
 
 ## Prerequisites
 

@@ -11,21 +11,16 @@
 #   clickhouse-backup-2-roundtrip  — the full Bucket -> BackupJob -> Backup ->
 #                                    in-place + to-copy RestoreJob round-trip,
 #                                    driving the validated example scripts
-#                                    (examples/backups/clickhouse). GATED OUT
-#                                    OF CI (opt in with
-#                                    CLICKHOUSE_E2E_S3_ROUNDTRIP=1).
+#                                    (examples/backups/clickhouse). Also runs in
+#                                    CI, in tenant-root.
 #
-# Why the split: the backup feature (Altinity strategy, backup-controller,
-# backupstrategy-controller, Velero, SeaweedFS) is present in the isp-full e2e
-# sandbox, so the wiring that breaks silently on a chart/strategy bump — the
-# sidecar container/port and the backup-api-auth Secret name — is worth
-# asserting on every PR. But the S3 round-trip itself cannot complete in the
-# kind sandbox: the in-cluster seaweedfs-s3.<ns>.svc:8333 endpoint serves HTTPS
-# with a self-signed cert, and in CI the Bucket's external endpoint is the
-# s3.example.org placeholder, which the in-Pod sidecar can neither route to nor
-# TLS-validate. Chainsaw v0.2.15 has no conditional Test-level skip, so the gate
-# is a plain in-script conditional that exits 0 in CI with the reason logged;
-# the same file runs un-gated on a real cluster with just the env var set.
+# Why the split: the two Tests answer different questions at different cost. The
+# contracts Test needs no object store, so it stays in the default tenant-test
+# namespace next to the other app suites and is the seconds-long guard on the
+# chart wiring the Altinity strategy depends on — the sidecar container/port and
+# the backup-api-auth Secret it authenticates with, each a silent break if a
+# chart bump renames it. The round-trip Test moves real data through S3, so it
+# must run in tenant-root (see its own header) and costs minutes.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -136,21 +131,36 @@ spec:
 # Succeeded, emits a Backup) -> in-place RestoreJob -> to-copy RestoreJob into a
 # second ClickHouse. It drives examples/backups/clickhouse/run-all.sh as the
 # harness so the test and the documented flow can never drift — the same reason
-# the etcd round-trip drives examples/backups/etcd.
+# the etcd/mariadb/postgres round-trips drive their examples.
 #
-# GATED OUT OF CI (opt in with CLICKHOUSE_E2E_S3_ROUNDTRIP=1); see the file
-# header for why the S3 leg cannot complete in the kind sandbox.
+# Runs in CI, unlike the etcd round-trip, and the difference is the chart's
+# backup.endpointCA. This mirrors mariadb-2-backup-roundtrip and
+# postgres-2-backup-roundtrip, whose three preconditions all now hold here:
+#   - runs in tenant-root, not the default tenant-test: the S3 client is the
+#     clickhouse-backup sidecar INSIDE the tenant, and the e2e tenant is created
+#     isolated (hack/e2e-install-cozystack.bats) — its Cilium egress allowlist
+#     blocks a tenant-test Pod from reaching tenant-root's seaweedfs, while a
+#     tenant-root Pod reaches it over same-tenant egress;
+#   - targets the in-cluster endpoint (S3_ENDPOINT below) instead of the
+#     BucketInfo external ingress URL, which in CI is the unroutable
+#     s3.example.org placeholder;
+#   - trusts that endpoint's self-signed cert by copying the seaweedfs CA secret
+#     (seaweedfs-ca-cert, auto-discovered from the cert-manager Certificate)
+#     into a per-release Secret referenced by backup.endpointCA, which the chart
+#     mounts into the sidecar and exposes through SSL_CERT_DIR.
+# Before backup.endpointCA existed the sidecar had no CA surface at all, which is
+# why this suite previously skipped the round-trip behind an env gate.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
   name: clickhouse-backup-2-roundtrip
 spec:
+  namespace: tenant-root
   # The round-trip creates its resources through the example scripts, not
   # Chainsaw `apply`, and also produces controller-owned artifacts (the Backup
   # CR, the cluster-scoped Altinity strategy + BackupClass). Chainsaw has
   # nothing of its own to auto-delete, so teardown is the run step's finally
-  # (cleanup.sh), which is idempotent and a no-op when the round-trip is gated
-  # out.
+  # (cleanup.sh), which is idempotent.
   skipDelete: true
   catch:
   - events: {}
@@ -177,24 +187,40 @@ spec:
   steps:
   - name: run
     try:
+    # Pre-clean: tenant-root is a shared, persistent namespace with fixed
+    # resource names, so a run killed before the finally below leaves stale
+    # state behind. A leftover BackupJob still carrying status.phase=Succeeded
+    # from a prior run would satisfy the harness's Succeeded wait instantly and
+    # pass without a real backup ever running. cleanup.sh is idempotent
+    # (--ignore-not-found), so this is a no-op on a clean namespace.
     - script:
-        timeout: 25m
+        timeout: 8m
         content: |
           set -eu
-          if [ "${CLICKHOUSE_E2E_S3_ROUNDTRIP:-0}" != "1" ]; then
-            echo "# ClickHouse S3 backup/restore round-trip gated out of CI: no"
-            echo "# publicly-trusted S3 endpoint in kind (see comment in this"
-            echo "# file). Set CLICKHOUSE_E2E_S3_ROUNDTRIP=1 on a real cluster"
-            echo "# to run it."
-            exit 0
-          fi
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/clickhouse/cleanup.sh
+        check:
+          ($error == null): true
+    # The 30m budget covers the whole documented flow: bucket provisioning, a
+    # source ClickHouse + Keeper reaching Ready, the FREEZE/upload to S3, an
+    # in-place restore, and a second ClickHouse for the to-copy restore
+    # (convention 6: justified in-line). Each example step waits on a terminal
+    # phase rather than polling out the budget.
+    - script:
+        timeout: 30m
+        content: |
+          set -eu
           cd ../../..
           [ -x examples/backups/clickhouse/run-all.sh ] || { echo "clickhouse backup example scripts not found at examples/backups/clickhouse" >&2; exit 1; }
-          NAMESPACE="$NAMESPACE" examples/backups/clickhouse/run-all.sh
+          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+            examples/backups/clickhouse/run-all.sh
         check:
           ($error == null): true
     finally:
-    - description: tear down the round-trip resources (idempotent; no-op when gated out)
+    # Removes every resource the harness created (chainsaw did not apply them,
+    # so they are not part of automatic cleanup), including the copied CA Secret
+    # and the cluster-scoped Altinity strategy + BackupClass.
+    - description: backup-flow cleanup
       script:
         timeout: 8m
         content: |

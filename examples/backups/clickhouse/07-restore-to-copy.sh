@@ -20,6 +20,14 @@ done
 
 print_header "Step 07: To-copy restore into '${CLICKHOUSE_RESTORE_NAME}'"
 
+# The target's sidecar downloads from the same S3 endpoint as the source, so it
+# needs the same CA when that endpoint is self-signed. Step 03 already
+# materialised the Secret in this namespace; reference it here too.
+ENDPOINT_CA_BLOCK=""
+if [[ -n "${CH_BACKUP_CA_SECRET:-}" ]]; then
+    ENDPOINT_CA_BLOCK=$(printf '\n    endpointCA:\n      name: "%s"\n      key: ca.crt' "$CH_BACKUP_CA_SECRET")
+fi
+
 # backup.enabled=true so the chart materialises the same sidecar pattern in
 # the target Pod; the strategy Pod's HTTP call hits the target's sidecar and
 # pulls from the same S3 backup.
@@ -50,7 +58,7 @@ spec:
     # name with "clickhouse-" (see clickhouse-rd/cozyrds/clickhouse.yaml),
     # so the actual Helm release name (which the sidecar uses for
     # S3_PATH) is "clickhouse-${CLICKHOUSE_NAME}".
-    s3PathOverride: "clickhouse-${CLICKHOUSE_NAME}"
+    s3PathOverride: "clickhouse-${CLICKHOUSE_NAME}"${ENDPOINT_CA_BLOCK}
   clickhouseKeeper:
     enabled: true
     replicas: 1

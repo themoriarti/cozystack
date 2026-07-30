@@ -13,7 +13,13 @@ export NC='\033[0m'
 export BOLD='\033[1m'
 
 # Default settings (override via environment).
-export NAMESPACE="${NAMESPACE:-tenant-test}"
+#
+# tenant-root, matching the etcd/mariadb/postgres backup demos: the S3 client
+# here is the clickhouse-backup sidecar INSIDE the tenant, and cozystack's
+# shared seaweedfs lives in tenant-root. An isolated tenant's Cilium egress
+# allowlist blocks a Pod in that tenant from reaching tenant-root's seaweedfs,
+# so a release outside tenant-root cannot use the in-cluster endpoint below.
+export NAMESPACE="${NAMESPACE:-tenant-root}"
 export CLICKHOUSE_NAME="${CLICKHOUSE_NAME:-clickhouse-test}"
 export CLICKHOUSE_RESTORE_NAME="${CLICKHOUSE_RESTORE_NAME:-clickhouse-restore}"
 export BUCKET_NAME="${BUCKET_NAME:-clickhouse-backups}"
@@ -22,6 +28,23 @@ export STRATEGY_NAME="${STRATEGY_NAME:-altinity}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-clickhouse-backup-job}"
 export RESTOREJOB_INPLACE_NAME="${RESTOREJOB_INPLACE_NAME:-clickhouse-restore-inplace}"
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-clickhouse-restore-to-copy}"
+# S3 endpoint CA. cozystack's default seaweedfs serves its S3 endpoint with a
+# self-signed certificate whose CA lives in this Secret; step 03 copies its
+# ca.crt into a per-release Secret the clickhouse-backup sidecar trusts via the
+# chart's backup.endpointCA (mounted and picked up through SSL_CERT_DIR). The
+# name follows the seaweedfs chart's fullnameOverride ("seaweedfs" ->
+# "seaweedfs-ca-cert"); step 03 auto-discovers the CA Certificate's actual
+# secret when this default is absent, so an upstream fullname change does not
+# silently break the copy. On a cluster whose S3 endpoint is signed by a
+# publicly-trusted CA, set S3_CA_SECRET="" to skip the copy and leave
+# backup.endpointCA unset.
+export S3_CA_SECRET="${S3_CA_SECRET:-seaweedfs-ca-cert}"
+# Independent of NAMESPACE: the shared seaweedfs and its CA live in tenant-root
+# even when the demo runs elsewhere.
+export S3_CA_NAMESPACE="${S3_CA_NAMESPACE:-tenant-root}"
+export S3_CA_KEY="${S3_CA_KEY:-ca.crt}"
+# Per-release Secret the CA is copied into; referenced by backup.endpointCA.
+export CH_CA_SECRET_NAME="${CH_CA_SECRET_NAME:-clickhouse-backup-s3-ca}"
 # The clickhouse-backup sidecar lives in the application Pod (rendered by the
 # chart when backup.enabled=true). Tenants don't manage a separate Secret;
 # the chart projects bucket coordinates into <release>-backup-s3 from the
