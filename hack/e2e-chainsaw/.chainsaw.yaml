@@ -3,9 +3,14 @@ kind: Configuration
 metadata:
   name: cozystack-e2e
 spec:
-  # All app tests run against the pre-existing tenant-test namespace
-  # (created by hack/e2e-install-cozystack.bats), matching the BATS suite.
-  # Chainsaw only deletes namespaces it created itself, so tenant-test is safe.
+  # Default namespace for app tests: the pre-existing tenant-test (created by
+  # hack/e2e-install-cozystack.bats), matching the BATS suite. Chainsaw only
+  # deletes namespaces it created itself, so tenant-test is safe.
+  #
+  # The backup round-trip Tests (postgres-2-, mariadb-2-, clickhouse-2-) override
+  # this to tenant-root per Test: their S3 client runs inside the tenant, and the
+  # e2e tenant-test tenant is created isolated, so its Cilium egress allowlist
+  # blocks its Pods from reaching tenant-root's seaweedfs.
   namespace:
     name: tenant-test
   # Run tests sequentially, matching the current BATS behavior. The bucket

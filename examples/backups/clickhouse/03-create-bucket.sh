@@ -27,7 +27,7 @@ spec:
 EOF
 
 log_substep "Waiting for bucket HelmRelease to be Ready..."
-kubectl -n "$NAMESPACE" wait hr "bucket-${BUCKET_NAME}" --for=condition=ready --timeout=300s
+wait_hr_ready "bucket-${BUCKET_NAME}" 300
 kubectl -n "$NAMESPACE" wait bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_NAME}" --for=jsonpath='{.status.bucketReady}'=true --timeout=300s
 # Cozystack's bucket app provisions a BucketAccess named "<bucket-name>-backup"
 # (the "-backup" suffix is the BucketAccessClass name); the BucketInfo Secret

@@ -99,18 +99,19 @@
     echo "$output" | grep -q "kubernetes-oidc-customconfig"
 }
 
-@test "clickhouse-application maps to both clickhouse suites" {
+@test "clickhouse backup harness edit selects the suite that runs it" {
+    # The clickhouse suite dir holds the backup round-trip Test that executes
+    # examples/backups/clickhouse/run-all.sh, so an edit to that harness has to
+    # select `clickhouse` — the suite is what runs the scripts. Keeping the
+    # round-trip in the app's own suite dir (rather than a clickhouse-backup one)
+    # is what makes the examples/backups/<app> -> <app> mapping line up; this
+    # locks that alignment for clickhouse specifically.
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
-    echo "packages/apps/clickhouse/values.yaml" > "$tmp/diff"
+    echo "examples/backups/clickhouse/run-all.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    # A ClickHouse chart-only change must select the plain clickhouse suite AND
-    # the backup contracts suite (which stands up the same chart with backup
-    # enabled) — that is the whole reason clickhouse-backup runs in CI. Match
-    # exact list tokens so "clickhouse" is not satisfied by "clickhouse-backup".
-    echo "$output" | tr ' ' '\n' | grep -xq clickhouse
-    echo "$output" | tr ' ' '\n' | grep -xq clickhouse-backup
+    [ "$output" = "clickhouse" ]
 }
 
 @test "dashboards-only diff selects nothing (path is plural)" {

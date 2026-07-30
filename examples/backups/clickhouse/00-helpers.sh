@@ -68,6 +68,12 @@ print_header() {
 }
 
 # Wait until a JSONPath value on a resource matches the desired string.
+#
+# The optional 7th argument is a TERMINAL value to bail on: a BackupJob or
+# RestoreJob that reaches Failed will never reach Succeeded, so polling out the
+# remaining budget only delays the report and — when this runs under Chainsaw —
+# risks the step being SIGKILLed at its op timeout with nothing collected
+# instead of failing cleanly. Same contract as the postgres/mariadb helpers.
 wait_for_field() {
     local resource_type="$1"
     local resource_name="$2"
@@ -75,6 +81,7 @@ wait_for_field() {
     local desired="$4"
     local namespace="${5:-}"
     local timeout="${6:-300}"
+    local fail_value="${7:-}"
 
     log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
     local elapsed=0
@@ -88,8 +95,82 @@ wait_for_field() {
             log_success "$resource_type/$resource_name reached '$desired'"
             return 0
         fi
+        if [[ -n "$fail_value" && "$current" == "$fail_value" ]]; then
+            log_error "$resource_type/$resource_name reached terminal '$current' (expected '$desired')"
+            return 1
+        fi
         if [[ $elapsed -ge $timeout ]]; then
             log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"
+            return 1
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+}
+
+# Wait for a HelmRelease to become Ready, failing fast on Stalled=True.
+#
+# `kubectl wait hr ... --for=condition=ready` cannot do either half of this: it
+# errors out if the HelmRelease does not exist yet (the app CR is reconciled
+# asynchronously, so the HR appears a moment after `kubectl apply` returns), and
+# it keeps waiting through a terminal Stalled — a chart that will never install
+# burns the whole timeout instead of reporting the reason. Same contract as the
+# postgres/mariadb helpers.
+wait_hr_ready() {
+    local name="$1"
+    local timeout="${2:-300}"
+    local elapsed=0
+
+    log_substep "Waiting for HelmRelease/$name to become Ready..."
+    while true; do
+        if kubectl -n "$NAMESPACE" get hr "$name" >/dev/null 2>&1; then
+            local ready stalled
+            ready=$(kubectl -n "$NAMESPACE" get hr "$name" \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+            if [[ "$ready" == "True" ]]; then
+                log_success "HelmRelease/$name is Ready"
+                return 0
+            fi
+            stalled=$(kubectl -n "$NAMESPACE" get hr "$name" \
+                -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' 2>/dev/null || true)
+            if [[ "$stalled" == "True" ]]; then
+                log_error "HelmRelease/$name is Stalled (terminal): $(kubectl -n "$NAMESPACE" get hr "$name" \
+                    -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)"
+                return 1
+            fi
+        fi
+        if [[ $elapsed -ge $timeout ]]; then
+            log_error "Timeout waiting for HelmRelease/$name to become Ready:"
+            kubectl -n "$NAMESPACE" get hr "$name" \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' >&2 2>/dev/null || true
+            return 1
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+}
+
+# Wait for a StatefulSet to report a ready replica, tolerating its asynchronous
+# creation (the ClickHouse operator creates it after the CHI is reconciled).
+wait_sts_ready() {
+    local name="$1"
+    local timeout="${2:-300}"
+    local elapsed=0
+
+    log_substep "Waiting for StatefulSet/$name to report a ready replica..."
+    while true; do
+        if kubectl -n "$NAMESPACE" get statefulset.apps "$name" >/dev/null 2>&1; then
+            local ready
+            ready=$(kubectl -n "$NAMESPACE" get statefulset.apps "$name" \
+                -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+            if [[ "${ready:-0}" -ge 1 ]] 2>/dev/null; then
+                log_success "StatefulSet/$name has ${ready} ready replica(s)"
+                return 0
+            fi
+        fi
+        if [[ $elapsed -ge $timeout ]]; then
+            log_error "Timeout waiting for StatefulSet/$name to become ready"
+            kubectl -n "$NAMESPACE" get pods -l "clickhouse.altinity.com/chi=${name#chi-}" >&2 2>/dev/null || true
             return 1
         fi
         sleep 5

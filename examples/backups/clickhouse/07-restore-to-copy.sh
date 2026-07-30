@@ -67,9 +67,8 @@ spec:
 EOF
 
 log_substep "Waiting for restore-target ClickHouse HelmRelease..."
-kubectl -n "$NAMESPACE" wait hr "clickhouse-${CLICKHOUSE_RESTORE_NAME}" --for=condition=ready --timeout=300s
-kubectl -n "$NAMESPACE" wait statefulset.apps/"chi-clickhouse-${CLICKHOUSE_RESTORE_NAME}-clickhouse-0-0" \
-    --for=jsonpath='{.status.readyReplicas}'=1 --timeout=300s
+wait_hr_ready "clickhouse-${CLICKHOUSE_RESTORE_NAME}" 300
+wait_sts_ready "chi-clickhouse-${CLICKHOUSE_RESTORE_NAME}-clickhouse-0-0" 300
 
 kubectl apply -f - <<EOF
 apiVersion: backups.cozystack.io/v1alpha1
@@ -87,7 +86,7 @@ spec:
 EOF
 
 log_substep "Waiting for to-copy RestoreJob to Succeed..."
-wait_for_field restorejob "$RESTOREJOB_TOCOPY_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 600
+wait_for_field restorejob "$RESTOREJOB_TOCOPY_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 600 Failed
 
 log_substep "Verifying sentinel data exists on the copy..."
 count=$(clickhouse_query "$CLICKHOUSE_RESTORE_NAME" "SELECT count() FROM default.sentinel" | tr -d '[:space:]')

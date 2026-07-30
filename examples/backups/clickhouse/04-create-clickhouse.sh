@@ -54,11 +54,10 @@ spec:
 EOF
 
 log_substep "Waiting for ClickHouse HelmRelease..."
-kubectl -n "$NAMESPACE" wait hr "clickhouse-${CLICKHOUSE_NAME}" --for=condition=ready --timeout=300s
+wait_hr_ready "clickhouse-${CLICKHOUSE_NAME}" 300
 
 log_substep "Waiting for first ClickHouse pod..."
-kubectl -n "$NAMESPACE" wait statefulset.apps/"chi-clickhouse-${CLICKHOUSE_NAME}-clickhouse-0-0" \
-    --for=jsonpath='{.status.readyReplicas}'=1 --timeout=300s
+wait_sts_ready "chi-clickhouse-${CLICKHOUSE_NAME}-clickhouse-0-0" 300
 
 log_substep "Writing sentinel data..."
 clickhouse_query "$CLICKHOUSE_NAME" "CREATE TABLE IF NOT EXISTS default.sentinel (id UInt32, name String) ENGINE = MergeTree ORDER BY id"
