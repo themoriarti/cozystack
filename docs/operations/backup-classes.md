@@ -152,7 +152,7 @@ The defaults aim at a reasonable middle (30-day retention, gzip compression wher
 
 - **CNPG strategy**: `barmanObjectStore.retentionPolicy`, `data.compression`, `wal.compression`.
 - **MariaDB strategy**: `compression`, `maxRetention`, `databases[]`.
-- **Altinity strategy**: tune the `clickhouse-backup` sidecar via `backup.*` values on the ClickHouse release; the strategy Pod is a thin HTTP client.
+- **Altinity strategy**: tune the `clickhouse-backup` sidecar via `backup.*` values on the ClickHouse release; the strategy Pod is a thin HTTP client. When the S3 endpoint's certificate is signed by a private CA rather than a publicly-trusted one — SeaweedFS's in-cluster `:8333` being the case in point — point `backup.endpointCA` at a Secret holding that CA bundle; the chart mounts it into the sidecar and adds it to the trust store via `SSL_CERT_DIR`, which supplements the system CA set rather than replacing it.
 - **FoundationDB strategy**: `snapshotPeriodSeconds`, `agentCount`, `urlParameters[]`.
 - **Velero strategy (VMInstance / VMDisk)**: `ttl`, `includedResources[]`, `excludedResources[]`.
 - **Etcd strategy**: today the strategy is path-only; combine with `Plan.spec.retentionPolicy` for trim cadence.

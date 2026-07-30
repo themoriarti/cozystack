@@ -170,6 +170,19 @@ spec:
 {{- $accessKeyKey := "accessKey" }}
 {{- $secretKeyKey := "secretKey" }}
 {{- $s3Path := default .Release.Name .Values.backup.s3PathOverride }}
+{{- /*
+  Optional CA bundle for an S3 endpoint signed by a private CA. Independent of
+  which Secret carries the credentials, so it composes with the per-tenant, the
+  bring-your-own-Secret and the useSystemBucket flows alike.
+*/}}
+{{- $endpointCAName := "" }}
+{{- $endpointCAKey := "ca.crt" }}
+{{- with .Values.backup.endpointCA }}
+{{- if .name }}
+{{- $endpointCAName = .name }}
+{{- if .key }}{{ $endpointCAKey = .key }}{{ end }}
+{{- end }}
+{{- end }}
 {{- if .Values.backup.useSystemBucket }}
 {{- if .Values.backup.s3PathOverride }}
 {{- fail "clickhouse: backup.s3PathOverride is incompatible with backup.useSystemBucket=true. The platform flow scopes the S3 path to <namespace>/<release> automatically; clear s3PathOverride or disable useSystemBucket. To restore from another release's prefix, use a backups.cozystack.io/RestoreJob with spec.targetApplicationRef." }}
@@ -293,6 +306,32 @@ spec:
                   valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $accessKeyKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
                 - name: S3_SECRET_KEY
                   valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $secretKeyKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
+{{- if $endpointCAName }}
+                {{- /*
+                  SSL_CERT_DIR points clickhouse-backup at the mounted CA
+                  bundle so it can verify an S3 endpoint signed by a private
+                  CA — Cozystack's in-cluster SeaweedFS
+                  (seaweedfs-s3.<tenant>:8333) serves the self-signed
+                  "SeaweedFS CA", which no system trust store carries.
+
+                  SSL_CERT_DIR and NOT AWS_CA_BUNDLE, deliberately. Both are
+                  honoured by this image (verified against
+                  altinity/clickhouse-backup:2.7.4), but they differ in one
+                  way that matters: Go reads SSL_CERT_DIR *in addition to*
+                  the default system bundle file, whereas AWS_CA_BUNDLE
+                  REPLACES the SDK's trust pool. Measured against a private
+                  CA and public AWS S3 in turn: with SSL_CERT_DIR both
+                  verify; with AWS_CA_BUNDLE the private endpoint verifies
+                  and public S3 fails `x509: certificate signed by unknown
+                  authority`. So AWS_CA_BUNDLE would silently break a
+                  release that also talks to a publicly-trusted endpoint.
+                  S3_DISABLE_CERT_VERIFICATION is the third option and is
+                  rejected on purpose: it drops verification entirely rather
+                  than trusting one more CA.
+                */}}
+                - name: SSL_CERT_DIR
+                  value: /etc/ssl/cozy-s3-ca
+{{- end }}
               resources:
                 requests:
                   cpu: 10m
@@ -303,6 +342,11 @@ spec:
               volumeMounts:
                 - name: data-volume-template
                   mountPath: /var/lib/clickhouse
+{{- if $endpointCAName }}
+                - name: backup-s3-ca
+                  mountPath: /etc/ssl/cozy-s3-ca
+                  readOnly: true
+{{- end }}
               securityContext:
                 # clickhouse-server stores data under /var/lib/clickhouse with
                 # uid=101 / mode 0750 (alpine clickhouse-server image's
@@ -325,6 +369,21 @@ spec:
                 runAsGroup: 0
                 seccompProfile:
                   type: RuntimeDefault
+{{- if $endpointCAName }}
+          {{- /*
+            The CA bundle the sidecar's SSL_CERT_DIR points at. Projected
+            under the fixed filename ca.crt regardless of the key it occupies
+            in the Secret, because SSL_CERT_DIR reads whole directories and
+            the filename is what lands in the trust set.
+          */}}
+          volumes:
+            - name: backup-s3-ca
+              secret:
+                secretName: {{ $endpointCAName | quote }}
+                items:
+                  - key: {{ $endpointCAKey | quote }}
+                    path: ca.crt
+{{- end }}
 {{- end }}
     serviceTemplates:
       - name: svc-template
