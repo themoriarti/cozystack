@@ -185,6 +185,35 @@ wait_sts_ready() {
     done
 }
 
+# Wait until a namespaced resource is really gone.
+#
+# `kubectl wait --for=delete` is not used: it errors out when the resource is
+# already absent, which is the normal case on a clean namespace (cleanup.sh is
+# idempotent and runs as a pre-clean too), and swallowing that error would also
+# swallow a genuine failure. Polling `get` treats "already gone" and "gone now"
+# as the same success.
+wait_deleted() {
+    local resource_type="$1"
+    local resource_name="$2"
+    local timeout="${3:-300}"
+    local elapsed=0
+
+    while true; do
+        if ! kubectl -n "$NAMESPACE" get "$resource_type" "$resource_name" >/dev/null 2>&1; then
+            [[ $elapsed -gt 0 ]] && log_success "$resource_type/$resource_name is gone"
+            return 0
+        fi
+        if [[ $elapsed -ge $timeout ]]; then
+            log_error "Timeout waiting for $resource_type/$resource_name to be deleted; it is still present after ${timeout}s:"
+            kubectl -n "$NAMESPACE" get "$resource_type" "$resource_name" -o wide >&2 || true
+            return 1
+        fi
+        [[ $elapsed -eq 0 ]] && log_substep "Waiting for $resource_type/$resource_name to be deleted..."
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+}
+
 # Run a SQL statement against the ClickHouse cluster of the given app instance.
 # Args: <release-name> <sql>
 # Note: the Cozystack ClickHouse RD prefixes Helm release names with

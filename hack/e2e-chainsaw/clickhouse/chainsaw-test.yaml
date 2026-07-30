@@ -263,9 +263,19 @@ spec:
   skipDelete: true
   catch:
   - events: {}
+  # Name the HelmReleases. tenant-root is the root tenant of a live e2e cluster,
+  # so an unnamed describe here dumps every HelmRelease on it and buries the two
+  # that matter (mariadb-2-backup-roundtrip names its release for the same
+  # reason). BackupJob/RestoreJob/Altinity stay unnamed — there are only ever a
+  # couple, and the names are the harness's to choose.
   - describe:
       apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
+      name: clickhouse-clickhouse-test
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: clickhouse-clickhouse-restore
   - describe:
       apiVersion: backups.cozystack.io/v1alpha1
       kind: BackupJob
@@ -275,13 +285,26 @@ spec:
   - describe:
       apiVersion: strategy.backups.cozystack.io/v1alpha1
       kind: Altinity
+  # tail 200, not 100: the sidecar logs each backup/restore action, so an S3
+  # error can sit well back from the tail by the time the step fails.
   - podLogs:
       selector: app.kubernetes.io/instance=clickhouse-clickhouse-test
-      tail: 100
+      tail: 200
   # The to-copy leg (step 07) restores into a second release; capture its Pod
   # logs too so a failure isolated to that leg keeps its diagnostics.
   - podLogs:
       selector: app.kubernetes.io/instance=clickhouse-clickhouse-restore
+      tail: 200
+  # Keeper Pods carry a different label shape (chkeeper.yaml labels them
+  # app: <release>-keeper, not app.kubernetes.io/instance), so the selectors
+  # above miss them entirely. A source ClickHouse that never reaches a ready
+  # replica is usually Keeper failing to form a quorum, and that explains itself
+  # only here.
+  - podLogs:
+      selector: app=clickhouse-clickhouse-test-keeper
+      tail: 100
+  - podLogs:
+      selector: app=clickhouse-clickhouse-restore-keeper
       tail: 100
   steps:
   - name: run
@@ -293,7 +316,11 @@ spec:
     # pass without a real backup ever running. cleanup.sh is idempotent
     # (--ignore-not-found), so this is a no-op on a clean namespace.
     - script:
-        timeout: 8m
+        # cleanup.sh now waits for the two ClickHouse releases and the Bucket to
+        # actually go (3 x 180s = 540s), so the step budget has to clear that sum
+        # for the same reason the run step does: an inner wait names the resource
+        # that would not delete, a SIGKILL at the op timeout names nothing.
+        timeout: 12m
         content: |
           set -eu
           cd ../../..
@@ -338,7 +365,9 @@ spec:
     # and the cluster-scoped Altinity strategy + BackupClass.
     - description: backup-flow cleanup
       script:
-        timeout: 8m
+        # 12m for the same arithmetic as the pre-clean above (540s of deletion
+        # waits inside cleanup.sh).
+        timeout: 12m
         content: |
           set -eu
           cd ../../..

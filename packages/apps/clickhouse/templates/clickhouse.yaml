@@ -328,9 +328,18 @@ spec:
                   S3_DISABLE_CERT_VERIFICATION is the third option and is
                   rejected on purpose: it drops verification entirely rather
                   than trusting one more CA.
+
+                  /etc/ssl/certs is listed explicitly alongside our directory.
+                  Go would still read the default bundle FILE
+                  (/etc/ssl/certs/ca-certificates.crt) even if SSL_CERT_DIR
+                  named only our dir — that is what the measurement above
+                  showed — but that leaves the public-CA half of the contract
+                  resting on a file this image happens to ship. Naming the
+                  system directory costs nothing and survives a base-image
+                  bump that moves the bundle.
                 */}}
                 - name: SSL_CERT_DIR
-                  value: /etc/ssl/cozy-s3-ca
+                  value: /etc/ssl/cozy-s3-ca:/etc/ssl/certs
 {{- end }}
               resources:
                 requests:

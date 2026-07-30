@@ -151,10 +151,12 @@ tests:
       # altinity/clickhouse-backup:2.7.4).
       - equal:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="SSL_CERT_DIR")].value
-          value: /etc/ssl/cozy-s3-ca
+          value: /etc/ssl/cozy-s3-ca:/etc/ssl/certs
       - notExists:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="AWS_CA_BUNDLE")]
-      # The mount path must equal SSL_CERT_DIR or the tool reads an empty dir.
+      # The mount path must be SSL_CERT_DIR's FIRST entry (a mountPath is a
+      # single directory, never a colon list) or the tool scans an empty dir.
+      # The second entry, /etc/ssl/certs, is the image's own system dir.
       - equal:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].volumeMounts[?(@.name=="backup-s3-ca")].mountPath
           value: /etc/ssl/cozy-s3-ca
@@ -209,7 +211,7 @@ tests:
     asserts:
       - equal:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="SSL_CERT_DIR")].value
-          value: /etc/ssl/cozy-s3-ca
+          value: /etc/ssl/cozy-s3-ca:/etc/ssl/certs
       - equal:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")].valueFrom.secretKeyRef.name
           value: cozy-backups-creds
