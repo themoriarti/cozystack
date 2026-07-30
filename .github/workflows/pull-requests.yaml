@@ -914,7 +914,13 @@ jobs:
   e2e-report:
     name: "Report E2E status"
     needs: ["plan", "e2e"]
-    if: ${{ always() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e') }}
+    # !cancelled() rather than always(): `gh pr create --label` applies the label
+    # a moment after opening, so the resulting `labeled` event cancels the
+    # `opened` run through cancel-in-progress. Under always() that dying run
+    # still posted failure (PLAN_RESULT=cancelled), and the `labeled` run that
+    # replaced it is skipped by the guard below — so nothing ever flipped the
+    # status back and the PR stayed red. A cancelled run must report nothing.
+    if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -926,11 +932,13 @@ jobs:
           PLAN_RESULT: ${{ needs.plan.result }}
           CODE: ${{ needs.plan.outputs.code }}
           E2E_RESULT: ${{ needs.e2e.result }}
+          IS_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'release') }}
+          IS_FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const { PLAN_RESULT, CODE, E2E_RESULT, HEAD_SHA, RUN_URL } = process.env;
+            const { PLAN_RESULT, CODE, E2E_RESULT, IS_RELEASE, IS_FULL_E2E, HEAD_SHA, RUN_URL } = process.env;
             let state, description;
             if (PLAN_RESULT !== 'success') {
               state = 'failure';
@@ -938,6 +946,16 @@ jobs:
             } else if (CODE !== 'true') {
               state = 'success';
               description = 'docs-only PR — e2e not required';
+            } else if (IS_RELEASE === 'true' && IS_FULL_E2E !== 'true') {
+              // Release promotion PRs deliberately do not repeat e2e: the rc was
+              // already verified against the immutable candidate whose digests
+              // this tree pins, which is the whole point of the rc gate. The `e2e`
+              // job skips for exactly this case, and while the gate was a job that
+              // skip satisfied branch protection. Now that the gate is a status,
+              // the skip has to be reported explicitly or every promotion needs a
+              // full suite re-run or an admin override.
+              state = 'success';
+              description = 'release promotion — verified at rc, e2e not repeated (add full-e2e to force a run)';
             } else if (E2E_RESULT === 'success') {
               state = 'success';
               description = 'in-tree e2e passed';
