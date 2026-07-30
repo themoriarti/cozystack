@@ -86,7 +86,7 @@ spec:
 EOF
 
 log_substep "Waiting for to-copy RestoreJob to Succeed..."
-wait_for_field restorejob "$RESTOREJOB_TOCOPY_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 600 Failed
+wait_for_field restorejob "$RESTOREJOB_TOCOPY_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 480 Failed
 
 log_substep "Verifying sentinel data exists on the copy..."
 count=$(clickhouse_query "$CLICKHOUSE_RESTORE_NAME" "SELECT count() FROM default.sentinel" | tr -d '[:space:]')

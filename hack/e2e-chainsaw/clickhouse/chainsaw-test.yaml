@@ -300,22 +300,30 @@ spec:
           NAMESPACE="$NAMESPACE" examples/backups/clickhouse/cleanup.sh
         check:
           ($error == null): true
-    # Budget: the op timeout must exceed the sum of the inner waits it contains,
-    # per the rule .chainsaw.yaml states for its own catch scripts — otherwise
-    # Chainsaw SIGKILLs the script part-way and the failure arrives with no
-    # diagnostics at all, which is strictly worse than an inner wait timing out
-    # and reporting which resource stalled. The harness's inner budgets sum to
-    # 3900s (03: 300 HR + 300 claim + 300 access; 04: 300 HR + 300 STS; 05: 600
-    # BackupJob; 06: 600 RestoreJob; 07: 300 HR + 300 STS + 600 RestoreJob), so
-    # 65m clears it with room for the SQL and apply steps between them
-    # (convention 6: justified in-line).
+    # Budget: the op timeout must be strictly ABOVE the sum of the inner waits,
+    # per docs/agents/e2e-testing.md — let an inner wait be what fires, because
+    # it names the resource that stalled, whereas hitting the op timeout means
+    # Chainsaw SIGKILLs the script and the failure arrives with no diagnostics
+    # at all (.chainsaw.yaml calls that "strictly worse").
     #
-    # Reaching that ceiling takes a pathological hang: every wait here fails
+    # Inner budgets, sized against what CI actually takes rather than guessed
+    # generously — the whole bucket suite completes in ~37s and a backup-enabled
+    # ClickHouse plus Keeper reaches Ready in ~98s (measured on run 30353894332):
+    #   03  660s = 300 bucket HR + 180 claim + 180 access
+    #   04  600s = 300 HR + 300 StatefulSet
+    #   05  480s = BackupJob to Succeeded
+    #   06  480s = in-place RestoreJob
+    #   07 1080s = 300 HR + 300 StatefulSet + 480 to-copy RestoreJob
+    #        sum = 3300s (55m)
+    # 60m therefore leaves ~5m of headroom for the kubectl apply / exec SQL
+    # calls interleaved between those waits (convention 6: justified in-line).
+    #
+    # Reaching the ceiling at all takes a pathological hang: every wait fails
     # fast on a terminal state — wait_for_field bails on phase=Failed and
     # wait_hr_ready on Stalled=True — so a genuinely broken backup reports in
     # seconds. The happy path is minutes.
     - script:
-        timeout: 65m
+        timeout: 60m
         content: |
           set -eu
           cd ../../..

@@ -1,4 +1,4 @@
-# Backup-enabled ClickHouse for the clickhouse-backup-1-contracts Test.
+# Backup-enabled ClickHouse for the clickhouse-1-backup-contracts Test.
 #
 # A single shard / single replica keeps CI cost close to the plain
 # `clickhouse` suite while still rendering the `clickhouse-backup` sidecar
@@ -11,7 +11,7 @@
 # platform useSystemBucket flow marks the S3 secret keys optional so the Pod
 # starts before any bucket is projected). So the Pod becomes Ready and the
 # chart<->strategy contract is assertable with no reachable object store. The
-# real S3 backup/restore round-trip lives in clickhouse-backup-2-roundtrip,
+# real S3 backup/restore round-trip lives in clickhouse-2-backup-roundtrip,
 # which runs in tenant-root against the in-cluster SeaweedFS.
 #
 # backup.endpointCA is deliberately left unset: this Test never reaches S3, and

@@ -170,7 +170,14 @@ wait_sts_ready() {
         fi
         if [[ $elapsed -ge $timeout ]]; then
             log_error "Timeout waiting for StatefulSet/$name to become ready"
-            kubectl -n "$NAMESPACE" get pods -l "clickhouse.altinity.com/chi=${name#chi-}" >&2 2>/dev/null || true
+            # A StatefulSet names its Pods "<sts>-N", so ask for the first
+            # replica by name instead of guessing an operator label — and let
+            # both streams through, since the point of this branch is to say
+            # WHY the Pod never came up. Events carry the reason a Pod is
+            # Pending (unschedulable, missing PVC, image pull) that neither the
+            # Pod nor the StatefulSet status spells out.
+            kubectl -n "$NAMESPACE" get statefulset.apps "$name" -o wide >&2 || true
+            kubectl -n "$NAMESPACE" describe pod "${name}-0" >&2 || true
             return 1
         fi
         sleep 5

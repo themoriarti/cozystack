@@ -160,11 +160,19 @@ spec:
               cpu: 200m
               memory: 128Mi
           securityContext:
-            # Pod runs apk add at startup; that needs root. Other fields stay
-            # locked down (no privilege escalation, no extra caps, default
-            # seccomp profile). Tenants that enforce PSA "restricted" should
-            # swap this image for one with curl+jq pre-baked and re-enable
-            # runAsNonRoot on the strategy CR.
+            # Same field set as the platform's cozy-default-altinity strategy
+            # (packages/system/backupstrategy-controller/templates/strategy-altinity-default.yaml):
+            # no privilege escalation, all caps dropped, default seccomp
+            # profile, and runAsNonRoot deliberately left unset rather than
+            # false — the Pod only runs curl and jq, and neither the platform
+            # strategy nor this one pins a UID.
+            #
+            # On the default path there is no `apk add` to need root: the image
+            # above is the platform's, with curl+jq already baked in. Only the
+            # alpine:3.19 fallback (taken when cozy-default-altinity is absent)
+            # installs packages at startup, and that is the one case where a
+            # cluster enforcing PSA "restricted" has to supply its own image
+            # with the tools pre-baked.
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]

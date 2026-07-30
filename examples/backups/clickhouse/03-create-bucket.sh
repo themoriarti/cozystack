@@ -28,11 +28,11 @@ EOF
 
 log_substep "Waiting for bucket HelmRelease to be Ready..."
 wait_hr_ready "bucket-${BUCKET_NAME}" 300
-kubectl -n "$NAMESPACE" wait bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_NAME}" --for=jsonpath='{.status.bucketReady}'=true --timeout=300s
+kubectl -n "$NAMESPACE" wait bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_NAME}" --for=jsonpath='{.status.bucketReady}'=true --timeout=180s
 # Cozystack's bucket app provisions a BucketAccess named "<bucket-name>-backup"
 # (the "-backup" suffix is the BucketAccessClass name); the BucketInfo Secret
 # carries the same name.
-kubectl -n "$NAMESPACE" wait bucketaccesses.objectstorage.k8s.io "bucket-${BUCKET_NAME}-backup" --for=jsonpath='{.status.accessGranted}'=true --timeout=300s
+kubectl -n "$NAMESPACE" wait bucketaccesses.objectstorage.k8s.io "bucket-${BUCKET_NAME}-backup" --for=jsonpath='{.status.accessGranted}'=true --timeout=180s
 
 log_substep "Reading bucket coordinates from BucketInfo Secret..."
 TMP=$(mktemp)
