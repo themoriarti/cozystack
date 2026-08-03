@@ -333,8 +333,10 @@ jobs:
         run: |
           set -eu
           base="$(git rev-parse HEAD^1)"
-          # Unique path so a leftover from a crashed/concurrent run on the shared
-          # self-hosted runner can't fail `git worktree add`.
+          # Fresh path per invocation so a leftover from an earlier step in this
+          # job can't fail `git worktree add`. (The runner itself is an
+          # ephemeral Oracle ARC VM, one per job — see .github/actionlint.yaml
+          # and #2937 — so there is no cross-run leftover to defend against.)
           bt="$(mktemp -d)/basetree"
           git worktree add --quiet --detach "$bt" "$base"
           git -C "$bt" ls-files 'packages/*/*/Makefile' | while IFS= read -r mk; do
@@ -431,8 +433,10 @@ jobs:
       actions: read
     # Set the sandbox name as a job-level env var rather than writing it to
     # $GITHUB_ENV from a step (which the zizmor github-env audit flags). run_id
-    # is unique per run — in workflow_run context GITHUB_REF is the default
-    # branch, so it can't disambiguate concurrent fork runs on a shared host.
+    # rather than the ref because in workflow_run context GITHUB_REF is always
+    # the default branch, so it would name every fork run's sandbox identically
+    # and make the logs (and any manual `docker` poke at a live sandbox)
+    # ambiguous across runs.
     env:
       SANDBOX_NAME: cozy-e2e-sandbox-fork-${{ github.run_id }}
     steps:
