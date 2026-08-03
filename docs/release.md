@@ -41,6 +41,8 @@ Release candidates are given numbers `vX.Y.0-rc.N`, for example, `v1.2.0-rc.1`. 
 
 This is what makes an rc mean something. Previously `release-X.Y` was created only when the stable release merged, so `rc.2` was cut from `main`'s tip and silently absorbed everything that had landed since `rc.1` — the shipped release could contain code that no rc had ever validated.
 
+**Un-freezing is manual and deliberate.** If an `rc.1` turns out to be unusable and the line has to be re-cut from `main`, delete `release-X.Y` by hand first; the refuse step blocks every other route back to a `main` dispatch, which is the point of it. Nothing automates the deletion, and nothing should — throwing away a frozen line is a decision worth making explicitly.
+
 Each RC contributes to a cumulative set of release notes that will be finalized when `vX.Y.0` is released. After testing, if no critical issues remain, the last good rc is **promoted** to the regular release `vX.Y.0` — the exact rc images retagged by digest, never rebuilt and never tagged from a later commit (see [Regular Releases](#regular-releases)). Promotion cuts the write-once `vX.Y.0` tag at the promote PR's merge commit, fast-forwards the `release-X.Y` maintenance branch the freeze already created, and opens the way for patch releases.
 
 ## Regular Releases
@@ -262,7 +264,7 @@ Known failure modes:
 - AI step timeout (hard 30-min cap).
 - Output truncated or whitespace-only — caught by the `Verify changelog` step (`hack/validate-changelog.sh`), which accepts either header convention (`# Cozystack vX.Y.Z` for a minor or `# vX.Y.Z (<date>)` for a patch), and requires the leading release-link comment pointing at `releases/tag/vX.Y.Z`, a `compare/...vX.Y.Z` link ending in this version, and at least one `## ` section — deliberately with no line-count floor, since a complete short patch changelog (v1.5.1 ships in 19 lines) must not be rejected as a fragment. It downgrades to the missing-changelog path rather than shipping a fragment as release notes.
 
-**`tags.yaml::generate-changelog` is the backstop.** It self-skips when the changelog is already on `main`. It earns its keep in two cases: generation failed during promotion, or the promote PR targeted `release-X.Y` (a patch release) so the file never reached `main`. In the second case it **ports the reviewed file from the tag commit verbatim** rather than regenerating — a second AI pass there would spend quota and then overwrite already-published, already-reviewed release notes.
+**`tags.yaml::generate-changelog` is the backstop.** It self-skips when the changelog is already on `main`. It earns its keep in two cases: generation failed during promotion, or the promote PR targeted `release-X.Y` so the file never reached `main`. Since the rc freeze the second case is **every** release, minor and patch alike — the promote PR always targets the release line (see [Regular Releases](#regular-releases)), which makes this backstop the only route by which a published changelog reaches `main`. In that case it **ports the reviewed file from the tag commit verbatim** rather than regenerating — a second AI pass there would spend quota and then overwrite already-published, already-reviewed release notes.
 
 ### Phase 3 — `update-website-docs` (now the backstop)
 
@@ -298,7 +300,7 @@ Fires on merge of a PR that is merged, carries the `release` label, and is autho
 
 ### Phase 6 — `update-releasenotes.yaml` (sync GitHub Release body)
 
-Fires on pushes to `main` that touch `docs/changelogs/v*.md`. Reads each `docs/changelogs/vX.Y.Z.md` and PATCHes the matching GitHub Release's `body` if it differs. Since Phase 5 now sets the body directly from the merge commit, this is no longer on the critical path — it covers later **edits** to a published changelog, the backstop PR landing a changelog that reached `main` after the fact, and manual re-syncs via `workflow_dispatch`. It only watches `main`, which is why finalize (not this job) is what populates a patch release promoted onto `release-X.Y`.
+Fires on pushes to `main` that touch `docs/changelogs/v*.md`. Reads each `docs/changelogs/vX.Y.Z.md` and PATCHes the matching GitHub Release's `body` if it differs. Since Phase 5 now sets the body directly from the merge commit, this is no longer on the critical path — it covers later **edits** to a published changelog, the backstop PR landing a changelog that reached `main` after the fact, and manual re-syncs via `workflow_dispatch`. It only watches `main`, which is why finalize (not this job) is what populates a release promoted onto `release-X.Y` — since the freeze, that is every release rather than only a patch.
 
 ## Stable tags come from rc promotion
 
@@ -338,10 +340,12 @@ The matching Talos node image is `ghcr.io/cozystack/cozystack/cozystack-nocloud:
 
 | Label | Target branch |
 |-------|---------------|
-| `backport` | `release-X.Y` (current latest minor) |
-| `backport-previous` | `release-X.(Y-1)` |
+| `backport` | the newest existing `release-X.Y` branch |
+| `backport-previous` | the second-newest existing `release-X.Y` branch |
 
-Resolution is dynamic via `getLatestRelease` at run time — no need to hardcode branch names.
+Resolution is dynamic at run time, and it reads the branches themselves: the job lists the repository's branches, keeps the ones matching `release-<major>.<minor>`, and sorts them numerically descending — so `release-1.10` ranks above `release-1.9`, which a lexicographic sort gets backwards. `backport` takes the first, `backport-previous` the second, so both name a branch that exists by construction; asking for `backport-previous` when only one line exists fails the job rather than inventing a target. Nothing is derived arithmetically — an earlier version computed the previous line as `Y-1`, which named a non-existent branch whenever a minor was skipped.
+
+**During a freeze window the newest line is the one being stabilised, not the last published one.** `release-X.Y` is created when the first `vX.Y.0-rc.1` is cut, before `vX.Y.0` is published, so from the freeze until the release `backport` targets the release being stabilised and `backport-previous` targets the last published stable. That is the intent: the frozen branch is the only way into the upcoming release, which is when backports matter most. The trade-off is that for the length of the window the line one step further back has no label pointing at it, so a fix that has to reach it before the new release publishes must be cherry-picked by hand.
 
 The bot creates a backport PR with title `[Backport release-X.Y] <original title>`. When this PR merges, the title prefix used to re-trigger the bot through `pr-labeler.yaml`, which auto-applied `backport` to any `[Backport release-X.Y]`-titled PR. Combined with the org-level `dosubot` re-applying the label, this caused recursive backports.
 
