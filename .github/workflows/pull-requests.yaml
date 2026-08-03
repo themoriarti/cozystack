@@ -837,7 +837,13 @@ jobs:
       # Test Impact Analysis (TIA): walk the PackageSource graph for the PR
       # diff and select only the Chainsaw suites affected. Runs by default; opt
       # out via the `full-e2e` label to run the full suite.
-      # `skip=true` means nothing to test (docs-only PR).
+      #
+      # `skip=true` means every changed path is EXPLICITLY inert (docs, repo
+      # meta, agent config — see select-e2e.sh's inert_config_pattern), so
+      # skipping Chainsaw and reporting green is the correct verdict. A path the
+      # selector does not recognise escalates to the full suite instead of
+      # returning empty, so `skip=true` can no longer mean "TIA had no idea"
+      # (#3392).
       - name: Select E2E tests
         id: select
         if: ${{ !contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
@@ -861,9 +867,10 @@ jobs:
       # ▸ Run E2E tests (Chainsaw, scoped by Test Impact Analysis)
       #
       #   The "Select E2E tests" step above picks the suites impacted by the PR
-      #   diff. With the `full-e2e` label that step is skipped, SELECTED_APPS is
-      #   empty, and we fall back to the whole suite; an empty selection on a
-      #   docs-only PR skips this step entirely (the skip != 'true' guard).
+      #   diff. With the `full-e2e` label that step is skipped, so FULL_E2E is
+      #   the only way to reach this step with no selection and we run the whole
+      #   suite; an all-inert selection skips this step entirely (the
+      #   skip != 'true' guard).
       #
       #   Chainsaw discovers each named suite under hack/e2e-chainsaw/ and polls
       #   every assertion to its own timeout, so the old per-app 3-retry loop is
@@ -876,7 +883,10 @@ jobs:
           SELECTED_APPS: ${{ steps.select.outputs.apps }}
           FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
         run: |
-          if [ "$FULL_E2E" = "true" ] || [ -z "$SELECTED_APPS" ]; then
+          # Only the full-e2e label can get here with an empty selection: when
+          # `select` runs, an empty result sets skip=true and this step never
+          # starts. Testing FULL_E2E alone keeps that invariant visible.
+          if [ "$FULL_E2E" = "true" ]; then
             suites=""        # empty => test-chainsaw runs the whole suite
             echo "Running full chainsaw suite"
           else

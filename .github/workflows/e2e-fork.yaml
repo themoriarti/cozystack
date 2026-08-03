@@ -602,9 +602,11 @@ jobs:
       # (base64 through the job output), NOT a git diff on the fork-controlled
       # merge ref. The script below is the fork's own, so this hardens what the
       # selector reads and not what it decides — see the job header.
-      # select-e2e.sh escalates to the full suite for an unrecognised path
-      # inside packages/; a path it does not recognise at all selects nothing
-      # and the run below is skipped (#3392 — same in the in-tree lane).
+      # select-e2e.sh classifies every changed path explicitly: shared build
+      # inputs and the e2e harness escalate to the full suite, an inert path
+      # (docs, repo meta, agent config) selects nothing, and anything matching
+      # neither escalates rather than returning empty — so an empty selection
+      # here means "verified inert", not "TIA had no idea" (#3392).
       # Skipped (→ full suite below) on the full-e2e label.
       - name: Select E2E tests
         id: select
@@ -623,8 +625,9 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
       # Single `chainsaw test` invocation, no per-app retry loop (e2e-testing.md
-      # §1) — Chainsaw polls each assertion to its own timeout. Full suite when
-      # the full-e2e label skipped selection or the selection is empty.
+      # §1) — Chainsaw polls each assertion to its own timeout. Full suite only
+      # when the full-e2e label skipped selection: if `select` ran and came back
+      # empty it set skip=true and this step never starts.
       - name: Run E2E tests
         id: e2e_tests
         if: ${{ steps.select.outputs.skip != 'true' }}
@@ -632,7 +635,7 @@ jobs:
           SELECTED_APPS: ${{ steps.select.outputs.apps }}
           FULL_E2E: ${{ needs.resolve.outputs.full_e2e }}
         run: |
-          if [ "$FULL_E2E" = "true" ] || [ -z "$SELECTED_APPS" ]; then
+          if [ "$FULL_E2E" = "true" ]; then
             suites=""        # empty => test-chainsaw runs the whole suite
             echo "Running full chainsaw suite"
           else
