@@ -107,6 +107,18 @@
 /pkg/registry/                               @kvaps @lllamnyp
 /pkg/generated/                              @kvaps @lllamnyp
 
+# --- Per-app generated mirrors of values.schema.json: no owner ---
+# These files are entirely produced by `make generate` (cozyvalues-gen and
+# hack/update-crd.sh) from each app's own values.yaml, which is already
+# reviewed under its /packages/apps/ or /packages/extra/ entry above.
+# Correctness is enforced by the pre-commit `run-make-generate` /
+# `run-make-generate-root` CI hooks (regenerate, then fail on any diff), not
+# by human review, so no owner is listed here — that intentionally waives
+# the /api/ codeowner requirement above for just these generated paths.
+/api/apps/v1alpha1/*/types.go
+/api/apps/v1alpha1/*/zz_generated.deepcopy.go
+/packages/system/*/cozyrds/
+
 # --- Docs ---
 /docs/                                       @lexfrei @myasnikovdaniil
 
