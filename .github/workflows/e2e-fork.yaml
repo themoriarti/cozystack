@@ -306,10 +306,20 @@ jobs:
         env:
           OCIR_USER:  ${{ secrets.OCIR_USER }}
           OCIR_TOKEN: ${{ secrets.OCIR_TOKEN }}
+          # Keep the push credential out of the runner's DEFAULT auth stores
+          # (~/.docker/config.json, $XDG_RUNTIME_DIR/containers/auth.json) and
+          # in a run-scoped path instead, matching every other OCIR login in
+          # this repo (pull-requests.yaml's build / build-talos / finalize).
+          # `Set up Docker config` in those jobs copies ~/.docker verbatim into
+          # the build context, so a token left in the default store is a token
+          # handed to whatever runs next.
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
         run: |
           # skopeo (image copies) and flux (artifact push, via the docker
           # keychain) each need OCIR auth. Token via stdin, never argv.
-          echo "$OCIR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
+          mkdir -p "$DOCKER_CONFIG"
+          echo "$OCIR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin --authfile "$REGISTRY_AUTH_FILE"
           echo "$OCIR_TOKEN" | docker login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
       # Trusted allowlist of image repo names. Every OCI archive a fork PR pushes
       # under ${REGISTRY}/ must be one the BASE tree can itself export — derived
@@ -346,6 +356,11 @@ jobs:
           # retention. Both values are validated in `resolve`.
           IMAGE_TAG: pr-${{ needs.resolve.outputs.pr_number }}-${{ needs.resolve.outputs.head_sha }}
           HEAD_SHA:  ${{ needs.resolve.outputs.head_sha }}
+          # Read the auth the login step wrote, not the runner default store.
+          # skopeo honours REGISTRY_AUTH_FILE; flux resolves through the docker
+          # keychain, which honours DOCKER_CONFIG.
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
         run: |
           set -eu
           shopt -s nullglob
@@ -385,6 +400,19 @@ jobs:
           [ -n "$digest" ] || { echo "::error::failed to capture packages artifact digest"; exit 1; }
           echo "packages_digest=${digest}" >> "$GITHUB_OUTPUT"
           echo "Pushed packages artifact @${digest}"
+      # Drop the credential as soon as the pushes are done, so it is not live
+      # for the remainder of the job (or for anything that inherits the runner
+      # if the pool ever stops being one-VM-per-job). always() so a failed push
+      # does not leave it behind.
+      - name: Log out of OCIR
+        if: always()
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
+        run: |
+          skopeo logout --authfile "$REGISTRY_AUTH_FILE" "${REGISTRY%%/*}" || true
+          docker logout "${REGISTRY%%/*}" || true
+          rm -rf "$DOCKER_CONFIG"
 
   # Run the e2e suite against the pushed closure. NO OCIR push token here — the
   # sandbox pulls images anonymously; the fork's images/scripts run only in this
