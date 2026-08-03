@@ -384,6 +384,29 @@ spec:
             under the fixed filename ca.crt regardless of the key it occupies
             in the Secret, because SSL_CERT_DIR reads whole directories and
             the filename is what lands in the trust set.
+
+            Deliberately NOT `optional: true`, unlike the credential
+            secretKeyRefs above on the useSystemBucket path. The asymmetry is
+            intended and the two cases are not alike:
+
+              - credentials are projected by the platform AFTER the release
+                installs, so a strict ref would wedge every fresh
+                useSystemBucket release in CreateContainerConfigError until
+                the first BackupJob fired. Optional lets the Pod start and
+                surfaces the problem later, when a backup is actually run.
+              - this CA is named by the tenant, must already exist when they
+                name it, and is trust material. Optional would mount an empty
+                directory, the Pod would come up looking healthy, and the
+                first backup would fail deep inside clickhouse-backup with an
+                x509 error naming neither the Secret nor this chart.
+
+            So it fails closed: a missing Secret holds the Pod in
+            ContainerCreating with `MountVolume.SetUp failed ... secret not
+            found` on it, which names the exact missing object in
+            `kubectl describe pod`. Note the blast radius is the whole
+            ClickHouse Pod, not just the sidecar — that is the cost of the
+            legible failure, and the reason the field is opt-in and empty by
+            default.
           */}}
           volumes:
             - name: backup-s3-ca

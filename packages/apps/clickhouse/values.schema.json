@@ -188,7 +188,7 @@
           "default": ""
         },
         "endpointCA": {
-          "description": "CA bundle the sidecar trusts when the S3 endpoint's certificate is signed by a private CA (e.g. Cozystack's in-cluster SeaweedFS). Applies to both the per-tenant and the `useSystemBucket` flow.",
+          "description": "CA bundle the sidecar trusts when the S3 endpoint's certificate is signed by a private CA (e.g. Cozystack's in-cluster SeaweedFS). Applies to both the per-tenant and the `useSystemBucket` flow, and to the `clickhouse-backup` sidecar only — the legacy `schedule` CronJob writes to S3 through restic and does not consume it, so a private-CA endpoint combined with `schedule` still fails TLS. Use the BackupClass flow for such an endpoint.",
           "type": "object",
           "default": {},
           "properties": {

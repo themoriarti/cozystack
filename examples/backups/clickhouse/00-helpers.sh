@@ -38,6 +38,13 @@ export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-clickhouse-restore-to-c
 # silently break the copy. On a cluster whose S3 endpoint is signed by a
 # publicly-trusted CA, set S3_CA_SECRET="" to skip the copy and leave
 # backup.endpointCA unset.
+# Whether the CA Secret name is the user's choice or just this default. Step 03
+# treats the two differently: a name the user typed and that does not exist is an
+# error worth stopping on, while the default failing to resolve on a cluster with
+# no seaweedfs most likely means a publicly-trusted S3 endpoint — a legal input,
+# so it warns and leaves backup.endpointCA unset instead of failing.
+export S3_CA_SECRET_EXPLICIT="${S3_CA_SECRET:+1}"
+export S3_CA_SECRET_EXPLICIT="${S3_CA_SECRET_EXPLICIT:-0}"
 export S3_CA_SECRET="${S3_CA_SECRET:-seaweedfs-ca-cert}"
 # Independent of NAMESPACE: the shared seaweedfs and its CA live in tenant-root
 # even when the demo runs elsewhere.

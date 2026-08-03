@@ -64,7 +64,19 @@ done
 # secretName. Leave S3_CA_SECRET empty to skip the copy on a public-CA endpoint.
 CH_BACKUP_CA_SECRET=""
 if [[ -n "$S3_CA_SECRET" ]]; then
-    if ! kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" >/dev/null 2>&1; then
+    # Reading the platform's CA lives in S3_CA_NAMESPACE (tenant-root by
+    # default), which is an admin/platform capability, not a tenant one — see
+    # the note on step 03 in README.md. So the three outcomes have to be kept
+    # apart: present, absent, and not-allowed-to-look. Swallowing stderr here
+    # would report an RBAC denial as "not found" and then advise setting
+    # S3_CA_SECRET, which cannot fix a permissions problem.
+    ca_probe_err=""
+    if ! ca_probe_err=$(kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" -o name 2>&1 >/dev/null); then
+        if echo "$ca_probe_err" | grep -qiE 'forbidden|cannot (get|list)|Unauthorized'; then
+            log_error "Cannot read ${S3_CA_NAMESPACE}/${S3_CA_SECRET}: ${ca_probe_err}"
+            log_error "This is a permissions problem, not a missing Secret: copying the S3 endpoint CA needs read access to ${S3_CA_NAMESPACE}. Ask an admin to copy it into ${NAMESPACE}/${CH_CA_SECRET_NAME}, then re-run with S3_CA_SECRET=\"\" to skip the copy."
+            exit 1
+        fi
         log_warning "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} not found; discovering the seaweedfs CA Certificate..."
         # List every seaweedfs Certificate as "<isCA> <secretName>" and pick the
         # CA one in shell — avoids kubectl jsonpath's finicky boolean-literal
@@ -76,11 +88,23 @@ if [[ -n "$S3_CA_SECRET" ]]; then
         if [[ -n "$DISCOVERED_CA" ]]; then
             log_success "Discovered seaweedfs CA secret ${S3_CA_NAMESPACE}/${DISCOVERED_CA}"
             S3_CA_SECRET="$DISCOVERED_CA"
-        else
-            log_error "No seaweedfs CA Certificate found in ${S3_CA_NAMESPACE}; set S3_CA_SECRET explicitly (or empty for a public-CA endpoint)."
+        elif [[ "${S3_CA_SECRET_EXPLICIT}" == "1" ]]; then
+            # The user named a specific Secret and it is not there: that is a
+            # typo or a missing prerequisite, and guessing past it would hide it.
+            log_error "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} does not exist and no seaweedfs CA Certificate was found in ${S3_CA_NAMESPACE}. Fix the name, or set S3_CA_SECRET=\"\" for a publicly-trusted endpoint."
             exit 1
+        else
+            # Nothing was named and there is no seaweedfs here, so this is most
+            # likely a cluster whose S3 endpoint is publicly trusted — a legal
+            # input for this demo. Warn and continue with endpointCA unset
+            # rather than failing on a default the user never chose.
+            log_warning "No seaweedfs CA found in ${S3_CA_NAMESPACE} and S3_CA_SECRET was not set explicitly."
+            log_warning "Continuing with backup.endpointCA unset — correct for a publicly-trusted S3 endpoint. If your endpoint uses a private CA, set S3_CA_SECRET to the Secret holding its bundle."
+            S3_CA_SECRET=""
         fi
     fi
+fi
+if [[ -n "$S3_CA_SECRET" ]]; then
     log_substep "Copying S3 CA ${S3_CA_NAMESPACE}/${S3_CA_SECRET}[${S3_CA_KEY}] -> ${CH_CA_SECRET_NAME}..."
     # The dot in the default key has to be escaped for kubectl jsonpath.
     ca_pem=$(kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" \
