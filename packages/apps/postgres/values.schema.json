@@ -173,6 +173,19 @@
             ],
             "x-kubernetes-int-or-string": true
           }
+        },
+        "sharedPreloadLibraries": {
+          "description": "Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. CloudNativePG also preloads `pg_stat_statements`, `auto_explain` and `pgaudit` by itself whenever `parameters` sets a key under their prefix (e.g. `pg_stat_statements.track`), so removing one of them from this list does not unload it while such a key is set; `pg_prewarm` is preloaded only through this list. Changing the list restarts PostgreSQL on every instance, the primary included, so writes pause briefly.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "pg_stat_statements",
+              "auto_explain",
+              "pgaudit",
+              "pg_prewarm"
+            ]
+          }
         }
       }
     },
