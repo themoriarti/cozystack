@@ -108,6 +108,24 @@ jobs:
               core.setOutput('should_run', 'false');
             };
 
+            // A CANCELLED or wholly-SKIPPED triggering run is not a verdict.
+            // cancel-in-progress kills the live run when the fork pushes again
+            // (and, before the label-group split in pull-requests.yaml, when
+            // anyone labelled the PR); the run that replaces it reports on its
+            // own SHA. Posting `failure` from here would stamp a false red on a
+            // SHA whose e2e never ran, and nothing would flip it back — the
+            // replacement run for the SAME SHA takes the discarded-label path
+            // below and posts nothing. Checked on the conclusion rather than on
+            // the job list because a cancelled run can report no jobs at all,
+            // which would make the `Plan build` lookup below miss. Fail-closed
+            // either way: an unposted required status stays "Expected", so
+            // declining to post can only preserve a verdict a real run reached.
+            if (CONCLUSION === 'cancelled' || CONCLUSION === 'skipped') {
+              console.log(`Triggering run ${RUN_ID} concluded '${CONCLUSION}' — leaving "E2E Tests" untouched.`);
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
             // Discarded label event: pull-requests.yaml triggers on `labeled` but
             // its `plan` guard discards every label other than full-e2e, so such a
             // run skips every job and builds nothing. Post NOTHING and stop —

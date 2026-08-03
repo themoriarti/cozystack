@@ -11,8 +11,25 @@ on:
     types: [opened, synchronize, reopened, labeled]
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
+#
+# `labeled` events get their OWN group so labelling an open PR cannot cancel a
+# live opened/synchronize run. A label other than full-e2e makes `plan` skip,
+# and `e2e-report` skips with it, so before this split the pair "cancel the real
+# run, then skip" left the head SHA with no "E2E Tests" status at all — and an
+# unposted required status stays "Expected", blocking the merge until someone
+# pushes again or re-runs the cancelled run. Observed on live CI: run
+# 30614258694 (cancelled) followed by 30614280603 (skipped) on the same SHA,
+# 24s apart, from a maintainer adding kind/* labels just after a push.
+# (`pr-labeler` cannot cause this — it labels with the default GITHUB_TOKEN,
+# which by design triggers no further workflow runs.)
+#
+# Two label runs still supersede each other, and a `labeled` run carrying
+# full-e2e now runs alongside the head run rather than replacing it. Both post
+# the same `E2E Tests` context and commit statuses are latest-wins per context,
+# so the full-e2e verdict lands last only if its suite finishes last; that is
+# acceptable because the label is an explicit opt-in to a longer run.
 concurrency:
-  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ github.event.action == 'labeled' && '-label' || '' }}
   cancel-in-progress: true
 
 # Top-level token defaults to read-only; jobs request the minimum extra scopes.
