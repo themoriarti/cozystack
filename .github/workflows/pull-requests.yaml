@@ -586,11 +586,11 @@ jobs:
 
 
   # In-tree e2e for SAME-REPO PRs. Deliberately NOT named "E2E Tests": the
-  # required "E2E Tests" context is an explicit check-run concluded by the
-  # `e2e-report` job (non-fork) or by e2e-fork.yaml (fork). A required *job* that
-  # skips counts as PASSED by branch protection, which is exactly how fork PRs
-  # used to merge with e2e never run (#3257); routing the required context
-  # through a check-run removes that skip-to-green path. Fork PRs skip this job
+  # required "E2E Tests" context is a commit status posted by the `e2e-report`
+  # job (non-fork) or by e2e-fork.yaml (fork). A required *job* that skips
+  # counts as PASSED by branch protection, which is exactly how fork PRs used
+  # to merge with e2e never run (#3257); routing the required context through
+  # a status removes that skip-to-green path. Fork PRs skip this job
   # (they have no pushed images to pull) and run e2e in the privileged
   # workflow_run instead.
   e2e:
@@ -893,8 +893,8 @@ jobs:
         if: always()
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
 
-  # Report the required "E2E Tests" status as an explicit check-run rather than
-  # relying on a job named "E2E Tests". A required *job* that is skipped counts
+  # Report the required "E2E Tests" gate as a commit status rather than relying
+  # on a job named "E2E Tests". A required *job* that is skipped counts
   # as PASSED by branch protection — desired for docs-only PRs, but the exact
   # hole that let fork PRs merge with e2e never run (#3257). This job always runs
   # on same-repo PRs and concludes "E2E Tests" deterministically:

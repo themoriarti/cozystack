@@ -9,7 +9,7 @@ name: E2E (fork)
 #   1. pushes the pre-built image archives to OCIR BY DIGEST and flux-pushes the
 #      digest-pinned packages tree (job `publish`); and
 #   2. runs the e2e suite against them and reports the required "E2E Tests"
-#      check-run back on the PR head SHA (jobs `e2e` + `report`).
+#      commit status back on the PR head SHA (jobs `e2e` + `report`).
 #
 # Security boundary: the untrusted fork code produced only opaque artifacts. The
 # OCIR push token is live ONLY in `publish`, which runs trusted binaries
@@ -275,7 +275,7 @@ jobs:
           ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
           fetch-depth: 0
           persist-credentials: false
-      # Guard against a TOCTOU race: the check-run is stamped on the SHA `resolve`
+      # Guard against a TOCTOU race: the status is stamped on the SHA `resolve`
       # saw, but refs/pull/N/merge tracks the live PR head. If the fork pushed
       # again between resolve and here, HEAD^2 (the merge ref's PR-head parent)
       # no longer matches — abort rather than push/test unresolved code.
@@ -447,7 +447,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # Same TOCTOU guard as `publish`: refuse to test a merge ref that moved off
-      # the SHA the check-run is stamped on (see the publish job for the rationale).
+      # the SHA the status is stamped on (see the publish job for the rationale).
       - name: Assert checkout matches resolved head SHA
         env:
           EXPECTED_SHA: ${{ needs.resolve.outputs.head_sha }}

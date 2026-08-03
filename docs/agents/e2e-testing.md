@@ -100,7 +100,7 @@ Be precise about TIA's scope — it is narrower than "skip E2E for unrelated PRs
 - **Exclude loop devices** from host LVM scanning in the Talos machine config so the host does not activate volume groups inside loop-mounted e2e disk images.
 - **Fail fast on node readiness** (≈5m, then bail) rather than marching into LB/NFS tests that will also fail — it saves several minutes per attempt and keeps the real failure at the top of the log.
 
-### 10. The E2E workflow split: same-repo vs fork, and the "E2E Tests" check-run
+### 10. The E2E workflow split: same-repo vs fork, and the "E2E Tests" commit status
 
 A fork's `pull_request` run carries no registry credentials, so it cannot push the images the e2e sandbox pulls. E2E therefore runs across **two** workflows:
 
@@ -120,6 +120,7 @@ Consequences to keep in mind when touching either workflow:
 - **`labeled` events run in their own concurrency group, and a cancelled run reports nothing.** Because the gate is a status rather than a job, a run that dies without posting leaves the head SHA at "Expected" — which blocks the merge rather than passing it. Two places depend on that: `pull-requests.yaml`'s concurrency key appends `-label` for `labeled` events so labelling an open PR cannot cancel a live `opened`/`synchronize` run (the replacement run is discarded by `plan`'s full-e2e guard, so it would never post the status the cancelled run was going to), and `e2e-fork.yaml`'s `resolve` returns early on a `cancelled`/`skipped` triggering run instead of posting `failure` for it. If you touch either, keep the invariant: exactly one run per head SHA is responsible for the status, and a run that is not that one must post nothing at all.
 
 **Security prerequisite (repo setting).** The split is only safe if fork runs require maintainer approval before they execute. The repository must keep **Settings → Actions → "Require approval for all outside collaborators"** enabled, so a fork's `pull_request` run — which produces the artifacts `e2e-fork.yaml` consumes — cannot run untrusted code (or feed the privileged run) without a maintainer's go-ahead.
+
 ## Chainsaw v0.2.15 gotchas
 
 The suite is pinned to Chainsaw **v0.2.15** (the latest release as of May 2026); none of the traps below are fixed upstream yet, so the workarounds stay until a bump is possible. Each one has already cost a debugging session — this is the "no one gets it right the first time" list, worth a read before writing a new assert.
