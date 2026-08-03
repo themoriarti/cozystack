@@ -26,11 +26,13 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: '(?m)^\s*\*"is immutable"\*\)\s*$'
-      # The target in full: a delete naming anything but this pool's own template
-      # would take out a sibling pool's, and a prefix match would not see it.
+      # The target in full: a delete naming anything but the template this Job
+      # applies would take out a sibling pool's, or the pre-hash one the
+      # outgoing MachineSet still references, and a prefix match would not see
+      # it.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'kubectl delete talosconfigtemplate "\$\{RELEASE\}-\$\{GROUP_NAME\}" -n "\$NS"'
+          pattern: 'kubectl delete talosconfigtemplate "\$\{TCT_NAME\}" -n "\$NS"'
 
   # Any other apply error must stop the Job: a delete followed by a create that
   # fails for the same reason would leave the pool with no template at all.
@@ -51,13 +53,15 @@ tests:
       path: kind
       value: Role
     asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups: ["bootstrap.cluster.x-k8s.io"]
-            resources: ["talosconfigtemplates"]
-            resourceNames: ["kubernetes-myk8s-md0"]
-            verbs: ["delete"]
+      # The name is this pool's content-hash one. Which hash is not pinned here:
+      # that it equals the name the Job applies and the MachineDeployment
+      # references is hack/check-talosconfigtemplate-name-agreement.bats' job.
+      - matchRegex:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "delete")].resourceNames[0]
+          pattern: '^kubernetes-myk8s-md0-[0-9a-f]{6}$'
+      - lengthEqual:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "delete")].resourceNames
+          count: 1
       # delete must stay bound to this pool's own template: an unnamed rule
       # carrying it, alone or folded into the unnamed create, would let the Job
       # remove a sibling pool's template.
@@ -82,13 +86,15 @@ tests:
       path: kind
       value: Role
     asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups: ["bootstrap.cluster.x-k8s.io"]
-            resources: ["talosconfigtemplates"]
-            resourceNames: ["kubernetes-myk8s-md0"]
-            verbs: ["get", "patch", "update"]
+      # The name is this pool's content-hash one. Which hash is not pinned here:
+      # that it equals the name the Job applies and the MachineDeployment
+      # references is hack/check-talosconfigtemplate-name-agreement.bats' job.
+      - matchRegex:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "get")].resourceNames[0]
+          pattern: '^kubernetes-myk8s-md0-[0-9a-f]{6}$'
+      - lengthEqual:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "get")].resourceNames
+          count: 1
       - notContains:
           path: rules
           content:
