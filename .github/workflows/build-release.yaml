@@ -35,6 +35,20 @@ on:
     paths-ignore:
       - 'docs/**'
 
+  # Run against a line on request. The push trigger above cannot cover the moment
+  # a line is BORN: cut-prerelease.yaml creates release-X.Y at a commit that is
+  # already on main, so that push carries no new commits, and GitHub does not run
+  # a workflow whose `paths`/`paths-ignore` filter finds no changed files. Without
+  # a dispatch the line would have no `cozystack-packages:<line>` artifact until
+  # its first cherry-pick merged, and until then pull-requests.yaml's overlay
+  # would find nothing to pull and leave every package on its committed ref — at
+  # freeze time, the PREVIOUS release's, which is the cross-generation mix #3437
+  # fixed. The freeze step dispatches this workflow for the branch it just made.
+  #
+  # Also the recovery path when a line build fails or is cancelled: re-run it
+  # without having to push an empty commit to the line.
+  workflow_dispatch:
+
 # Per line: a newer push to the same line supersedes an in-flight build, but
 # different lines build independently.
 concurrency:
