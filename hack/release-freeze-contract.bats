@@ -75,10 +75,18 @@ step_line() {
   block="$(step_block 'Freeze the line (create release-X.Y)' "$CUT")"
   [ -n "$block" ]
 
-  # Both halves, as one expression, on a live (non-comment) line. Dropping
-  # patch == '0' freezes on every patch-line rc; widening kind freezes on an
-  # alpha/beta cut from a still-open main.
-  count="$(code_lines < "$CUT" | grep -cF "        if: steps.parse.outputs.kind == 'rc' && steps.parse.outputs.patch == '0'" || true)"
+  # Both halves, as one expression, on a live (non-comment) line, and INSIDE the
+  # freeze step. Dropping patch == '0' freezes on every patch-line rc; widening
+  # kind freezes on an alpha/beta cut from a still-open main. Scoped to the block
+  # rather than the file so that some other step carrying the same condition
+  # cannot keep this green after the freeze step loses its own guard.
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF "        if: steps.parse.outputs.kind == 'rc' && steps.parse.outputs.patch == '0'" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # The step id the artifact dispatch below gates on. Losing it makes that gate
+  # read an empty output, so it is permanently false and a newly frozen line
+  # silently never gets its packages artifact.
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF '        id: freeze' || true)"
   [ "${count:-0}" -eq 1 ]
 }
 
@@ -92,10 +100,13 @@ step_line() {
   count="$(printf '%s\n' "$block" | code_lines | grep -cF 'if ! git push origin "HEAD:refs/heads/$BRANCH"; then' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  # No force in any shape, including a `+refs/` refspec.
+  # No force in any shape: an explicit flag, or a refspec that opens with `+`,
+  # which forces that ref alone and needs no flag at all — `git push origin
+  # "+HEAD:refs/heads/$BRANCH"` force-moves the branch while reading as an
+  # ordinary push.
   count="$(printf '%s\n' "$block" | code_lines | grep -cE 'git push[^|&;]*(--force|--force-with-lease|[[:space:]]-f[[:space:]])' || true)"
   [ "${count:-0}" -eq 0 ]
-  count="$(printf '%s\n' "$block" | code_lines | grep -cF '+refs/heads/' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cE "git push[^|&;]*[[:space:]][\"']?[+]" || true)"
   [ "${count:-0}" -eq 0 ]
 
   # An existing branch is left alone rather than reused as a create target.
@@ -112,7 +123,9 @@ step_line() {
   [ "${count:-0}" -eq 1 ]
   count="$(printf '%s\n' "$block" | code_lines | grep -cE 'git push[^|&;]*(--force|--force-with-lease|[[:space:]]-f[[:space:]])' || true)"
   [ "${count:-0}" -eq 0 ]
-  count="$(printf '%s\n' "$block" | code_lines | grep -cF '+refs/tags/' || true)"
+  # A leading `+` on the refspec forces the ref with no flag, which for a tag
+  # means overwriting a published pre-release in place.
+  count="$(printf '%s\n' "$block" | code_lines | grep -cE "git push[^|&;]*[[:space:]][\"']?[+]" || true)"
   [ "${count:-0}" -eq 0 ]
 }
 
@@ -125,7 +138,9 @@ step_line() {
   # Only a main dispatch can smuggle main's tip into a frozen line; a dispatch
   # from release-X.Y is already the frozen tree. Losing this guard lets rc.2 be
   # cut from main again, which is the regression the freeze was built to fix.
-  count="$(code_lines < "$CUT" | grep -cF "        if: github.ref_name == 'main'" || true)"
+  # Scoped to this step: `github.ref_name == 'main'` is a plausible condition
+  # elsewhere in the file, and an unscoped count would accept it as this pin.
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF "        if: github.ref_name == 'main'" || true)"
   [ "${count:-0}" -eq 1 ]
 
   # It must fail closed: an ls-remote that neither found the branch (2) nor
@@ -167,11 +182,48 @@ step_line() {
   printf '%s\n' "$block" | code_lines | grep -qF 'gh workflow run build-release.yaml --ref "$BRANCH"'
 
   # Only when this run actually created the branch. Re-dispatching for a line
-  # that was already frozen would rebuild it for no reason.
-  count="$(code_lines < "$CUT" | grep -cF "        if: steps.freeze.outputs.created == 'true'" || true)"
+  # that was already frozen would rebuild it for no reason. Scoped to this step,
+  # so the pin follows the gate rather than the file.
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF "        if: steps.freeze.outputs.created == 'true'" || true)"
   [ "${count:-0}" -eq 1 ]
-  count="$(code_lines < "$CUT" | grep -cF '        id: freeze' || true)"
-  [ "${count:-0}" -eq 1 ]
+}
+
+@test "build-release refuses a dispatch from anything but a line branch" {
+  BUILD_RELEASE="$REPO_ROOT/.github/workflows/build-release.yaml"
+  [ -f "$BUILD_RELEASE" ]
+
+  # The push trigger is filtered to release-X.Y, but workflow_dispatch takes any
+  # ref and the Run-workflow UI preselects the default branch — which is where
+  # this workflow's own recovery advice sends an operator. IMAGE_TAG is
+  # github.ref_name, so a dispatch from main spends two hours republishing
+  # cozystack-packages:main and every main image tag, racing build-main.yaml for
+  # the same tags: the 409 collision class #2711 fixed.
+  block="$(step_block 'Refuse a build for a non-line ref' "$BUILD_RELEASE")"
+  [ -n "$block" ]
+
+  # The pattern must be anchored at both ends. Unanchored, release-1.6.1 (a
+  # per-release staging branch) and release-1.6.0-rc.4 both match, and building
+  # those republishes a published release's tags from a staging tree.
+  printf '%s\n' "$block" | code_lines | grep -qF '^release-[0-9]+\.[0-9]+$'
+
+  # And the ref must be a BRANCH. A TAG named release-1.6 satisfies the pattern
+  # on its own, and building from one publishes cozystack-packages:release-1.6
+  # from whatever commit the tag froze rather than from the line's tip. Pinned as
+  # the comparison, not just the env wiring, so passing REF_TYPE in without
+  # testing it does not satisfy this.
+  printf '%s\n' "$block" | code_lines | grep -qF 'REF_TYPE: ${{ github.ref_type }}'
+  printf '%s\n' "$block" | code_lines | grep -qF '"$REF_TYPE" != "branch"'
+
+  # It has to fail, not skip: a job that quietly no-ops looks in the run list
+  # exactly like one that built the artifact the operator is waiting for.
+  printf '%s\n' "$block" | code_lines | grep -qF 'exit 1'
+
+  # And it has to run before the work: a guard placed after checkout and the
+  # OCIR login has already spent the credentials it exists to protect.
+  guard="$(step_line 'Refuse a build for a non-line ref' "$BUILD_RELEASE")"
+  checkout="$(step_line 'Checkout code' "$BUILD_RELEASE")"
+  [ -n "$guard" ] && [ -n "$checkout" ]
+  [ "$guard" -lt "$checkout" ]
 }
 
 # ── backport target resolution ───────────────────────────────────────────────
