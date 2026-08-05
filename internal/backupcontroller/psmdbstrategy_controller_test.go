@@ -451,6 +451,104 @@ func TestResolveMongoDBBackupSource_NoDestinationFails(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// createMongoDBBackupArtifact: driver-metadata + snapshot wiring
+// ---------------------------------------------------------------------------
+
+// TestCreateMongoDBBackupArtifact_ArtifactShape pins the producer side of the
+// restore contract: the driver-metadata keys and the persisted snapshot that
+// resolveMongoDBBackupSource reads back. Without this the producer/consumer
+// seam is only exercised end-to-end in e2e — a key-name drift between writer
+// and reader would pass every other unit test. Mirrors the MariaDB sibling
+// TestCreateMariaDBBackupArtifact_ArtifactShape.
+func TestCreateMongoDBBackupArtifact_ArtifactShape(t *testing.T) {
+	apps := mongodbapp.GroupName
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "cozy-default-mongodb"},
+		Parameters:  map[string]string{},
+	}
+	rendered := newRenderedMongoDBTemplate()
+
+	t.Run("ready backup with destination populates metadata + artifact + snapshot", func(t *testing.T) {
+		job := &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-ok"},
+			Spec: backupsv1alpha1.BackupJobSpec{
+				ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps},
+			},
+		}
+		c := newMongoDBStrategyTestClient(t, job)
+		r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+		mdbBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-bk"},
+			Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+				State:       psmdbtypes.StateReady,
+				Type:        "logical",
+				Destination: "s3://bkt/mongodb-src/2026-08-05T00:00:00Z",
+				S3:          &psmdbtypes.BackupStorageS3{Bucket: "bkt", CredentialsSecret: "mongodb-mongodb-src-s3-creds"},
+			},
+		}
+
+		artefact, err := r.createMongoDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered, "s3-storage")
+		if err != nil {
+			t.Fatalf("createMongoDBBackupArtifact: %v", err)
+		}
+		if got := artefact.Spec.DriverMetadata[psmdbBackupNameKey]; got != "op-bk" {
+			t.Errorf("%s: got %q want op-bk", psmdbBackupNameKey, got)
+		}
+		if got := artefact.Spec.DriverMetadata[psmdbBackupNamespaceKey]; got != "tenant" {
+			t.Errorf("%s: got %q want tenant", psmdbBackupNamespaceKey, got)
+		}
+		if got := artefact.Spec.DriverMetadata[psmdbDestinationKey]; got != mdbBackup.Status.Destination {
+			t.Errorf("%s: got %q want %q", psmdbDestinationKey, got, mdbBackup.Status.Destination)
+		}
+		if artefact.Status.Phase != backupsv1alpha1.BackupPhaseReady {
+			t.Errorf("Status.Phase: got %q want Ready", artefact.Status.Phase)
+		}
+		if artefact.Status.Artifact == nil || artefact.Status.Artifact.URI != mdbBackup.Status.Destination {
+			t.Errorf("Status.Artifact.URI: got %#v want %q", artefact.Status.Artifact, mdbBackup.Status.Destination)
+		}
+		// The persisted snapshot must decode back to a usable backupSource —
+		// this is exactly what resolveMongoDBBackupSource consumes on the
+		// restore path when the operator Backup CR has been reaped.
+		snap, err := unmarshalMongoDBBackupSnapshot(artefact.Status.UnderlyingResources)
+		if err != nil {
+			t.Fatalf("decode snapshot: %v", err)
+		}
+		if snap == nil || snap.Destination != mdbBackup.Status.Destination {
+			t.Fatalf("snapshot destination round-trip: %#v", snap)
+		}
+		if snap.S3 == nil || snap.S3.CredentialsSecret != "mongodb-mongodb-src-s3-creds" {
+			t.Errorf("snapshot S3 by-reference mismatch: %#v", snap.S3)
+		}
+	})
+
+	t.Run("no destination leaves Artifact nil and omits destination key", func(t *testing.T) {
+		job := &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-nodest"},
+			Spec: backupsv1alpha1.BackupJobSpec{
+				ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps},
+			},
+		}
+		c := newMongoDBStrategyTestClient(t, job)
+		r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+		mdbBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-bk2"},
+			Status:     psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateReady},
+		}
+
+		artefact, err := r.createMongoDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered, "s3-storage")
+		if err != nil {
+			t.Fatalf("createMongoDBBackupArtifact: %v", err)
+		}
+		if artefact.Status.Artifact != nil {
+			t.Errorf("no destination must leave Status.Artifact nil; got %#v", artefact.Status.Artifact)
+		}
+		if _, ok := artefact.Spec.DriverMetadata[psmdbDestinationKey]; ok {
+			t.Errorf("no destination must omit %s from driverMetadata", psmdbDestinationKey)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
