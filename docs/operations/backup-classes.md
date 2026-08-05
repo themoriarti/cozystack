@@ -93,17 +93,15 @@ A full, scripted example (write a marker document, back up, restore to a copy, a
 
 ### Point-in-time recovery (MongoDB)
 
-psmdb records an oplog stream between logical backups. A MongoDB `RestoreJob` recovers to a timestamp via `spec.options.pitr`:
+psmdb records an oplog stream between logical backups. A MongoDB `RestoreJob` recovers to a timestamp via `spec.options.recoveryTime` — the same option name and RFC3339 format the Postgres/CNPG driver uses, so the two are uniform:
 
 ```yaml
 spec:
   options:
-    pitr:
-      type: date
-      date: "2026-08-05 12:34:56"   # UTC, YYYY-MM-DD HH:MM:SS
+    recoveryTime: "2026-08-05T12:34:56Z"   # RFC3339 (UTC), same as the CNPG driver
 ```
 
-Use `type: latest` (no `date`) to replay to the newest restorable point. `spec.options.restoreTimeoutSeconds` caps how long the driver waits for the operator restore before failing (default 30m).
+The driver converts `recoveryTime` to the psmdb oplog target internally. Unlike CNPG (whose empty `recoveryTime` replays WAL to the latest archived point), an empty `recoveryTime` here restores the backup snapshot as taken — a psmdb logical backup is already a consistent point, so "restore this backup" is the safe default. `spec.options.restoreTimeoutSeconds` caps how long the driver waits for the operator restore before failing (default 30m), matching the CNPG option. Any unrecognised key under `spec.options` (e.g. a `recoverytime` typo) is ignored but surfaced as a `UnknownRestoreOption` Warning event on the RestoreJob rather than silently dropped.
 
 ## Inspecting the defaults
 

@@ -2,8 +2,8 @@
 # MongoDB (clusterName = the source's PerconaServerMongoDB). This is
 # DESTRUCTIVE — the psmdb operator replays the logical dump into the live source
 # cluster. Applied for documentation parity; run-all.sh drives the
-# non-destructive to-copy restore (40) instead. Optionally add a PITR target via
-# spec.options (see README).
+# non-destructive to-copy restore (30) instead. Optionally add a PITR target via
+# spec.options.recoveryTime (RFC3339) — see README.
 ---
 apiVersion: backups.cozystack.io/v1alpha1
 kind: RestoreJob

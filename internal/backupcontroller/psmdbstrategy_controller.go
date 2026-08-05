@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -511,18 +513,28 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 	}
 
 	// parseMongoDBRestoreOptions is intentionally permissive (event + log,
-	// proceed with defaults) for the timeout knob, but a malformed PITR spec is
-	// load-bearing — restoring to the wrong point silently would be worse than
-	// failing — so a bad pitr fails terminally below.
-	options, err := parseMongoDBRestoreOptions(restoreJob.Spec.Options)
+	// proceed with defaults) for a malformed blob, but a malformed recoveryTime
+	// is load-bearing — restoring to the wrong point silently would be worse
+	// than failing — so a bad recoveryTime fails terminally below.
+	options, unknownKeys, err := parseMongoDBRestoreOptions(restoreJob.Spec.Options)
 	if err != nil {
 		logger.Info("malformed restoreJob.spec.options; falling back to defaults", "error", err)
 		r.Recorder.Eventf(restoreJob, corev1.EventTypeWarning, "MalformedOptions",
 			"spec.options is not valid JSON; falling back to defaults: %v", err)
 	}
+	// Warn (don't fail) on keys the MongoDB driver doesn't recognise: a typo
+	// like "recoverytime" would otherwise be silently ignored and the restore
+	// would run to the snapshot instead of the intended point. A Warning event
+	// gives the tenant a breadcrumb without rejecting an otherwise-valid restore.
+	for _, k := range unknownKeys {
+		logger.Info("ignoring unknown restoreJob.spec.options key", "key", k, "known", mongodbKnownRestoreOptionKeys)
+		r.Recorder.Eventf(restoreJob, corev1.EventTypeWarning, "UnknownRestoreOption",
+			"spec.options.%s is not a recognised MongoDB restore option and was ignored (known: %s)",
+			k, strings.Join(mongodbKnownRestoreOptionKeys, ", "))
+	}
 	pitr, perr := options.pitrSpec()
 	if perr != nil {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("invalid restoreJob.spec.options.pitr: %v", perr))
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("invalid restoreJob.spec.options.recoveryTime: %v", perr))
 	}
 
 	// Resolve the backup source (destination + S3 config). Prefer the live
@@ -848,38 +860,77 @@ func (r *BackupJobReconciler) getMongoDBApp(ctx context.Context, namespace, name
 }
 
 // MongoDBRestoreOptions is the typed shape of RestoreJob.Spec.Options for the
-// MongoDB driver. Mirrors the MariaDB strategy's RestoreOptions pattern and
-// adds a PITR knob (psmdb supports point-in-time restore on logical backups).
+// MongoDB driver. The option surface is kept uniform with the CNPG strategy
+// (CNPGRestoreOptions): point-in-time recovery is expressed as a single
+// RFC3339 recoveryTime string, and restoreTimeoutSeconds caps the wait.
 type MongoDBRestoreOptions struct {
+	// RecoveryTime is an optional RFC3339 timestamp for point-in-time recovery,
+	// mirroring the CNPG strategy's spec.options.recoveryTime. When set, the
+	// driver maps it onto the psmdb Restore's pitr {type: date, date} (converted
+	// to the operator's "YYYY-MM-DD HH:MM:SS" UTC format). Empty restores the
+	// backup snapshot as taken (no oplog replay) — note this differs from CNPG,
+	// whose empty recoveryTime replays WAL to the latest archived point; a psmdb
+	// logical backup is already a consistent snapshot, so "restore this backup"
+	// is the safe, always-available default here.
+	// +optional
+	RecoveryTime string `json:"recoveryTime,omitempty"`
+
 	// RestoreTimeoutSeconds caps the time the driver waits for the
 	// PerconaServerMongoDBRestore to terminate before it marks the RestoreJob
-	// Failed. Zero or unset falls back to psmdbDefaultRestoreDeadline.
+	// Failed. Zero or unset falls back to psmdbDefaultRestoreDeadline. Same knob
+	// and semantics as the CNPG strategy.
 	// +optional
 	RestoreTimeoutSeconds int64 `json:"restoreTimeoutSeconds,omitempty"`
-
-	// PITR requests a point-in-time restore. Type is "date" (Date required,
-	// format "YYYY-MM-DD HH:MM:SS") or "latest" (Date must be empty). Unset
-	// restores the backup snapshot as-is.
-	// +optional
-	PITR *MongoDBRestorePITR `json:"pitr,omitempty"`
 }
 
-// MongoDBRestorePITR mirrors the psmdb restore pitr spec at the RestoreJob
-// options boundary.
-type MongoDBRestorePITR struct {
-	Type string `json:"type,omitempty"`
-	Date string `json:"date,omitempty"`
-}
+// mongodbKnownRestoreOptionKeys enumerates the JSON keys parseMongoDBRestoreOptions
+// recognises. Any other key in spec.options is surfaced as a Warning event
+// (see reconcileMongoDBRestore) so a typo like "recoverytime" is not silently
+// dropped. Keep in sync with the MongoDBRestoreOptions json tags.
+var mongodbKnownRestoreOptionKeys = []string{"recoveryTime", "restoreTimeoutSeconds"}
 
-func parseMongoDBRestoreOptions(opts *runtime.RawExtension) (MongoDBRestoreOptions, error) {
+// parseMongoDBRestoreOptions decodes RestoreJob.Spec.Options into the typed
+// shape and additionally reports any keys the driver does not recognise. The
+// typed decode stays permissive (unknown keys are ignored, not rejected), so
+// the returned options are always usable; the unknownKeys slice lets the caller
+// warn without failing. A malformed blob returns the zero options + a decode
+// error the caller surfaces as an event. Mirrors parseCNPGRestoreOptions, plus
+// the unknown-key detection.
+func parseMongoDBRestoreOptions(opts *runtime.RawExtension) (MongoDBRestoreOptions, []string, error) {
 	var out MongoDBRestoreOptions
 	if opts == nil || len(opts.Raw) == 0 {
-		return out, nil
+		return out, nil, nil
 	}
 	if err := json.Unmarshal(opts.Raw, &out); err != nil {
-		return MongoDBRestoreOptions{}, fmt.Errorf("decode restoreJob.spec.options: %w", err)
+		return MongoDBRestoreOptions{}, nil, fmt.Errorf("decode restoreJob.spec.options: %w", err)
 	}
-	return out, nil
+	// Second pass into a generic map to diff keys against the known set. Done
+	// separately from the typed decode so the options stay usable even when an
+	// unknown key is present.
+	unknown := unknownJSONKeys(opts.Raw, mongodbKnownRestoreOptionKeys)
+	return out, unknown, nil
+}
+
+// unknownJSONKeys returns the top-level object keys in raw that are not in
+// known. Returns nil when raw is not a JSON object (a malformed blob is handled
+// by the typed decode's error path, not here).
+func unknownJSONKeys(raw []byte, known []string) []string {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil
+	}
+	knownSet := make(map[string]struct{}, len(known))
+	for _, k := range known {
+		knownSet[k] = struct{}{}
+	}
+	var out []string
+	for k := range obj {
+		if _, ok := knownSet[k]; !ok {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (o MongoDBRestoreOptions) effectiveRestoreDeadline() time.Duration {
@@ -889,27 +940,19 @@ func (o MongoDBRestoreOptions) effectiveRestoreDeadline() time.Duration {
 	return psmdbDefaultRestoreDeadline
 }
 
-// pitrSpec translates the options PITR knob into the operator restore spec,
-// validating the type/date combination. Returns (nil, nil) when no PITR is
-// requested.
+// pitrSpec translates the RFC3339 recoveryTime into the operator restore's
+// pitr {type: date, date} shape, converting to psmdb's "YYYY-MM-DD HH:MM:SS"
+// UTC format (the operator CRD's XValidation regex). Returns (nil, nil) when no
+// recoveryTime is requested (plain snapshot restore). A recoveryTime that does
+// not parse as RFC3339 is a terminal error — a silent wrong-point restore is
+// worse than failing.
 func (o MongoDBRestoreOptions) pitrSpec() (*psmdbtypes.PITRSpec, error) {
-	if o.PITR == nil {
+	if o.RecoveryTime == "" {
 		return nil, nil
 	}
-	switch o.PITR.Type {
-	case "date":
-		if o.PITR.Date == "" {
-			return nil, fmt.Errorf("pitr.type=date requires pitr.date (format \"YYYY-MM-DD HH:MM:SS\")")
-		}
-		return &psmdbtypes.PITRSpec{Type: "date", Date: o.PITR.Date}, nil
-	case "latest":
-		if o.PITR.Date != "" {
-			return nil, fmt.Errorf("pitr.type=latest must not set pitr.date")
-		}
-		return &psmdbtypes.PITRSpec{Type: "latest"}, nil
-	case "":
-		return nil, fmt.Errorf("pitr.type is required (\"date\" or \"latest\") when pitr is set")
-	default:
-		return nil, fmt.Errorf("pitr.type=%q is not supported (use \"date\" or \"latest\")", o.PITR.Type)
+	t, err := time.Parse(time.RFC3339, o.RecoveryTime)
+	if err != nil {
+		return nil, fmt.Errorf("recoveryTime %q is not a valid RFC3339 timestamp: %w", o.RecoveryTime, err)
 	}
+	return &psmdbtypes.PITRSpec{Type: "date", Date: t.UTC().Format("2006-01-02 15:04:05")}, nil
 }

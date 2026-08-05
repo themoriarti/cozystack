@@ -36,7 +36,7 @@ silent hang) when the target cluster has backups disabled.
 Restores use `PerconaServerMongoDBRestore.spec.backupSource`, carrying the S3
 destination read back from the source backup, so the same artifact restores
 in-place **or** into a differently-named instance, and point-in-time recovery is
-available via `spec.options.pitr`.
+available via `spec.options.recoveryTime`.
 
 ## Placeholders
 
@@ -53,17 +53,18 @@ skipping verification is the supported way to trust it. Drop it (default
 ## Point-in-time recovery
 
 psmdb records an oplog stream between logical backups (pitr). To restore to a
-timestamp instead of the plain snapshot, add to a RestoreJob:
+timestamp instead of the plain snapshot, add `recoveryTime` (RFC3339, the same
+option the CNPG/Postgres driver uses) to a RestoreJob:
 
 ```yaml
 spec:
   options:
-    pitr:
-      type: date
-      date: "2026-08-05 12:34:56"   # UTC, YYYY-MM-DD HH:MM:SS
+    recoveryTime: "2026-08-05T12:34:56Z"   # RFC3339 (UTC)
 ```
 
-Use `type: latest` (no `date`) to replay to the newest restorable point.
+An empty/omitted `recoveryTime` restores the backup snapshot as taken. An
+unrecognised key under `spec.options` is ignored but reported as a
+`UnknownRestoreOption` Warning event on the RestoreJob.
 
 ## Run it
 

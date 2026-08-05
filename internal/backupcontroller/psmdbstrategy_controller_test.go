@@ -265,9 +265,12 @@ func TestResolveMongoDBRestoreTarget(t *testing.T) {
 
 func TestParseMongoDBRestoreOptionsAndPITR(t *testing.T) {
 	t.Run("empty options are permissive", func(t *testing.T) {
-		o, err := parseMongoDBRestoreOptions(nil)
+		o, unknown, err := parseMongoDBRestoreOptions(nil)
 		if err != nil {
 			t.Fatalf("parse nil options: %v", err)
+		}
+		if len(unknown) != 0 {
+			t.Errorf("no unknown keys expected, got %v", unknown)
 		}
 		if o.effectiveRestoreDeadline() != psmdbDefaultRestoreDeadline {
 			t.Errorf("default deadline mismatch: %v", o.effectiveRestoreDeadline())
@@ -278,37 +281,56 @@ func TestParseMongoDBRestoreOptionsAndPITR(t *testing.T) {
 		}
 	})
 	t.Run("malformed json errors", func(t *testing.T) {
-		if _, err := parseMongoDBRestoreOptions(&runtime.RawExtension{Raw: []byte("{not-json")}); err == nil {
+		if _, _, err := parseMongoDBRestoreOptions(&runtime.RawExtension{Raw: []byte("{not-json")}); err == nil {
 			t.Fatal("expected decode error")
 		}
 	})
-	t.Run("pitr date valid", func(t *testing.T) {
-		o := MongoDBRestoreOptions{PITR: &MongoDBRestorePITR{Type: "date", Date: "2026-08-05 12:34:56"}}
+	t.Run("known keys parse with no unknowns", func(t *testing.T) {
+		o, unknown, err := parseMongoDBRestoreOptions(&runtime.RawExtension{
+			Raw: []byte(`{"recoveryTime":"2026-08-05T12:34:56Z","restoreTimeoutSeconds":600}`),
+		})
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if len(unknown) != 0 {
+			t.Errorf("expected no unknown keys, got %v", unknown)
+		}
+		if o.RecoveryTime != "2026-08-05T12:34:56Z" || o.RestoreTimeoutSeconds != 600 {
+			t.Errorf("options mismatch: %#v", o)
+		}
+	})
+	t.Run("unknown keys are reported (typo guard)", func(t *testing.T) {
+		_, unknown, err := parseMongoDBRestoreOptions(&runtime.RawExtension{
+			Raw: []byte(`{"recoverytime":"oops","bogus":1}`),
+		})
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		// sorted: bogus, recoverytime
+		if len(unknown) != 2 || unknown[0] != "bogus" || unknown[1] != "recoverytime" {
+			t.Errorf("unknown keys: got %v want [bogus recoverytime]", unknown)
+		}
+	})
+	t.Run("recoveryTime RFC3339 maps to psmdb date in UTC", func(t *testing.T) {
+		// A non-UTC offset must be normalised to UTC in the psmdb date format.
+		o := MongoDBRestoreOptions{RecoveryTime: "2026-08-05T14:34:56+02:00"}
 		pitr, err := o.pitrSpec()
 		if err != nil {
 			t.Fatalf("pitrSpec: %v", err)
 		}
 		if pitr == nil || pitr.Type != "date" || pitr.Date != "2026-08-05 12:34:56" {
-			t.Errorf("pitr mismatch: %#v", pitr)
+			t.Errorf("pitr mismatch: %#v (want date=2026-08-05 12:34:56)", pitr)
 		}
 	})
-	t.Run("pitr date without date errors", func(t *testing.T) {
-		o := MongoDBRestoreOptions{PITR: &MongoDBRestorePITR{Type: "date"}}
-		if _, err := o.pitrSpec(); err == nil {
-			t.Fatal("expected error for date type without date")
+	t.Run("empty recoveryTime yields no pitr (snapshot restore)", func(t *testing.T) {
+		pitr, err := MongoDBRestoreOptions{}.pitrSpec()
+		if err != nil || pitr != nil {
+			t.Errorf("expected nil pitr: pitr=%#v err=%v", pitr, err)
 		}
 	})
-	t.Run("pitr latest with date errors", func(t *testing.T) {
-		o := MongoDBRestoreOptions{PITR: &MongoDBRestorePITR{Type: "latest", Date: "2026-08-05 12:34:56"}}
-		if _, err := o.pitrSpec(); err == nil {
-			t.Fatal("expected error for latest type with a date")
-		}
-	})
-	t.Run("pitr latest valid", func(t *testing.T) {
-		o := MongoDBRestoreOptions{PITR: &MongoDBRestorePITR{Type: "latest"}}
-		pitr, err := o.pitrSpec()
-		if err != nil || pitr == nil || pitr.Type != "latest" {
-			t.Errorf("latest pitr mismatch: pitr=%#v err=%v", pitr, err)
+	t.Run("malformed recoveryTime errors terminally", func(t *testing.T) {
+		if _, err := (MongoDBRestoreOptions{RecoveryTime: "2026-08-05 12:34:56"}).pitrSpec(); err == nil {
+			t.Fatal("expected error for non-RFC3339 recoveryTime")
 		}
 	})
 	t.Run("custom deadline honoured", func(t *testing.T) {
