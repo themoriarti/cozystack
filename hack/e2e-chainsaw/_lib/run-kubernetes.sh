@@ -317,9 +317,9 @@ cozy_prepare_tenant_talosconfig() (
   if ! kubectl_wait_retry -n tenant-test certificate "${certificate}" \
     --for=condition=Ready --timeout=30s; then
     echo "tenant Talos reader Certificate was not issued within 30s" >&2
-    kubectl -n tenant-test describe certificate "${certificate}" >&2 || true
+    kubectl -n tenant-test describe certificate "${certificate}" --request-timeout=30s >&2 || true
     kubectl -n tenant-test get certificaterequests.cert-manager.io \
-      -l cert-manager.io/certificate-name="${certificate}" -o wide >&2 || true
+      -l cert-manager.io/certificate-name="${certificate}" -o wide --request-timeout=30s >&2 || true
     return 1
   fi
 
@@ -414,10 +414,10 @@ cozy_prepare_tenant_talos_diagnostics_pod() {
 
   if ! kubectl -n tenant-test wait pod "${pod_name}" \
     --for=condition=Ready --timeout=60s; then
-    kubectl -n tenant-test describe pod "${pod_name}" >&2 || true
+    kubectl -n tenant-test describe pod "${pod_name}" --request-timeout=30s >&2 || true
     kubectl -n tenant-test get events \
       --field-selector involvedObject.name="${pod_name}" \
-      --sort-by=.lastTimestamp >&2 || true
+      --sort-by=.lastTimestamp --request-timeout=30s >&2 || true
     return 1
   fi
 
