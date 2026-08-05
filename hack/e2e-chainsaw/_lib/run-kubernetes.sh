@@ -270,6 +270,7 @@ metadata:
 spec:
   duration: 1h
   renewBefore: 10m
+  commonName: ${certificate}
   secretName: ${certificate}
   secretTemplate:
     labels:
@@ -369,9 +370,9 @@ spec:
       type: RuntimeDefault
   containers:
   - name: diagnostics
-    # talosctl is dynamically linked against glibc; use the same pinned Ubuntu
-    # base as the E2E sandbox rather than an Alpine/musl helper image.
-    image: docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
+    # The E2E sandbox ships the statically linked upstream talosctl release, so
+    # reuse the digest-pinned Alpine helper already pulled by the test setup.
+    image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47
     imagePullPolicy: IfNotPresent
     command: ["sh", "-c", "sleep 900"]
     securityContext:
@@ -465,18 +466,17 @@ cozy_capture_tenant_talos_node() {
 }
 
 # Collect the guest-side evidence requested by issue #3513. This runs only after
-# the 18-minute Ready deadline has already failed. The setup budgets 30s for
-# stale-resource deletion, 30s for Certificate issuance, 60s for Pod readiness,
-# bounded copy operations, and at most 40s of Talos calls per VMI. It runs before
-# slower cache diagnostics so the requested guest evidence lands first and stays
-# inside the surrounding Chainsaw timeout even when later collectors exhaust a
-# budget.
+# the 18-minute Ready deadline has already failed. VMIs without a reported IP
+# are recorded before any Certificate or Pod is created; when at least one IP is
+# available, setup and each Talos command remain bounded. It runs before slower
+# cache diagnostics so the requested guest evidence lands first.
 cozy_capture_tenant_talos() (
   local test_name="$1"
   local report_dir="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}/tenant-talos"
   local selector="cluster.x-k8s.io/cluster-name=kubernetes-${test_name},cluster.x-k8s.io/role=worker"
   local pod_name="kubernetes-${test_name}-talos-diagnostics"
   local workdir vmi_name node_ip
+  local has_node_ip=false
 
   umask 077
   workdir=$(mktemp -d) || return 1
@@ -498,6 +498,25 @@ cozy_capture_tenant_talos() (
     return 1
   fi
 
+  # Record missing addresses before spending time on Certificate issuance or a
+  # helper Pod. If no worker booted far enough for KubeVirt to report an IP,
+  # guest-side Talos is unreachable and setup cannot produce more evidence.
+  while IFS='|' read -r vmi_name node_ip; do
+    if [ -z "${node_ip}" ]; then
+      mkdir -p "${report_dir}/${vmi_name}"
+      printf '%s\n' 'default VMI interface has no reported IP address' \
+        >"${report_dir}/${vmi_name}/capture-error.log"
+      continue
+    fi
+    has_node_ip=true
+  done <"${workdir}/vmis.rows"
+  if [ "${has_node_ip}" != true ]; then
+    echo "no tenant worker VMI has a reported IP for Talos diagnostics" >&2
+    printf '%s\n' 'no tenant worker VMI has a reported IP for Talos diagnostics' \
+      >"${report_dir}/setup-error.log"
+    return 1
+  fi
+
   if ! cozy_prepare_tenant_talosconfig "${test_name}" "${workdir}"; then
     echo "failed to create short-lived tenant Talos reader config" >&2
     printf '%s\n' 'failed to create short-lived tenant Talos reader config' \
@@ -513,12 +532,7 @@ cozy_capture_tenant_talos() (
   fi
 
   while IFS='|' read -r vmi_name node_ip; do
-    if [ -z "${node_ip}" ]; then
-      mkdir -p "${report_dir}/${vmi_name}"
-      printf '%s\n' 'default VMI interface has no reported IP address' \
-        >"${report_dir}/${vmi_name}/capture-error.log"
-      continue
-    fi
+    [ -n "${node_ip}" ] || continue
     echo "--- capturing tenant Talos dmesg/kubelet: ${vmi_name} (${node_ip}) ---"
     cozy_capture_tenant_talos_node "${pod_name}" "${node_ip}" \
       "${report_dir}/${vmi_name}"

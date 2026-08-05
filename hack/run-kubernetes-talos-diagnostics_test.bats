@@ -115,6 +115,7 @@ assert_file_lacks_pattern() {
 
   assert_file_contains 'name: kubernetes-test-latest-version-e2e-talos-reader' "$kubectl_manifest"
   assert_file_contains 'duration: 1h' "$kubectl_manifest"
+  assert_file_contains 'commonName: kubernetes-test-latest-version-e2e-talos-reader' "$kubectl_manifest"
   assert_file_contains '- os:reader' "$kubectl_manifest"
   assert_file_contains 'name: kubernetes-test-latest-version-talos-ca' "$kubectl_manifest"
   assert_file_contains 'cozystack-e2e.io/tenant-talos-diagnostics: "test-latest-version"' "$kubectl_manifest"
@@ -138,7 +139,10 @@ assert_file_lacks_pattern() {
   assert_file_contains '-n tenant-test get secret kubernetes-test-latest-version-e2e-talos-reader -o go-template={{index .data "tls.key" | base64decode}}' "$kubectl_calls"
   assert_file_contains "--talosconfig $tmp/talosconfig config add kubernetes-test-latest-version --ca $tmp/ca.crt --crt $tmp/client.crt --key $tmp/client.key" "$talosctl_calls"
   assert_file_contains "--talosconfig $tmp/talosconfig config context kubernetes-test-latest-version" "$talosctl_calls"
-  [ "$(stat -c '%a' "$tmp/talosconfig")" = 600 ]
+  case "$(LC_ALL=C ls -ld "$tmp/talosconfig")" in
+    -rw-------*) ;;
+    *) echo "talosconfig permissions are not 0600" >&2; return 1 ;;
+  esac
 }
 
 @test "diagnostics Pod has no API token or Secret volume" {
@@ -155,8 +159,38 @@ assert_file_lacks_pattern() {
   assert_file_contains 'readOnlyRootFilesystem: true' "$kubectl_manifest"
   assert_file_contains 'drop:' "$kubectl_manifest"
   assert_file_contains '- ALL' "$kubectl_manifest"
-  assert_file_contains 'image: docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90' "$kubectl_manifest"
+  assert_file_contains 'image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47' "$kubectl_manifest"
+  assert_file_contains "'docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47'" hack/e2e-install-cozystack.bats
   assert_file_lacks_pattern 'secret:|secretName:' "$kubectl_manifest"
+}
+
+@test "Kubernetes Chainsaw operations leave room for failure diagnostics" {
+  [ "$(yq 'select(.metadata.name == "kubernetes-latest").spec.steps[0].try[0].script.timeout' hack/e2e-chainsaw/kubernetes-latest/chainsaw-test.yaml)" = 50m ]
+  [ "$(yq 'select(.metadata.name == "kubernetes-previous").spec.steps[0].try[0].script.timeout' hack/e2e-chainsaw/kubernetes-previous/chainsaw-test.yaml)" = 50m ]
+}
+
+@test "orchestrator skips credentials and helper Pod when every VMI lacks an IP" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  kubectl_calls="$tmp/kubectl.calls"
+  kubectl_manifest="$tmp/manifest.yaml"
+  kubectl_vmi_json="$tmp/vmis.json"
+  talosctl_calls="$tmp/talosctl.calls"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=diagnostic-no-ip
+  printf '%s\n' '{"items":[{"metadata":{"name":"worker-a"},"status":{"interfaces":[{"name":"default"}]}},{"metadata":{"name":"worker-b"},"status":{}}]}' >"$kubectl_vmi_json"
+
+  capture_rc=0
+  cozy_capture_tenant_talos test-latest-version || capture_rc=$?
+
+  [ "$capture_rc" -eq 1 ]
+  assert_file_lacks_pattern '(^|[[:space:]])apply([[:space:]]|$)' "$kubectl_calls"
+  assert_file_lacks_pattern 'delete (certificate|secret|pod)|wait (certificate|pod)|exec' "$kubectl_calls"
+  [ ! -s "$talosctl_calls" ]
+  assert_file_contains 'default VMI interface has no reported IP address' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-a/capture-error.log"
+  assert_file_contains 'default VMI interface has no reported IP address' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-b/capture-error.log"
+  assert_file_contains 'no tenant worker VMI has a reported IP for Talos diagnostics' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/setup-error.log"
 }
 
 @test "node capture uses the VMI IP for endpoint and node with bounded commands" {
@@ -209,7 +243,7 @@ assert_file_lacks_pattern() {
   timeout_fail_node_ip=10.244.1.93
   COZY_REPORT_DIR="$tmp/report"
   COZY_SNAPSHOT_NAME=diagnostic-smoke
-  printf '%s\n' '{"items":[{"metadata":{"name":"worker-a"},"status":{"interfaces":[{"name":"default","ipAddress":"10.244.1.93"}]}},{"metadata":{"name":"worker-b"},"status":{"interfaces":[{"name":"default","ipAddress":"10.244.1.94"}]}}]}' >"$kubectl_vmi_json"
+  printf '%s\n' '{"items":[{"metadata":{"name":"worker-no-ip"},"status":{"interfaces":[{"name":"default"}]}},{"metadata":{"name":"worker-a"},"status":{"interfaces":[{"name":"default","ipAddress":"10.244.1.93"}]}},{"metadata":{"name":"worker-b"},"status":{"interfaces":[{"name":"default","ipAddress":"10.244.1.94"}]}}]}' >"$kubectl_vmi_json"
   printf '%s\n' '#!/bin/sh' >"$tmp/talosctl"
   chmod 755 "$tmp/talosctl"
   cd "$tmp"
@@ -217,6 +251,7 @@ assert_file_lacks_pattern() {
   cozy_capture_tenant_talos test-latest-version
 
   [ "$(awk '/ exec kubernetes-test-latest-version-talos-diagnostics / { count++ } END { print count + 0 }' "$kubectl_calls")" -eq 4 ]
+  assert_file_contains 'default VMI interface has no reported IP address' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-no-ip/capture-error.log"
   assert_file_contains '[capture exit code: 124]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-a/dmesg.log"
   assert_file_contains '[capture exit code: 124]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-a/kubelet.log"
   assert_file_contains '[capture exit code: 0]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-b/dmesg.log"

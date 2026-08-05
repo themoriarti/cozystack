@@ -19,7 +19,10 @@ spec:
     try:
     - script:
         # ~25m Kamaji bringup + worker join + LB/NFS/ouroboros assertions.
-        timeout: 40m
+        # The failure path can spend ~5m10s in bounded guest Talos capture and
+        # another 6m30s in its in-process tenant snapshot. Keep the outer op
+        # above those inner budgets with useful scheduling/API-call slack.
+        timeout: 50m
         # Co-locate the tenant crust-gather snapshot (captured by
         # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as
         # the global .chainsaw.yaml catch's host snapshot.
