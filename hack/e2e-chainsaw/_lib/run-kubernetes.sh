@@ -179,6 +179,16 @@ cozy_cleanup() {
   # so they don't leak MetalLB IPs from the shared host pool. Labeled by the
   # test so a single selector reaps them all.
   kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null || true
+  # A failed node-join capture creates a short-lived reader Certificate and a
+  # hardened helper Pod. They are labelled separately from the tenant API LB:
+  # the Secret contains a Talos client key and must be reaped even if the
+  # diagnostic collector itself returned early.
+  if ! kubectl -n tenant-test delete certificates.cert-manager.io -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=true --timeout=30s 2>/dev/null; then
+    echo "» WARNING: failed to delete tenant Talos diagnostic Certificates" >&2
+  fi
+  if ! kubectl -n tenant-test delete pod,secret -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=false 2>/dev/null; then
+    echo "» WARNING: failed to delete tenant Talos diagnostic Pod/Secret" >&2
+  fi
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
   # The CR delete above finalizes once the Kubernetes CR is gone, which only
@@ -231,6 +241,289 @@ _tenant_snapshot_on_fail() {
     *) echo "» tenant crust-gather snapshot FAILED (exit $_cg_rc); see $_snap/crust-gather-${CURRENT_TENANT_KC}.log" ;;
   esac
 }
+
+# Render name|IP rows for worker VMIs from a `kubectl get ... -o json` document.
+# Kept pure so an absent default interface is represented by an empty IP instead
+# of silently dropping the VMI from the diagnostic report.
+cozy_tenant_worker_vmi_rows() {
+  jq -r '.items[] | [.metadata.name, ([.status.interfaces[]? | select(.name == "default") | .ipAddress][0] // "")] | join("|")'
+}
+
+# Ask cert-manager for a short-lived, read-only Talos client certificate. The
+# tenant chart deliberately uses TalosConfigTemplate generateType=none, so CABPT
+# creates no client talosconfig for this worker-only Kamaji topology. Reusing the
+# existing Talos CA Issuer avoids materialising an os:admin credential or copying
+# the CA private key out of Kubernetes.
+cozy_apply_tenant_talos_reader_certificate() {
+  local test_name="$1"
+  local release="kubernetes-${test_name}"
+  local certificate="${release}-e2e-talos-reader"
+
+  kubectl apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ${certificate}
+  namespace: tenant-test
+  labels:
+    cozystack-e2e.io/tenant-talos-diagnostics: "${test_name}"
+spec:
+  duration: 1h
+  renewBefore: 10m
+  secretName: ${certificate}
+  secretTemplate:
+    labels:
+      cozystack-e2e.io/tenant-talos-diagnostics: "${test_name}"
+  subject:
+    organizations:
+    - os:reader
+  privateKey:
+    algorithm: Ed25519
+    rotationPolicy: Always
+  usages:
+  - digital signature
+  - client auth
+  issuerRef:
+    name: ${release}-talos-ca
+    kind: Issuer
+    group: cert-manager.io
+EOF
+}
+
+# Build a local talosconfig from the reader Certificate. All private material
+# stays below workdir, which the caller creates with mode 0700 and removes from
+# a contained subshell EXIT trap; none of it is copied into cozyreport.
+cozy_prepare_tenant_talosconfig() (
+  local test_name="$1"
+  local workdir="$2"
+  local release="kubernetes-${test_name}"
+  local certificate="${release}-e2e-talos-reader"
+
+  umask 077
+  # An interrupted prior run may have left a reader Secret signed by the old
+  # tenant CA. Remove the Certificate first so cert-manager cannot recreate that
+  # Secret between deletion and the new request, then wait for both objects to
+  # disappear before waiting for issuance below.
+  kubectl -n tenant-test delete certificate "${certificate}" \
+    --ignore-not-found --wait=true --timeout=10s >/dev/null 2>&1 || return 1
+  kubectl -n tenant-test delete secret "${certificate}" \
+    --ignore-not-found --wait=true --timeout=10s >/dev/null 2>&1 || return 1
+  cozy_apply_tenant_talos_reader_certificate "${test_name}" || return 1
+
+  # cert-manager issuance is asynchronous. Wait on its actual Ready condition;
+  # on expiry, preserve Certificate diagnostics without ever printing the
+  # generated Secret.
+  if ! kubectl -n tenant-test wait certificate "${certificate}" \
+    --for=condition=Ready --timeout=30s; then
+    echo "tenant Talos reader Certificate was not issued within 30s" >&2
+    kubectl -n tenant-test describe certificate "${certificate}" >&2 || true
+    kubectl -n tenant-test get certificaterequests.cert-manager.io \
+      -l cert-manager.io/certificate-name="${certificate}" -o wide >&2 || true
+    return 1
+  fi
+
+  kubectl -n tenant-test get secret "${release}-talos-ca" \
+    -o go-template='{{index .data "tls.crt" | base64decode}}' >"${workdir}/ca.crt" || return 1
+  kubectl -n tenant-test get secret "${certificate}" \
+    -o go-template='{{index .data "tls.crt" | base64decode}}' >"${workdir}/client.crt" || return 1
+  kubectl -n tenant-test get secret "${certificate}" \
+    -o go-template='{{index .data "tls.key" | base64decode}}' >"${workdir}/client.key" || return 1
+
+  talosctl --talosconfig "${workdir}/talosconfig" config add "${release}" \
+    --ca "${workdir}/ca.crt" --crt "${workdir}/client.crt" \
+    --key "${workdir}/client.key" || return 1
+  talosctl --talosconfig "${workdir}/talosconfig" config context "${release}" || return 1
+  chmod 600 "${workdir}/talosconfig"
+)
+
+# Apply the helper Pod separately from its readiness/copy steps so its security
+# invariants have focused unit coverage. The Pod runs on the management cluster
+# in the same namespace as bridge-networked worker VMIs, which lets talosctl use
+# each real VMI IP as both endpoint and node and keeps server-TLS verification
+# valid. A MetalLB or localhost port-forward address would not be in the Talos
+# serving certificate SANs.
+cozy_apply_tenant_talos_diagnostics_pod() {
+  local test_name="$1"
+  local pod_name="kubernetes-${test_name}-talos-diagnostics"
+
+  kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${pod_name}
+  namespace: tenant-test
+  labels:
+    cozystack-e2e.io/tenant-talos-diagnostics: "${test_name}"
+spec:
+  activeDeadlineSeconds: 900
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: diagnostics
+    # talosctl is dynamically linked against glibc; use the same pinned Ubuntu
+    # base as the E2E sandbox rather than an Alpine/musl helper image.
+    image: docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
+    imagePullPolicy: IfNotPresent
+    command: ["sh", "-c", "sleep 900"]
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+        - ALL
+      readOnlyRootFilesystem: true
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+  volumes:
+  - name: tmp
+    emptyDir: {}
+EOF
+}
+
+# Start the helper Pod and stream talosctl plus the reader talosconfig into its
+# emptyDir. Streaming avoids a Secret volume and keeps the Pod independent of
+# kubectl-cp/tar behavior. The final cleanup selector remains the authoritative
+# backstop if any preparation step fails.
+cozy_prepare_tenant_talos_diagnostics_pod() {
+  local test_name="$1"
+  local talosconfig="$2"
+  local pod_name="kubernetes-${test_name}-talos-diagnostics"
+  local talosctl_bin
+
+  talosctl_bin=$(command -v talosctl) || return 1
+  kubectl -n tenant-test delete pod "${pod_name}" --ignore-not-found \
+    --wait=true --timeout=10s >/dev/null 2>&1 || return 1
+  cozy_apply_tenant_talos_diagnostics_pod "${test_name}" || return 1
+
+  if ! kubectl -n tenant-test wait pod "${pod_name}" \
+    --for=condition=Ready --timeout=60s; then
+    kubectl -n tenant-test describe pod "${pod_name}" >&2 || true
+    kubectl -n tenant-test get events \
+      --field-selector involvedObject.name="${pod_name}" \
+      --sort-by=.lastTimestamp >&2 || true
+    return 1
+  fi
+
+  if ! timeout -k 5 60 kubectl -n tenant-test exec -i "${pod_name}" \
+    -c diagnostics -- sh -ec 'cat > /tmp/talosctl && chmod 500 /tmp/talosctl' \
+    <"${talosctl_bin}"; then
+    echo "failed to stream talosctl into tenant diagnostics Pod" >&2
+    return 1
+  fi
+  if ! timeout -k 5 20 kubectl -n tenant-test exec -i "${pod_name}" \
+    -c diagnostics -- sh -ec 'umask 077; cat > /tmp/talosconfig; chmod 600 /tmp/talosconfig' \
+    <"${talosconfig}"; then
+    echo "failed to stream tenant talosconfig into diagnostics Pod" >&2
+    return 1
+  fi
+}
+
+# Capture one bounded Talos command through the helper Pod and retain the exit
+# status alongside partial output. A timeout or unreachable pre-apid worker is
+# itself useful evidence and must not erase captures from the other worker.
+cozy_capture_tenant_talos_command() {
+  local pod_name="$1"
+  local node_ip="$2"
+  local output="$3"
+  shift 3
+  local rc=0
+
+  timeout -k 5 20 kubectl -n tenant-test exec "${pod_name}" -c diagnostics -- \
+    /tmp/talosctl --talosconfig /tmp/talosconfig \
+    -e "${node_ip}" -n "${node_ip}" "$@" >"${output}" 2>&1 || rc=$?
+  printf '\n[capture exit code: %s]\n' "${rc}" >>"${output}"
+  return "${rc}"
+}
+
+cozy_capture_tenant_talos_node() {
+  local pod_name="$1"
+  local node_ip="$2"
+  local output_dir="$3"
+
+  mkdir -p "${output_dir}"
+  printf 'endpoint: %s\nnode: %s\n' "${node_ip}" "${node_ip}" >"${output_dir}/target.txt"
+  cozy_capture_tenant_talos_command "${pod_name}" "${node_ip}" \
+    "${output_dir}/dmesg.log" dmesg || true
+  cozy_capture_tenant_talos_command "${pod_name}" "${node_ip}" \
+    "${output_dir}/kubelet.log" logs kubelet --tail=500 || true
+}
+
+# Collect the guest-side evidence requested by issue #3513. This runs only after
+# the 18-minute Ready deadline has already failed. The setup budgets 30s for
+# stale-resource deletion, 30s for Certificate issuance, 60s for Pod readiness,
+# bounded copy operations, and at most 40s of Talos calls per VMI. It runs before
+# slower cache diagnostics so the requested guest evidence lands first and stays
+# inside the surrounding Chainsaw timeout even when later collectors exhaust a
+# budget.
+cozy_capture_tenant_talos() (
+  local test_name="$1"
+  local report_dir="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}/tenant-talos"
+  local selector="cluster.x-k8s.io/cluster-name=kubernetes-${test_name},cluster.x-k8s.io/role=worker"
+  local pod_name="kubernetes-${test_name}-talos-diagnostics"
+  local workdir vmi_name node_ip
+
+  umask 077
+  workdir=$(mktemp -d) || return 1
+  chmod 700 "${workdir}"
+  trap 'rm -rf "${workdir}"' EXIT
+  mkdir -p "${report_dir}"
+
+  if ! kubectl -n tenant-test get virtualmachineinstances.kubevirt.io \
+    -l "${selector}" -o json >"${report_dir}/vmis.json" \
+    2>"${report_dir}/vmis-error.log"; then
+    echo "failed to list tenant worker VMIs for Talos diagnostics" >&2
+    return 1
+  fi
+  cozy_tenant_worker_vmi_rows <"${report_dir}/vmis.json" >"${workdir}/vmis.rows"
+  if [ ! -s "${workdir}/vmis.rows" ]; then
+    echo "no tenant worker VMIs found for Talos diagnostics" >&2
+    printf 'no tenant worker VMIs matched selector %s\n' "${selector}" \
+      >"${report_dir}/setup-error.log"
+    return 1
+  fi
+
+  if ! cozy_prepare_tenant_talosconfig "${test_name}" "${workdir}"; then
+    echo "failed to create short-lived tenant Talos reader config" >&2
+    printf '%s\n' 'failed to create short-lived tenant Talos reader config' \
+      >"${report_dir}/setup-error.log"
+    return 1
+  fi
+  if ! cozy_prepare_tenant_talos_diagnostics_pod \
+    "${test_name}" "${workdir}/talosconfig"; then
+    echo "failed to prepare tenant Talos diagnostics Pod" >&2
+    printf '%s\n' 'failed to prepare tenant Talos diagnostics Pod' \
+      >"${report_dir}/setup-error.log"
+    return 1
+  fi
+
+  while IFS='|' read -r vmi_name node_ip; do
+    if [ -z "${node_ip}" ]; then
+      mkdir -p "${report_dir}/${vmi_name}"
+      printf '%s\n' 'default VMI interface has no reported IP address' \
+        >"${report_dir}/${vmi_name}/capture-error.log"
+      continue
+    fi
+    echo "--- capturing tenant Talos dmesg/kubelet: ${vmi_name} (${node_ip}) ---"
+    cozy_capture_tenant_talos_node "${pod_name}" "${node_ip}" \
+      "${report_dir}/${vmi_name}"
+  done <"${workdir}/vmis.rows"
+)
 
 run_kubernetes_test() {
     local version_expr="$1"
@@ -491,6 +784,16 @@ EOF
     kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher -o wide || true
     kubectl -n tenant-test describe pods -l kubevirt.io=virt-launcher || true
 
+    # (b) In-guest Talos kernel and kubelet logs. The tenant chart intentionally
+    # has no admin talosconfig, so mint a one-hour os:reader client from its
+    # existing cert-manager Issuer and run talosctl from a hardened Pod that can
+    # reach the bridge-networked VMI IPs without weakening TLS verification.
+    # A worker that has not reached apid yet will produce a bounded connection
+    # error while a later-stage worker remains capturable; both outcomes are
+    # retained in cozyreport. Diagnostic setup failures never mask exit 1 below.
+    echo "=== (b) in-guest Talos dmesg + kubelet logs ==="
+    cozy_capture_tenant_talos "${test_name}" || true
+
     # (a2) Worker DataVolume IMPORT stage. A VM stuck "Provisioning" whose
     # DataVolume is ImportInProgress at N/A progress with the importer pod
     # looping on an HTTP error is a distinct sub-mode of 2a that the VM/VMI
@@ -523,17 +826,6 @@ EOF
     kubectl -n tenant-test logs -l kamaji.clastix.io/name="kubernetes-${test_name}" \
       -c talos-csr-signer --tail=200 --prefix || true
 
-    # (b) In-guest Talos/kubelet state from the worker VMs is intentionally NOT
-    # captured here. talosctl needs a client talosconfig for the TENANT cluster,
-    # and the runner has none: the tenant workers are provisioned with their own
-    # Talos PKI whose CA differs from the sandbox's /workspace/talosconfig (which
-    # cozyreport.sh uses to reach the MANAGEMENT nodes only), and the chart
-    # materialises no tenant client talosconfig Secret. Pointing talosctl at the
-    # worker IPs with the management talosconfig would just fail mTLS and capture
-    # nothing, so it is skipped rather than shipped as a misleading no-op. (a) +
-    # (c) carry the 2a-vs-2b split; adding real in-guest capture later requires
-    # wiring a tenant talosconfig into the runner first.
-    echo "=== (b) in-guest Talos/kubelet capture skipped: no tenant talosconfig on the runner (a/c cover the 2a-vs-2b split) ==="
     exit 1
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
