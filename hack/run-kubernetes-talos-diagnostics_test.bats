@@ -77,6 +77,27 @@ timeout() {
   return "${command_rc}"
 }
 
+assert_file_contains() {
+  local needle="$1"
+  local file="$2"
+
+  case "$(<"${file}")" in
+    *"${needle}"*) return 0 ;;
+  esac
+  printf 'expected %s to contain: %s\n' "${file}" "${needle}" >&2
+  return 1
+}
+
+assert_file_lacks_pattern() {
+  local pattern="$1"
+  local file="$2"
+
+  if awk -v pattern="${pattern}" '$0 ~ pattern { found = 1 } END { exit found ? 0 : 1 }' "${file}"; then
+    printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
+    return 1
+  fi
+}
+
 @test "worker VMI rows retain names whose default interface has no IP" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   rows=$(printf '%s\n' '{"items":[{"metadata":{"name":"worker-a"},"status":{"interfaces":[{"name":"default","ipAddress":"10.244.1.92"}]}},{"metadata":{"name":"worker-b"},"status":{"interfaces":[{"name":"other","ipAddress":"192.0.2.1"}]}}]}' | cozy_tenant_worker_vmi_rows)
@@ -92,15 +113,12 @@ timeout() {
 
   cozy_apply_tenant_talos_reader_certificate test-latest-version
 
-  rg -Fq 'name: kubernetes-test-latest-version-e2e-talos-reader' "$kubectl_manifest"
-  rg -Fq 'duration: 1h' "$kubectl_manifest"
-  rg -Fq -- '- os:reader' "$kubectl_manifest"
-  rg -Fq 'name: kubernetes-test-latest-version-talos-ca' "$kubectl_manifest"
-  rg -Fq 'cozystack-e2e.io/tenant-talos-diagnostics: "test-latest-version"' "$kubectl_manifest"
-  if rg -q '^[[:space:]]*(tls\.crt|tls\.key|data):' "$kubectl_manifest"; then
-    echo "Certificate manifest must not embed Talos credential material" >&2
-    exit 1
-  fi
+  assert_file_contains 'name: kubernetes-test-latest-version-e2e-talos-reader' "$kubectl_manifest"
+  assert_file_contains 'duration: 1h' "$kubectl_manifest"
+  assert_file_contains '- os:reader' "$kubectl_manifest"
+  assert_file_contains 'name: kubernetes-test-latest-version-talos-ca' "$kubectl_manifest"
+  assert_file_contains 'cozystack-e2e.io/tenant-talos-diagnostics: "test-latest-version"' "$kubectl_manifest"
+  assert_file_lacks_pattern '^[[:space:]]*(tls[.]crt|tls[.]key|data):' "$kubectl_manifest"
 }
 
 @test "talosconfig uses the tenant CA and the issued reader key" {
@@ -115,11 +133,11 @@ timeout() {
 
   [ "$(sed -n '1p' "$kubectl_calls")" = '-n tenant-test delete certificate kubernetes-test-latest-version-e2e-talos-reader --ignore-not-found --wait=true --timeout=10s' ]
   [ "$(sed -n '2p' "$kubectl_calls")" = '-n tenant-test delete secret kubernetes-test-latest-version-e2e-talos-reader --ignore-not-found --wait=true --timeout=10s' ]
-  rg -Fq -- '-n tenant-test wait certificate kubernetes-test-latest-version-e2e-talos-reader --for=condition=Ready --timeout=30s' "$kubectl_calls"
-  rg -Fq -- '-n tenant-test get secret kubernetes-test-latest-version-talos-ca -o go-template={{index .data "tls.crt" | base64decode}}' "$kubectl_calls"
-  rg -Fq -- '-n tenant-test get secret kubernetes-test-latest-version-e2e-talos-reader -o go-template={{index .data "tls.key" | base64decode}}' "$kubectl_calls"
-  rg -Fq -- "--talosconfig $tmp/talosconfig config add kubernetes-test-latest-version --ca $tmp/ca.crt --crt $tmp/client.crt --key $tmp/client.key" "$talosctl_calls"
-  rg -Fq -- "--talosconfig $tmp/talosconfig config context kubernetes-test-latest-version" "$talosctl_calls"
+  assert_file_contains '-n tenant-test wait certificate kubernetes-test-latest-version-e2e-talos-reader --for=condition=Ready --timeout=30s' "$kubectl_calls"
+  assert_file_contains '-n tenant-test get secret kubernetes-test-latest-version-talos-ca -o go-template={{index .data "tls.crt" | base64decode}}' "$kubectl_calls"
+  assert_file_contains '-n tenant-test get secret kubernetes-test-latest-version-e2e-talos-reader -o go-template={{index .data "tls.key" | base64decode}}' "$kubectl_calls"
+  assert_file_contains "--talosconfig $tmp/talosconfig config add kubernetes-test-latest-version --ca $tmp/ca.crt --crt $tmp/client.crt --key $tmp/client.key" "$talosctl_calls"
+  assert_file_contains "--talosconfig $tmp/talosconfig config context kubernetes-test-latest-version" "$talosctl_calls"
   [ "$(stat -c '%a' "$tmp/talosconfig")" = 600 ]
 }
 
@@ -132,16 +150,13 @@ timeout() {
 
   cozy_apply_tenant_talos_diagnostics_pod test-latest-version
 
-  rg -Fq 'automountServiceAccountToken: false' "$kubectl_manifest"
-  rg -Fq 'runAsNonRoot: true' "$kubectl_manifest"
-  rg -Fq 'readOnlyRootFilesystem: true' "$kubectl_manifest"
-  rg -Fq 'drop:' "$kubectl_manifest"
-  rg -Fq -- '- ALL' "$kubectl_manifest"
-  rg -Fq 'image: docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90' "$kubectl_manifest"
-  if rg -q 'secret:|secretName:' "$kubectl_manifest"; then
-    echo "diagnostics Pod must receive credentials only through its emptyDir" >&2
-    exit 1
-  fi
+  assert_file_contains 'automountServiceAccountToken: false' "$kubectl_manifest"
+  assert_file_contains 'runAsNonRoot: true' "$kubectl_manifest"
+  assert_file_contains 'readOnlyRootFilesystem: true' "$kubectl_manifest"
+  assert_file_contains 'drop:' "$kubectl_manifest"
+  assert_file_contains '- ALL' "$kubectl_manifest"
+  assert_file_contains 'image: docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90' "$kubectl_manifest"
+  assert_file_lacks_pattern 'secret:|secretName:' "$kubectl_manifest"
 }
 
 @test "node capture uses the VMI IP for endpoint and node with bounded commands" {
@@ -162,8 +177,8 @@ timeout() {
   case "$(sed -n '1p' "$kubectl_calls")" in
     *--tail*) echo "dmesg must not receive a --tail flag" >&2; exit 1 ;;
   esac
-  rg -Fq '[capture exit code: 0]' "$tmp/node/dmesg.log"
-  rg -Fq '[capture exit code: 0]' "$tmp/node/kubelet.log"
+  assert_file_contains '[capture exit code: 0]' "$tmp/node/dmesg.log"
+  assert_file_contains '[capture exit code: 0]' "$tmp/node/kubelet.log"
 }
 
 @test "a timed-out worker remains recorded and does not block the next capture" {
@@ -178,8 +193,8 @@ timeout() {
 
   [ "$(wc -l < "$kubectl_calls")" -eq 2 ]
   [ "$(wc -l < "$timeout_calls")" -eq 2 ]
-  rg -Fq '[capture exit code: 124]' "$tmp/node/dmesg.log"
-  rg -Fq '[capture exit code: 124]' "$tmp/node/kubelet.log"
+  assert_file_contains '[capture exit code: 124]' "$tmp/node/dmesg.log"
+  assert_file_contains '[capture exit code: 124]' "$tmp/node/kubelet.log"
 }
 
 @test "orchestrator continues from a timed-out worker to the next VMI" {
@@ -201,11 +216,11 @@ timeout() {
 
   cozy_capture_tenant_talos test-latest-version
 
-  [ "$(rg -c ' exec kubernetes-test-latest-version-talos-diagnostics ' "$kubectl_calls")" -eq 4 ]
-  rg -Fq '[capture exit code: 124]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-a/dmesg.log"
-  rg -Fq '[capture exit code: 124]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-a/kubelet.log"
-  rg -Fq '[capture exit code: 0]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-b/dmesg.log"
-  rg -Fq '[capture exit code: 0]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-b/kubelet.log"
+  [ "$(awk '/ exec kubernetes-test-latest-version-talos-diagnostics / { count++ } END { print count + 0 }' "$kubectl_calls")" -eq 4 ]
+  assert_file_contains '[capture exit code: 124]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-a/dmesg.log"
+  assert_file_contains '[capture exit code: 124]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-a/kubelet.log"
+  assert_file_contains '[capture exit code: 0]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-b/dmesg.log"
+  assert_file_contains '[capture exit code: 0]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-b/kubelet.log"
 }
 
 @test "cleanup deletes diagnostic Certificate before its Pod and Secret" {
