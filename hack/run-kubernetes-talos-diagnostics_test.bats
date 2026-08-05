@@ -81,7 +81,7 @@ assert_file_contains() {
   local needle="$1"
   local file="$2"
 
-  case "$(<"${file}")" in
+  case "$(cat "${file}")" in
     *"${needle}"*) return 0 ;;
   esac
   printf 'expected %s to contain: %s\n' "${file}" "${needle}" >&2
