@@ -315,8 +315,12 @@ spec:
                   "SeaweedFS CA", which no system trust store carries.
 
                   SSL_CERT_DIR and NOT AWS_CA_BUNDLE, deliberately. Both are
-                  honoured by this image (verified against
-                  altinity/clickhouse-backup:2.7.4), but they differ in one
+                  honoured by this image — the shipped
+                  altinity-clickhouse-backup:v1.6.0 is built FROM upstream
+                  altinity/clickhouse-backup:2.7.4 (see
+                  images/altinity-clickhouse-backup/Dockerfile), which is the
+                  binary the behaviour below was measured against — but they
+                  differ in one
                   way that matters: Go reads SSL_CERT_DIR *in addition to*
                   the default system bundle file, whereas AWS_CA_BUNDLE
                   REPLACES the SDK's trust pool. Measured against a private
