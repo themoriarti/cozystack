@@ -1,0 +1,499 @@
+// SPDX-License-Identifier: Apache-2.0
+package backupcontroller
+
+import (
+	"context"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
+	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
+	"github.com/cozystack/cozystack/internal/backupcontroller/mongodbapp"
+	"github.com/cozystack/cozystack/internal/backupcontroller/psmdbtypes"
+)
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+func TestValidateMongoDBApplicationRef(t *testing.T) {
+	apps := mongodbapp.GroupName
+	other := "other.example.com"
+	cases := []struct {
+		name    string
+		ref     corev1.TypedLocalObjectReference
+		wantErr bool
+	}{
+		{"happy path with apps group", corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "x", APIGroup: &apps}, false},
+		{"empty apiGroup is accepted", corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "x"}, false},
+		{"foreign apiGroup rejected", corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "x", APIGroup: &other}, true},
+		{"wrong kind rejected", corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "x", APIGroup: &apps}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateMongoDBApplicationRef(tc.ref)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected validation error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Defaults
+// ---------------------------------------------------------------------------
+
+func TestPsmdbStorageAndTypeDefaults(t *testing.T) {
+	if got := psmdbStorageNameOrDefault(""); got != psmdbDefaultStorageName {
+		t.Errorf("psmdbStorageNameOrDefault(\"\"): got %q want %q", got, psmdbDefaultStorageName)
+	}
+	if got := psmdbStorageNameOrDefault("custom"); got != "custom" {
+		t.Errorf("psmdbStorageNameOrDefault(custom): got %q", got)
+	}
+	if got := psmdbBackupTypeOrDefault(""); got != psmdbtypes.BackupTypeLogical {
+		t.Errorf("psmdbBackupTypeOrDefault(\"\"): got %q want logical", got)
+	}
+	if got := psmdbBackupTypeOrDefault("logical"); got != "logical" {
+		t.Errorf("psmdbBackupTypeOrDefault(logical): got %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Precondition gate
+// ---------------------------------------------------------------------------
+
+func TestPsmdbBackupPrecondition(t *testing.T) {
+	t.Run("backups disabled", func(t *testing.T) {
+		cluster := &psmdbtypes.PerconaServerMongoDB{
+			Spec: psmdbtypes.PerconaServerMongoDBSpec{
+				Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{Enabled: false},
+			},
+		}
+		if msg := psmdbBackupPrecondition(cluster, "s3-storage"); msg == "" {
+			t.Fatal("expected a precondition message when backups are disabled")
+		}
+	})
+	t.Run("storage not declared", func(t *testing.T) {
+		cluster := &psmdbtypes.PerconaServerMongoDB{
+			Spec: psmdbtypes.PerconaServerMongoDBSpec{
+				Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
+					Enabled:  true,
+					Storages: map[string]runtime.RawExtension{"other": {}},
+				},
+			},
+		}
+		if msg := psmdbBackupPrecondition(cluster, "s3-storage"); msg == "" {
+			t.Fatal("expected a precondition message when the named storage is missing")
+		}
+	})
+	t.Run("ready", func(t *testing.T) {
+		cluster := &psmdbtypes.PerconaServerMongoDB{
+			Spec: psmdbtypes.PerconaServerMongoDBSpec{
+				Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
+					Enabled:  true,
+					Storages: map[string]runtime.RawExtension{"s3-storage": {}},
+				},
+			},
+		}
+		if msg := psmdbBackupPrecondition(cluster, "s3-storage"); msg != "" {
+			t.Fatalf("expected no precondition message, got %q", msg)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Backup-side ensure idempotency + CR shape
+// ---------------------------------------------------------------------------
+
+func TestEnsureMongoDBBackup_IdempotentByLabel(t *testing.T) {
+	c := newMongoDBStrategyTestClient(t)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+	job := newMongoDBBackupJob("bj-1", "tenant")
+	if err := c.Create(context.Background(), job); err != nil {
+		t.Fatalf("seed BackupJob: %v", err)
+	}
+	rendered := newRenderedMongoDBTemplate()
+	cluster := mongodbNameForApp("mongodb-src")
+
+	first, err := r.ensureMongoDBBackup(context.Background(), job, cluster, "s3-storage", rendered)
+	if err != nil {
+		t.Fatalf("first ensureMongoDBBackup: %v", err)
+	}
+	second, err := r.ensureMongoDBBackup(context.Background(), job, cluster, "s3-storage", rendered)
+	if err != nil {
+		t.Fatalf("second ensureMongoDBBackup: %v", err)
+	}
+	if first.Name != second.Name {
+		t.Errorf("expected idempotent reuse: first=%q second=%q", first.Name, second.Name)
+	}
+
+	list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list backups: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("expected exactly one operator Backup CR, got %d", len(list.Items))
+	}
+	got := &list.Items[0]
+	// The cozystack mongodb ApplicationDefinition prefixes the release name with
+	// "mongodb-", so a BackupJob targeting applicationRef.name=mongodb-src is
+	// reconciled against psmdb.percona.com/PerconaServerMongoDB named
+	// mongodb-mongodb-src.
+	if got.Spec.ClusterName != "mongodb-mongodb-src" {
+		t.Errorf("ClusterName: got %q want mongodb-mongodb-src", got.Spec.ClusterName)
+	}
+	if got.Spec.StorageName != "s3-storage" {
+		t.Errorf("StorageName: got %q want s3-storage", got.Spec.StorageName)
+	}
+	if got.Spec.Type != psmdbtypes.BackupTypeLogical {
+		t.Errorf("Type: got %q want logical", got.Spec.Type)
+	}
+	if got.Spec.CompressionType != "gzip" {
+		t.Errorf("CompressionType: got %q want gzip", got.Spec.CompressionType)
+	}
+	if got.Labels[backupsv1alpha1.OwningJobNameLabel] != "bj-1" {
+		t.Errorf("OwningJobName label missing or wrong: %v", got.Labels)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Restore-side ensure idempotency + backupSource wiring
+// ---------------------------------------------------------------------------
+
+func TestEnsureMongoDBRestore_IdempotentByLabel(t *testing.T) {
+	c := newMongoDBStrategyTestClient(t)
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme()}
+	rj := newMongoDBRestoreJob("rj-1", "tenant")
+	if err := c.Create(context.Background(), rj); err != nil {
+		t.Fatalf("seed RestoreJob: %v", err)
+	}
+	fps := true
+	source := &psmdbtypes.BackupSource{
+		Type:        psmdbtypes.BackupTypeLogical,
+		Destination: "s3://bkt/mongodb-src/2026-08-05T00:00:00Z",
+		S3: &psmdbtypes.BackupStorageS3{
+			Bucket:            "bkt",
+			CredentialsSecret: "mongodb-mongodb-src-s3-creds",
+			EndpointURL:       "https://seaweedfs-s3.tenant-root:8333",
+			ForcePathStyle:    &fps,
+		},
+	}
+
+	first, err := r.ensureMongoDBRestore(context.Background(), rj, "mongodb-mongodb-target", source, nil)
+	if err != nil {
+		t.Fatalf("first ensureMongoDBRestore: %v", err)
+	}
+	second, err := r.ensureMongoDBRestore(context.Background(), rj, "mongodb-mongodb-target", source, nil)
+	if err != nil {
+		t.Fatalf("second ensureMongoDBRestore: %v", err)
+	}
+	if first.Name != second.Name {
+		t.Errorf("expected idempotent reuse: first=%q second=%q", first.Name, second.Name)
+	}
+	list := &psmdbtypes.PerconaServerMongoDBRestoreList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list restores: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("expected exactly one operator Restore CR, got %d", len(list.Items))
+	}
+	got := &list.Items[0]
+	if got.Spec.ClusterName != "mongodb-mongodb-target" {
+		t.Errorf("ClusterName: got %q want mongodb-mongodb-target", got.Spec.ClusterName)
+	}
+	if got.Spec.BackupSource == nil || got.Spec.BackupSource.Destination != source.Destination {
+		t.Errorf("BackupSource mismatch: %#v", got.Spec.BackupSource)
+	}
+	if got.Spec.BackupSource.S3 == nil || got.Spec.BackupSource.S3.Bucket != "bkt" {
+		t.Errorf("BackupSource.S3 mismatch: %#v", got.Spec.BackupSource.S3)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resolveMongoDBRestoreTarget (in-place vs to-copy)
+// ---------------------------------------------------------------------------
+
+func TestResolveMongoDBRestoreTarget(t *testing.T) {
+	apps := mongodbapp.GroupName
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "src-bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps,
+			},
+		},
+	}
+
+	t.Run("in-place: missing targetApplicationRef inherits source", func(t *testing.T) {
+		rj := &backupsv1alpha1.RestoreJob{Spec: backupsv1alpha1.RestoreJobSpec{}}
+		r := &RestoreJobReconciler{}
+		got := r.resolveMongoDBRestoreTarget(rj, backup)
+		if got.AppName != "mongodb-src" || got.Kind != "MongoDB" {
+			t.Errorf("in-place target: got %+v want AppName=mongodb-src Kind=MongoDB", got)
+		}
+	})
+
+	t.Run("to-copy: targetApplicationRef wins over source", func(t *testing.T) {
+		rj := &backupsv1alpha1.RestoreJob{
+			Spec: backupsv1alpha1.RestoreJobSpec{
+				TargetApplicationRef: &corev1.TypedLocalObjectReference{
+					Kind: "MongoDB", Name: "mongodb-target", APIGroup: &apps,
+				},
+			},
+		}
+		r := &RestoreJobReconciler{}
+		got := r.resolveMongoDBRestoreTarget(rj, backup)
+		if got.AppName != "mongodb-target" {
+			t.Errorf("to-copy AppName: got %q want mongodb-target", got.AppName)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Restore options + PITR
+// ---------------------------------------------------------------------------
+
+func TestParseMongoDBRestoreOptionsAndPITR(t *testing.T) {
+	t.Run("empty options are permissive", func(t *testing.T) {
+		o, err := parseMongoDBRestoreOptions(nil)
+		if err != nil {
+			t.Fatalf("parse nil options: %v", err)
+		}
+		if o.effectiveRestoreDeadline() != psmdbDefaultRestoreDeadline {
+			t.Errorf("default deadline mismatch: %v", o.effectiveRestoreDeadline())
+		}
+		pitr, err := o.pitrSpec()
+		if err != nil || pitr != nil {
+			t.Errorf("no pitr expected: pitr=%v err=%v", pitr, err)
+		}
+	})
+	t.Run("malformed json errors", func(t *testing.T) {
+		if _, err := parseMongoDBRestoreOptions(&runtime.RawExtension{Raw: []byte("{not-json")}); err == nil {
+			t.Fatal("expected decode error")
+		}
+	})
+	t.Run("pitr date valid", func(t *testing.T) {
+		o := MongoDBRestoreOptions{PITR: &MongoDBRestorePITR{Type: "date", Date: "2026-08-05 12:34:56"}}
+		pitr, err := o.pitrSpec()
+		if err != nil {
+			t.Fatalf("pitrSpec: %v", err)
+		}
+		if pitr == nil || pitr.Type != "date" || pitr.Date != "2026-08-05 12:34:56" {
+			t.Errorf("pitr mismatch: %#v", pitr)
+		}
+	})
+	t.Run("pitr date without date errors", func(t *testing.T) {
+		o := MongoDBRestoreOptions{PITR: &MongoDBRestorePITR{Type: "date"}}
+		if _, err := o.pitrSpec(); err == nil {
+			t.Fatal("expected error for date type without date")
+		}
+	})
+	t.Run("pitr latest with date errors", func(t *testing.T) {
+		o := MongoDBRestoreOptions{PITR: &MongoDBRestorePITR{Type: "latest", Date: "2026-08-05 12:34:56"}}
+		if _, err := o.pitrSpec(); err == nil {
+			t.Fatal("expected error for latest type with a date")
+		}
+	})
+	t.Run("pitr latest valid", func(t *testing.T) {
+		o := MongoDBRestoreOptions{PITR: &MongoDBRestorePITR{Type: "latest"}}
+		pitr, err := o.pitrSpec()
+		if err != nil || pitr == nil || pitr.Type != "latest" {
+			t.Errorf("latest pitr mismatch: pitr=%#v err=%v", pitr, err)
+		}
+	})
+	t.Run("custom deadline honoured", func(t *testing.T) {
+		o := MongoDBRestoreOptions{RestoreTimeoutSeconds: 120}
+		if o.effectiveRestoreDeadline().Seconds() != 120 {
+			t.Errorf("deadline: got %v want 120s", o.effectiveRestoreDeadline())
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot round-trip
+// ---------------------------------------------------------------------------
+
+func TestMarshalUnmarshalMongoDBBackupSnapshot_RoundTrip(t *testing.T) {
+	fps := true
+	mdbBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			Destination: "s3://bkt/mongodb-src/2026-08-05T00:00:00Z",
+			S3: &psmdbtypes.BackupStorageS3{
+				Bucket:            "bkt",
+				CredentialsSecret: "mongodb-mongodb-src-s3-creds",
+				EndpointURL:       "https://seaweedfs-s3.tenant-root:8333",
+				ForcePathStyle:    &fps,
+			},
+		},
+	}
+	rendered := &strategyv1alpha1.MongoDBTemplate{Type: "logical"}
+	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", map[string]string{"k": "v"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	snap, err := unmarshalMongoDBBackupSnapshot(raw)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if snap == nil || snap.Destination != mdbBackup.Status.Destination {
+		t.Fatalf("destination round-trip: %#v", snap)
+	}
+	if snap.Kind != psmdbBackupSnapshotKind || snap.StorageName != "s3-storage" {
+		t.Errorf("snapshot metadata mismatch: %#v", snap)
+	}
+	if snap.S3 == nil || snap.S3.CredentialsSecret != "mongodb-mongodb-src-s3-creds" {
+		t.Errorf("snapshot S3 mismatch: %#v", snap.S3)
+	}
+	// Secret-handling contract: the snapshot must carry only a Secret NAME,
+	// never a raw credential. There is no field on BackupStorageS3 for a key,
+	// so this is structurally guaranteed; assert the reference is preserved.
+	if snap.S3.Bucket != "bkt" {
+		t.Errorf("snapshot bucket mismatch: %q", snap.S3.Bucket)
+	}
+}
+
+func TestUnmarshalMongoDBBackupSnapshot_Empty(t *testing.T) {
+	snap, err := unmarshalMongoDBBackupSnapshot(nil)
+	if err != nil || snap != nil {
+		t.Fatalf("nil snapshot should decode to (nil,nil): snap=%v err=%v", snap, err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resolveMongoDBBackupSource: live status preferred, snapshot fallback
+// ---------------------------------------------------------------------------
+
+func TestResolveMongoDBBackupSource_LivePreferred(t *testing.T) {
+	liveBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-backup"},
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			State:       psmdbtypes.StateReady,
+			Type:        "logical",
+			Destination: "s3://bkt/live/2026",
+			S3:          &psmdbtypes.BackupStorageS3{Bucket: "bkt"},
+		},
+	}
+	cozyBackup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cozy-bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			DriverMetadata: map[string]string{
+				psmdbBackupNameKey:  "op-backup",
+				psmdbDestinationKey: "s3://bkt/stale/2020",
+			},
+		},
+	}
+	c := newMongoDBStrategyTestClient(t, liveBackup)
+	r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	src, err := r.resolveMongoDBBackupSource(context.Background(), cozyBackup)
+	if err != nil {
+		t.Fatalf("resolveMongoDBBackupSource: %v", err)
+	}
+	if src.Destination != "s3://bkt/live/2026" {
+		t.Errorf("expected live destination to win, got %q", src.Destination)
+	}
+}
+
+func TestResolveMongoDBBackupSource_SnapshotFallback(t *testing.T) {
+	// No live operator Backup CR seeded; a snapshot on the Cozystack Backup is
+	// the only source of the destination.
+	fps := true
+	snapBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			Destination: "s3://bkt/snap/2026",
+			S3:          &psmdbtypes.BackupStorageS3{Bucket: "bkt", ForcePathStyle: &fps},
+		},
+	}
+	raw, err := marshalMongoDBBackupSnapshot(snapBackup, &strategyv1alpha1.MongoDBTemplate{Type: "logical"}, "s3-storage", nil)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	cozyBackup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cozy-bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			DriverMetadata: map[string]string{psmdbBackupNameKey: "reaped-backup"},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+	}
+	c := newMongoDBStrategyTestClient(t)
+	r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	src, err := r.resolveMongoDBBackupSource(context.Background(), cozyBackup)
+	if err != nil {
+		t.Fatalf("resolveMongoDBBackupSource: %v", err)
+	}
+	if src.Destination != "s3://bkt/snap/2026" {
+		t.Errorf("expected snapshot destination, got %q", src.Destination)
+	}
+	if src.S3 == nil || src.S3.Bucket != "bkt" {
+		t.Errorf("expected snapshot S3 reused, got %#v", src.S3)
+	}
+}
+
+func TestResolveMongoDBBackupSource_NoDestinationFails(t *testing.T) {
+	cozyBackup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cozy-bk"},
+		Spec:       backupsv1alpha1.BackupSpec{DriverMetadata: map[string]string{}},
+	}
+	c := newMongoDBStrategyTestClient(t)
+	r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.resolveMongoDBBackupSource(context.Background(), cozyBackup); err == nil {
+		t.Fatal("expected an error when no destination is resolvable")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+func newMongoDBStrategyTestClient(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = strategyv1alpha1.AddToScheme(s)
+	_ = psmdbtypes.AddToScheme(s)
+	_ = mongodbapp.AddToScheme(s)
+	return clientfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(objs...).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
+		Build()
+}
+
+func newMongoDBBackupJob(name, namespace string) *backupsv1alpha1.BackupJob {
+	apps := mongodbapp.GroupName
+	return &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps,
+			},
+		},
+	}
+}
+
+func newMongoDBRestoreJob(name, namespace string) *backupsv1alpha1.RestoreJob {
+	return &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "src-backup"},
+		},
+	}
+}
+
+func newRenderedMongoDBTemplate() *strategyv1alpha1.MongoDBTemplate {
+	return &strategyv1alpha1.MongoDBTemplate{
+		StorageName:     "s3-storage",
+		Type:            "logical",
+		CompressionType: "gzip",
+	}
+}
