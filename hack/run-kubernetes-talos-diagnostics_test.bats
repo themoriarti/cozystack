@@ -134,7 +134,7 @@ assert_file_lacks_pattern() {
 
   [ "$(sed -n '1p' "$kubectl_calls")" = '-n tenant-test delete certificate kubernetes-test-latest-version-e2e-talos-reader --ignore-not-found --wait=true --timeout=10s' ]
   [ "$(sed -n '2p' "$kubectl_calls")" = '-n tenant-test delete secret kubernetes-test-latest-version-e2e-talos-reader --ignore-not-found --wait=true --timeout=10s' ]
-  assert_file_contains '-n tenant-test wait certificate kubernetes-test-latest-version-e2e-talos-reader --for=condition=Ready --timeout=30s' "$kubectl_calls"
+  assert_file_contains 'wait -n tenant-test certificate kubernetes-test-latest-version-e2e-talos-reader --for=condition=Ready --timeout=30s' "$kubectl_calls"
   assert_file_contains '-n tenant-test get secret kubernetes-test-latest-version-talos-ca -o go-template={{index .data "tls.crt" | base64decode}}' "$kubectl_calls"
   assert_file_contains '-n tenant-test get secret kubernetes-test-latest-version-e2e-talos-reader -o go-template={{index .data "tls.key" | base64decode}}' "$kubectl_calls"
   assert_file_contains "--talosconfig $tmp/talosconfig config add kubernetes-test-latest-version --ca $tmp/ca.crt --crt $tmp/client.crt --key $tmp/client.key" "$talosctl_calls"

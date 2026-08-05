@@ -259,7 +259,7 @@ cozy_apply_tenant_talos_reader_certificate() {
   local release="kubernetes-${test_name}"
   local certificate="${release}-e2e-talos-reader"
 
-  kubectl apply -f - <<EOF
+  kubectl apply --request-timeout=30s -f - <<EOF
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -314,7 +314,7 @@ cozy_prepare_tenant_talosconfig() (
   # cert-manager issuance is asynchronous. Wait on its actual Ready condition;
   # on expiry, preserve Certificate diagnostics without ever printing the
   # generated Secret.
-  if ! kubectl -n tenant-test wait certificate "${certificate}" \
+  if ! kubectl_wait_retry -n tenant-test certificate "${certificate}" \
     --for=condition=Ready --timeout=30s; then
     echo "tenant Talos reader Certificate was not issued within 30s" >&2
     kubectl -n tenant-test describe certificate "${certificate}" >&2 || true
@@ -324,11 +324,11 @@ cozy_prepare_tenant_talosconfig() (
   fi
 
   kubectl -n tenant-test get secret "${release}-talos-ca" \
-    -o go-template='{{index .data "tls.crt" | base64decode}}' >"${workdir}/ca.crt" || return 1
+    -o go-template='{{index .data "tls.crt" | base64decode}}' --request-timeout=30s >"${workdir}/ca.crt" || return 1
   kubectl -n tenant-test get secret "${certificate}" \
-    -o go-template='{{index .data "tls.crt" | base64decode}}' >"${workdir}/client.crt" || return 1
+    -o go-template='{{index .data "tls.crt" | base64decode}}' --request-timeout=30s >"${workdir}/client.crt" || return 1
   kubectl -n tenant-test get secret "${certificate}" \
-    -o go-template='{{index .data "tls.key" | base64decode}}' >"${workdir}/client.key" || return 1
+    -o go-template='{{index .data "tls.key" | base64decode}}' --request-timeout=30s >"${workdir}/client.key" || return 1
 
   talosctl --talosconfig "${workdir}/talosconfig" config add "${release}" \
     --ca "${workdir}/ca.crt" --crt "${workdir}/client.crt" \
@@ -347,7 +347,7 @@ cozy_apply_tenant_talos_diagnostics_pod() {
   local test_name="$1"
   local pod_name="kubernetes-${test_name}-talos-diagnostics"
 
-  kubectl apply -f - <<EOF
+  kubectl apply --request-timeout=30s -f - <<EOF
 apiVersion: v1
 kind: Pod
 metadata:
@@ -485,7 +485,7 @@ cozy_capture_tenant_talos() (
   mkdir -p "${report_dir}"
 
   if ! kubectl -n tenant-test get virtualmachineinstances.kubevirt.io \
-    -l "${selector}" -o json >"${report_dir}/vmis.json" \
+    -l "${selector}" -o json --request-timeout=30s >"${report_dir}/vmis.json" \
     2>"${report_dir}/vmis-error.log"; then
     echo "failed to list tenant worker VMIs for Talos diagnostics" >&2
     return 1
@@ -763,7 +763,7 @@ EOF
   # kubernetes-previous failed here at exactly 12m with zero Nodes registered
   # and the tenant cilium HR still mid-install. A less-loaded fleet run passed
   # the same suites unchanged, so this is load-induced slowness, not a stuck
-  # bring-up; 18m restores margin and still sits well inside the 40m step
+  # bring-up; 18m restores margin and still sits well inside the 50m step
   # timeout (the downstream LB/NFS/ouroboros checks add ~10-15m on the happy
   # path).
   if ! timeout 18m bash -c '
