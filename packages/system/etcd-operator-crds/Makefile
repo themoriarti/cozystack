@@ -3,6 +3,9 @@ export NAMESPACE=cozy-etcd-operator
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 # Pinned ref of github.com/cozystack/etcd-operator to vendor CRDs from.
 ETCD_OPERATOR_REF ?= v0.5.4
 
