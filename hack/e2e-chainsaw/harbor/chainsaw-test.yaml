@@ -57,7 +57,7 @@ spec:
   # would be a permanently-empty capture, the defect these selectors exist to
   # avoid. The qdrant suite deletes inside a `try:`, so there the Job is at
   # least in scope, and that suite carries the collector with its own note on
-  # how narrow the window is.
+  # when it captures anything.
   - podLogs:
       selector: app.kubernetes.io/instance=harbor-test-system
       tail: 50
