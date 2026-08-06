@@ -26,18 +26,25 @@
 # A malformed value in any numeric knob falls back to its default and says so in
 # the report.
 #
-# Bounded, with their cutoffs recorded: the not-Ready pod section, the VM and VMI
-# sections, the cozystack-apps listings, the services loop, and the LINSTOR reads
-# that run a command inside a pod. Sections outside that list read without a
-# ceiling; both lists are frozen by tests, because a sentence naming which
-# sections are bounded drifts exactly as easily as the count of the ones that are
-# not.
+# EVERY read below carries a wall-clock ceiling, and a ceiling that fires is
+# recorded in the artifact rather than in the job log alone. A test derives that
+# from the code, so this sentence is checked rather than maintained -- which the
+# list it replaced was not: it named four sections while the file had ten.
 #
-# The LINSTOR ones are bounded through their own reader and their cutoff is
-# recorded BESIDE the output rather than in it. Both differences come from the
-# same fact: `kubectl exec` returns the remote command's status, so a 124 there
-# does not say whose it is, and two of those six reads stream a tarball a line of
-# prose would corrupt.
+# Which reader a new read belongs to:
+#   cozyreport_read_object     its output IS a file; the marker goes in.
+#   cozyreport_select_objects  it feeds a loop, and dash pipelines lose the status.
+#   cozyreport_probe           it is a gate deciding whether a module runs.
+#   cozyreport_read_exec       it runs a command INSIDE a pod, so its 124 is
+#                              ambiguous and its marker is placed by output format.
+# The bare wrapper is for reads whose output is not the reader's to write -- a
+# variable, or a pipeline that transforms it before anything lands -- so there is
+# no point at which a marker could attach. Each says so where it sits.
+#
+# A ceiling per read is NOT a ceiling on the report. The pod, VM, VMI and services
+# walks carry a count cap and a time budget; the other loops carry neither, so
+# their cost grows with the cluster. A per-read bound removes the single read that
+# never returns; what bounds the rest is the step's own ceiling, below.
 # The pod cap and collection budget apply to the pod section only. The fixed
 # --tail=2000 reads elsewhere in this file do not name their bound.
 #
@@ -78,12 +85,31 @@
 #                         cluster's worth folded in, because this is the term that
 #                         grows with the storage nodes.
 #                                                          (5 + n) x 35 = 175 + 35n
+#   EVERY OTHER READ    = literally the rest of the file -- the listings, the
+#                         gates, the four host commands, and every per-object walk
+#                         EXCEPT the four capped ones above. Written as "the rest"
+#                         so that a read added later is inside this term without
+#                         anyone having to notice. Each
+#                         read is bounded, none of those walks sits inside a cap or
+#                         a budget, and they take two to four reads per selected
+#                         object, so this term is the cluster's to set and not this
+#                         file's. Named as "the ones outside the caps" rather than
+#                         listed: a list of them is exactly what this file stopped
+#                         keeping, because it drifts and reads as complete while it
+#                         does so. A failed install with a hundred not-Ready
+#                         HelmReleases takes four reads per release and spends
+#                         400 x 35 = 14000s in that one walk.
+#                                                          not a constant: see above
 #                                                                          ------
-#                                                                    2055s + 35n
+#                                              2055s + 35n + whatever the walks cost
 #
-# So roughly 36 minutes on a three-satellite sandbox, and that is a FLOOR, not a
-# bound: the sections listed above as unbounded have no ceiling of any kind and
-# are not in this sum, so the real worst case is open-ended.
+# No total is stated, and no partial sum either. Three attempts at a summarising
+# figure here were each wrong on arrival -- the terms are arithmetic over five
+# constants this file sets elsewhere, nothing binds a figure to them, and a
+# sentence that adds some of them up is a fourth thing to keep in step. The
+# relation that matters is stated once, below, where the step's own ceiling is:
+# it sits UNDER this composition deliberately. Add the terms yourself if you need
+# the number; do not expect to find it written here.
 #
 # TWO ceilings sit outside it, and they fail differently. The job is capped at
 # `timeout-minutes: 180`, and reaching that cancels every step still to come --
@@ -146,8 +172,13 @@ fi
 # The status matters for the same reason, one level down. 124 is the deadline
 # expiring. It is not literally unique -- `timeout` passes a command's own exit
 # status through, so a command that itself exits 124 is indistinguishable -- but
-# every command handed to this wrapper is a kubectl `get`, `logs` or `describe`,
-# and none of those returns 124. The one construct that would break that is
+# every command handed to this wrapper is a kubectl `get`, `logs` or `describe`, a
+# talosctl `dmesg` or `logs`, or one of the four host commands the sandbox-host
+# section reads, and none of those returns 124. talosctl and the host commands are
+# named because this file only started routing them through the bounded reader; a
+# cobra CLI exits 0 or 1 and `df`/`free`/`ps` exit 0, 1 or 2, so the conclusion is
+# unchanged -- but an enumeration that stops listing what reaches it stops being
+# something a reader can check. The one construct that would break that is
 # `kubectl exec`, which propagates the remote command's status. Six bounded reads
 # ARE execs, so the invariant is narrower than "no bounded read is an exec": none
 # of them is described by THIS helper. They go through cozyreport_read_exec, which
@@ -209,6 +240,12 @@ cozyreport_objects_deadline_passed() {
 cozyreport_select_objects() {
   _cso_section=$1
   shift
+  # Where this walk's notes belong. Defaults to the kubernetes directory, which is
+  # right for the twelve callers that read a Kubernetes listing; the LINSTOR
+  # satellite walk sets it, because its bundles land under linstor/ and a note
+  # about a pod list that came back short is no use in a directory the reader has
+  # no reason to open.
+  _cso_dir=${COZYREPORT_SELECT_NOTE_DIR:-$REPORT_DIR/kubernetes}
   # shellcheck disable=SC2086  # empty COZYREPORT_BOUND must vanish, not become ""
   # kubectl's reason is kept, like every other read in this file. Discarding it
   # leaves "the selection read did not return (exit 1)", which is a symptom with
@@ -224,11 +261,34 @@ cozyreport_select_objects() {
   # shellcheck disable=SC2086  # empty COZYREPORT_BOUND must vanish, not become ""
   if _cso_rows=$($COZYREPORT_BOUND "$@" 2>"${_cso_err:-/dev/null}"); then
     [ -z "$_cso_err" ] || rm -f "$_cso_err"
-    printf '%s\n' "$_cso_rows"
+    # An empty selection emits NOTHING, not a blank line. `printf '%s\n' ""`
+    # writes one, and a blank line is a row to every caller downstream: the
+    # filters that select on a named column -- `$2 != "Ready"`, `$3 != "Bound"`
+    # -- all pass it, because an absent field is not the string it is compared
+    # against, and the loop then runs once with an empty name. That reads
+    # `kubectl get node ""`, whose refusal lands in `nodes/node.yaml` and looks
+    # exactly like a failed read of a real node.
+    #
+    # Guarded here rather than in each loop. The three callers that predate this
+    # were immune only because their filters happen to start with `NF &&`, which
+    # is a property of what they select on and not a decision anyone made about
+    # empty selections; the next loop added would need to know that too.
+    if [ -n "$_cso_rows" ]; then
+      printf '%s\n' "$_cso_rows"
+    fi
     return 0
   else
     _cso_rc=$?
   fi
+
+  # Every note below is appended into $REPORT_DIR/kubernetes, and this function is
+  # no longer called only from sections that run after that directory is created.
+  # A redirect into a directory that does not exist fails, the `|| true` swallows
+  # it, and the marker is lost -- in the one function whose entire purpose is that
+  # a failed selection cannot pass for an empty cluster. Created here rather than
+  # at each append, and only on the failure path, so a healthy run still leaves no
+  # empty directory behind.
+  mkdir -p "$_cso_dir" 2>/dev/null || true
 
   # Rows arrived before the failure: that is a partial list, and the rows are the
   # only ones the read named. Emitted, and the note says partial rather than
@@ -236,7 +296,7 @@ cozyreport_select_objects() {
   if [ -n "$_cso_rows" ]; then
     printf '%s\n' "$_cso_rows"
     printf '%s\n' "[cozyreport] $_cso_section: the selection read did not return (exit $_cso_rc); the objects below are the ones it named before it stopped, and there may be others it never reached" \
-      >> "$REPORT_DIR/kubernetes/COLLECTION-FAILED.txt" || true
+      >> "$_cso_dir/COLLECTION-FAILED.txt" || true
     [ -z "$_cso_err" ] || rm -f "$_cso_err"
     return 0
   fi
@@ -257,8 +317,14 @@ cozyreport_select_objects() {
   # CONSTRAINT ON CALLERS, not a general truth. `the server could not find the
   # requested resource` is also what an aggregated APIService that is DOWN
   # produces, and that is a failed read wearing the words of an absent one. Safe
-  # at today's three call sites because vm and vmi are CRD-backed and svc is core,
-  # none of which can be served by an aggregated API. Route an aggregated kind
+  # at every call site today because each of them reads a core kind or a CRD --
+  # `packages` and `packagesources` are real CRDs, installed from
+  # internal/crdinstall/manifests/ -- and neither can be served by an aggregated
+  # API. Stated as the PROPERTY every caller has to have rather than as a count of
+  # the callers, because the count is what goes stale: it read "today's three call
+  # sites" while there were thirteen, and a reader checking the constraint against
+  # an audited set of three has no way to know the other ten were never audited.
+  # Route an aggregated kind
   # through this selector -- `tenants.apps.cozystack.io` is one, and this file
   # already reads it, through cozyreport_read_object rather than here -- and an
   # apiserver outage on exactly the failed install this tool exists for gets filed
@@ -272,7 +338,7 @@ cozyreport_select_objects() {
     # is the one they assume, and the marker guard cannot catch the collision: it
     # matches basenames, so the doc's mention of the other file satisfies it.
     printf '%s\n' "[cozyreport] $_cso_section: this cluster does not serve that resource type, so there is nothing to collect. This is a statement about the cluster, not a failed read: $(tail -n 1 "$_cso_err" | cut -c1-200)" \
-      >> "$REPORT_DIR/kubernetes/KIND-NOT-SERVED.txt" || true
+      >> "$_cso_dir/KIND-NOT-SERVED.txt" || true
     [ -z "$_cso_err" ] || rm -f "$_cso_err"
     return 0
   fi
@@ -295,8 +361,45 @@ cozyreport_select_objects() {
   # backslash escapes, so a message carrying one could forge a line in a file a
   # triager reads as fact.
   printf '%s\n' "[cozyreport] $_cso_section: the selection read did not return (exit $_cso_rc), so this section is empty because nothing could be listed, NOT because nothing matched; $_cso_why" \
-    >> "$REPORT_DIR/kubernetes/COLLECTION-FAILED.txt" || true
+    >> "$_cso_dir/COLLECTION-FAILED.txt" || true
   return 0
+}
+
+# cozyreport_probe <section> <kubectl-args...>: the bounded form of the `if
+# kubectl get ... >/dev/null` gates that decide whether a module runs at all.
+#
+# A gate is a read, and an unbounded one costs more than any read it guards: the
+# module below it never starts. Bounded, its non-zero status is indistinguishable
+# from "this cluster does not run that component", so the module is skipped and
+# leaves the same empty tree.
+#
+# So the cut-off is recorded and the status is still returned: the caller keeps
+# its `if`, and the report carries the difference between a component that is not
+# installed and a probe that TIMED OUT. Only that one. A probe refused for another
+# reason -- RBAC, an apiserver 503 -- still skips its module and still looks like
+# a component that was never installed, because telling those apart means reading
+# kubectl's message, and filing every non-zero probe would put a note in every
+# report on every install that legitimately lacks a component. Named here rather
+# than implied away: this function narrows the silence, it does not end it.
+cozyreport_probe() {
+  _cpr_section=$1
+  shift
+  # Status taken in an explicit `else`, like every other reader here. A compound
+  # `if` whose condition fails and which has no else leaves `$?` at 0, so reading
+  # it after `fi` reports a clean probe for every failure -- and a probe is the
+  # one place where that turns straight into "this module is present", which then
+  # runs the whole section against a cluster that never answered.
+  # shellcheck disable=SC2086  # empty COZYREPORT_BOUND must vanish, not become ""
+  if $COZYREPORT_BOUND "$@" >/dev/null 2>&1; then
+    return 0
+  else
+    _cpr_rc=$?
+  fi
+  cozyreport_timed_out "$_cpr_rc" || return "$_cpr_rc"
+  mkdir -p "$REPORT_DIR/kubernetes" 2>/dev/null || true
+  printf '%s\n' "[cozyreport] $_cpr_section: the probe that decides whether this section is collected was cut off by $(cozyreport_cutoff_desc "$_cpr_rc"), so the section was skipped. That is NOT a statement that the component is absent -- nothing was ever looked at, and a cluster running it produces the same empty tree here" \
+    >> "$REPORT_DIR/kubernetes/COLLECTION-FAILED.txt" || true
+  return "$_cpr_rc"
 }
 
 # cozyreport_objects_budget_note <section>: record that the walk stopped on time
@@ -323,12 +426,18 @@ cozyreport_collect_talos_node() {
   _crt_node=$2
   _crt_dir=$3
 
-  talosctl --talosconfig "$_crt_config" -e "$_crt_node" -n "$_crt_node" \
-    dmesg > "$_crt_dir/talos-$_crt_node-dmesg.txt" 2>&1 || true
-  talosctl --talosconfig "$_crt_config" -e "$_crt_node" -n "$_crt_node" \
-    logs kubelet --tail=500 > "$_crt_dir/talos-$_crt_node-kubelet.log" 2>&1 || true
-  talosctl --talosconfig "$_crt_config" -e "$_crt_node" -n "$_crt_node" \
-    logs containerd --tail=500 > "$_crt_dir/talos-$_crt_node-containerd.log" 2>&1 || true
+  # Bounded like every other read here, and for a sharper reason: these do not
+  # go to the apiserver at all. A node whose Talos API is up but wedged, or one
+  # answering slowly enough that three reads each outlast the step, is the same
+  # lost tarball with none of the kubectl-side bounds in the path.
+  cozyreport_read_object "$_crt_dir/talos-$_crt_node-dmesg.txt" \
+    talosctl --talosconfig "$_crt_config" -e "$_crt_node" -n "$_crt_node" dmesg
+  cozyreport_read_object "$_crt_dir/talos-$_crt_node-kubelet.log" \
+    talosctl --talosconfig "$_crt_config" -e "$_crt_node" -n "$_crt_node" \
+    logs kubelet --tail=500
+  cozyreport_read_object "$_crt_dir/talos-$_crt_node-containerd.log" \
+    talosctl --talosconfig "$_crt_config" -e "$_crt_node" -n "$_crt_node" \
+    logs containerd --tail=500
 }
 
 # cozyreport_pods_not_ready: stdin = `kubectl get pod -A --no-headers` rows
@@ -504,9 +613,46 @@ cozyreport_append_note() {
 # meant to remove, reintroduced by the fix for it. As a YAML comment the marker is
 # still there for a person and invisible to the parser. describe.txt is not YAML
 # and gets the same prefix, because one reader, one rule.
+#
+# One exception, and it is the format's rather than the reader's. This function
+# now also writes the controller LOGS, which it never did before, and a log is
+# neither YAML nor prose: the platform's controllers log JSON per line, `#` is not
+# a comment in that, and "the object ended" is not a sentence about a log. So the
+# marker for a `.log` target drops the prefix and speaks about output rather than
+# about an object -- which is exactly the marker cozyreport_read_container_log
+# already writes into a partial log. That reader appends into the log too, so the
+# note stays IN the file rather than moving beside it: two readers in one tarball
+# answering "where does a truncation marker for a log go" two different ways is
+# worse than either answer.
 cozyreport_read_object() {
   _cro_file=$1
   shift
+  # Chosen from the target, once, so the branches below cannot disagree.
+  #
+  # _cro_prose says whether kubectl's own line may be written INTO this file. Only
+  # YAML says no, and for the reason the block above gives: a bare `Warning:` or
+  # `No resources found` line is a second top-level node and costs a parser the
+  # whole document. Everything else here is read by a person.
+  #
+  # It matters because `kubectl get` writes `No resources found` to STDERR and
+  # exits 0 (kubernetes/kubectl#1667): sent beside the file, an empty listing is
+  # zero bytes and a READ-WARNINGS.txt lands on every healthy run.
+  case "$_cro_file" in
+    *.yaml) _cro_mark="# " ; _cro_ends="the object ended" ; _cro_prose=0 ;;
+    *.log)  _cro_mark=""   ; _cro_ends="the output ended" ; _cro_prose=1 ;;
+    *)      _cro_mark="# " ; _cro_ends="the object ended" ; _cro_prose=1 ;;
+  esac
+  # And the TOOL, from the argv rather than from what this reader used to serve.
+  # It read only kubectl once; it now also runs talosctl and the four host
+  # commands, and a marker saying "kubectl exited 1" on a `df` that hit a stale
+  # mount is a false statement in an artifact whose whole premise is that its
+  # notes can be believed. Same for the noun: `df.txt` did not stop because an
+  # object ended.
+  _cro_tool=$(basename "$1" 2>/dev/null) || _cro_tool=$1
+  case "$_cro_file" in
+    *.yaml) ;;
+    *) [ "$_cro_tool" = "kubectl" ] || _cro_ends="the output ended" ;;
+  esac
   _cro_err=$(mktemp "${TMPDIR:-/tmp}/cozyreport-obj.XXXXXX" 2>/dev/null) || _cro_err=""
   # Status taken in an explicit `else`, not after the `if`: a compound `if` whose
   # condition fails and which has no else leaves `$?` at 0. `|| true` on the read
@@ -539,29 +685,39 @@ cozyreport_read_object() {
       # warning in its own right and picking one drops the others. Two warnings
       # on one read is the ordinary case, not the exotic one.
       {
-        printf '%s\n' "[cozyreport] $(basename "$_cro_file"): kubectl wrote this object and also said:"
+        printf '%s\n' "[cozyreport] $(basename "$_cro_file"): $_cro_tool wrote this and also said:"
         cat "$_cro_err"
       } >> "$(dirname "$_cro_file")/READ-WARNINGS.txt" || true
     elif [ "$_cro_rc" -ne 0 ]; then
       cat "$_cro_err" > "$_cro_file" 2>/dev/null || true
-    else
-      # Exited 0, wrote no object, and still said something. The read SUCCEEDED,
-      # so the message is a warning and not a finding, and copying it into the file
-      # would put an unprefixed kubectl line where an object belongs -- a `Warning:`
-      # that no parser can read and that no marker explains, since the emptiness
-      # check below sees a non-empty file and stays quiet. Beside it, like every
-      # other warning on a successful read.
+    elif [ "$_cro_prose" -eq 0 ]; then
+      # Exited 0, wrote no object, and still said something, into a file a parser
+      # reads. Copying it in would put an unprefixed kubectl line where an object
+      # belongs -- a `Warning:` no parser can take and no marker explains, since
+      # the emptiness check below sees a non-empty file and stays quiet. Beside it,
+      # like every other warning on a successful read.
       {
-        printf '%s\n' "[cozyreport] $(basename "$_cro_file"): kubectl returned no object, exited 0, and said:"
+        printf '%s\n' "[cozyreport] $(basename "$_cro_file"): $_cro_tool returned no object, exited 0, and said:"
         cat "$_cro_err"
       } >> "$(dirname "$_cro_file")/READ-WARNINGS.txt" || true
+    else
+      # The same case into a file a person reads, and here the message IS the
+      # file. `No resources found` is what an empty listing has to say for itself;
+      # sent beside it, the listing is zero bytes and says nothing at all -- and
+      # that is the ordinary outcome on any install without an ACME issuer, so the
+      # warnings file would then arrive on every healthy run. Prefixed, because
+      # this is the script speaking about the read and not kubectl's own output.
+      {
+        printf '%s' "${_cro_mark}[cozyreport] $_cro_tool returned no rows and exited 0, saying: "
+        cat "$_cro_err"
+      } > "$_cro_file" || true
     fi
   fi
   [ -z "$_cro_err" ] || rm -f "$_cro_err"
 
   if cozyreport_timed_out "$_cro_rc"; then
     cozyreport_append_note "$_cro_file" \
-      "# [cozyreport] TRUNCATED: this file ends here because the read was cut off by $(cozyreport_cutoff_desc "$_cro_rc"), not because the object ended -- anything absent below may exist on the cluster and simply was not read"
+      "${_cro_mark}[cozyreport] TRUNCATED: this file ends here because the read was cut off by $(cozyreport_cutoff_desc "$_cro_rc"), not because $_cro_ends -- anything absent below may exist on the cluster and simply was not read"
   elif [ "$_cro_rc" -ne 0 ] && [ "$_cro_had_stdout" -eq 1 ]; then
     # Failed part way through. Without this the file is a valid-looking prefix of
     # an object and nothing says the rest was never read -- the ambiguity the
@@ -569,7 +725,7 @@ cozyreport_read_object() {
     # than by our timeout. The reason is not left in the file body, because the
     # body is what yq parses.
     cozyreport_append_note "$_cro_file" \
-      "# [cozyreport] TRUNCATED: this file ends here because kubectl exited $_cro_rc part way through, not because the object ended${_cro_reason:+: $_cro_reason}"
+      "${_cro_mark}[cozyreport] TRUNCATED: this file ends here because $_cro_tool exited $_cro_rc part way through, not because $_cro_ends${_cro_reason:+: $_cro_reason}"
   elif [ "$_cro_rc" -ne 0 ] && [ ! -s "$_cro_file" ]; then
     # Failed with neither an object nor a message. Two ways to get here: a signal
     # that is not 124 or 137 -- SIGTERM from a teardown, say -- and a `mktemp`
@@ -579,10 +735,10 @@ cozyreport_read_object() {
     # has this branch; this was the one that did not.
     if [ -z "$_cro_err" ]; then
       cozyreport_append_note "$_cro_file" \
-        "# [cozyreport] kubectl exited $_cro_rc and this file is empty; its message could not be captured (no writable temp dir on the machine producing this report), so whether it said anything is unknown"
+        "${_cro_mark}[cozyreport] $_cro_tool exited $_cro_rc and this file is empty; its message could not be captured (no writable temp dir on the machine producing this report), so whether it said anything is unknown"
     else
       cozyreport_append_note "$_cro_file" \
-        "# [cozyreport] kubectl exited $_cro_rc without a message and wrote nothing"
+        "${_cro_mark}[cozyreport] $_cro_tool exited $_cro_rc without a message and wrote nothing"
     fi
   fi
   return 0
@@ -610,18 +766,23 @@ cozyreport_read_object() {
 # appended to one is an archive no reader can open -- one rule for every exec is
 # worth more than a rule that changes with the output format.
 #
-# A cut-off bundle is KEPT, and the note says so rather than guessing. The check
-# at those two call sites asks whether the archive lists a first member, which a
-# truncated gzip does: `tar -tzf` walks the headers that survived the cut, prints
-# them, and only then fails. Measured on a 1.8MB bundle cut to a third -- three
-# members listed. And a cut-off bundle is by definition one whose stream ran the
-# full 30s, so it has completed members; kept is the ordinary outcome and not the
-# exception. That is the right outcome -- a partial capture is the only copy of
-# something already gone from the satellite -- but it makes "probably not there"
-# the wrong sentence to write beside it.
+# A cut-off bundle is EITHER kept and truncated (the call site's check asks for a
+# first member, which a truncated gzip still lists) OR removed as zero bytes when
+# the stream never started. This path runs before that check, so it names both.
+#
+# The four TEXT reads keep the remote command's message in the .txt itself, whole.
+# `tail -n 1` is right where a failing read buries its cause under klog preambles;
+# on an exec it is backwards, because `kubectl exec` appends `command terminated
+# with exit code N` last.
 cozyreport_read_exec() {
   _cre_file=$1
   shift
+  # Before the redirect below, not after it. The same guard the selector and the
+  # probe carry, and it protects the OUTPUT as well as the note -- placed under the
+  # read it is meant to precede, it could not fire for either. Both call sites
+  # create the directory today, so this is defence; defence that runs too late is
+  # not defence.
+  mkdir -p "$(dirname "$_cre_file")" 2>/dev/null || true
   _cre_err=$(mktemp "${TMPDIR:-/tmp}/cozyreport-exec.XXXXXX" 2>/dev/null) || _cre_err=""
   # Status taken in an explicit `else`, for the reason the readers above spell
   # out: a compound `if` whose condition fails and which has no else leaves `$?`
@@ -632,35 +793,98 @@ cozyreport_read_exec() {
   else
     _cre_rc=$?
   fi
-  _cre_said=""
-  if [ -n "$_cre_err" ] && [ -s "$_cre_err" ]; then
-    _cre_said=$(tail -n 1 "$_cre_err" | cut -c1-200)
+  _cre_said=0
+  [ -n "$_cre_err" ] && [ -s "$_cre_err" ] && _cre_said=1
+  _cre_had_stdout=0
+  [ -s "$_cre_file" ] && _cre_had_stdout=1
+  # Whether this output can carry the message at all. Only the two archive
+  # streams cannot; the rest are tables a person reads, and a zero-byte one is
+  # the "did it return nothing, or never run" question this collector exists to
+  # answer.
+  case "$_cre_file" in
+    *.tgz) _cre_prose=0 ;;
+    *)     _cre_prose=1 ;;
+  esac
+  if [ "$_cre_prose" -eq 1 ] && [ "$_cre_had_stdout" -eq 0 ] && [ "$_cre_rc" -ne 0 ]; then
+    # A table that got nothing must not ship as zero bytes: `linstor/nodes.txt` at
+    # zero length reads as a cluster with no nodes, which is the one reading this
+    # collector exists to prevent. Three ways to get here and each says which.
+    if [ "$_cre_said" -eq 1 ]; then
+      # The refusal IS the finding, and it belongs where the table would have been.
+      cat "$_cre_err" > "$_cre_file" 2>/dev/null || true
+    elif cozyreport_timed_out "$_cre_rc"; then
+      # The wedged pod of the ticket: killed before the command wrote a byte, so
+      # there is no stderr either. Without this the sharpest failure this reader
+      # was written for is the one that leaves nothing behind.
+      printf '%s\n' "# [cozyreport] the read was killed at exit $_cre_rc before the command inside the pod wrote anything, so this file is empty for that reason and not because the command had nothing to say; COLLECTION-FAILED.txt beside it says what that status does and does not establish" \
+        > "$_cre_file" || true
+    elif [ -z "$_cre_err" ]; then
+      # No writable temp dir, so stderr went to /dev/null. "Said nothing" and "we
+      # could not hear it" are different facts and only the first is about the
+      # cluster -- the same branch the other four readers here carry.
+      printf '%s\n' "# [cozyreport] the read exited $_cre_rc and this file is empty; its message could not be captured (no writable temp dir on the machine producing this report), so whether it said anything is unknown" \
+        > "$_cre_file" || true
+    else
+      printf '%s\n' "# [cozyreport] the read exited $_cre_rc without a message and wrote nothing" \
+        > "$_cre_file" || true
+    fi
   fi
-  # The same guard cozyreport_select_objects and cozyreport_probe carry, for the
-  # same failure: a note appended into a directory that does not exist fails, the
-  # `|| true` swallows it, and the marker is gone. Both call sites create the
-  # directory today, so this is defence rather than a fix -- but two of the three
-  # readers here guard it and the third having to be checked by hand is how the
-  # next call site loses its note.
-  mkdir -p "$(dirname "$_cre_file")" 2>/dev/null || true
-
   # printf, not echo: the remote command's text is untrusted and dash's echo
   # expands backslash escapes, so a message carrying one could forge a line in a
   # file a triager reads as fact.
   if cozyreport_timed_out "$_cre_rc"; then
-    printf '%s\n' "[cozyreport] $(basename "$_cre_file"): this read runs a command inside a pod and ended at exit $_cre_rc, so whatever it produced stops where the stream stopped and not where the command's output did. For the two reads here that stream an archive that means the file beside this note is a TRUNCATED archive rather than an absent one: it lists and extracts the members that made it across and then fails part way, so treat a short member list as this cut-off and not as a satellite with few reports. What $_cre_rc means here is genuinely open: kubectl exec passes the remote command's own status through, so it is either the ${COZYREPORT_READ_TIMEOUT}s bound on this read firing or the command itself exiting $_cre_rc, and nothing in the status separates the two${_cre_said:+. It also said: $_cre_said}" \
-      >> "$(dirname "$_cre_file")/COLLECTION-FAILED.txt" || true
+    # The four tables get the marker IN the file as well, like every other .txt in
+    # the tarball. A `nodes.txt` cut at the ceiling is a short node list that reads
+    # as a small cluster, and "the note is one directory up" is exactly the walk a
+    # triager does not make. Only the two archives cannot take it -- a line of
+    # prose inside a gzip stream is not a file anyone can open -- which is what
+    # _cre_prose already decides for the two branches above.
+    if [ "$_cre_prose" -eq 1 ] && [ "$_cre_had_stdout" -eq 1 ]; then
+      cozyreport_append_note "$_cre_file" \
+        "# [cozyreport] TRUNCATED: this output ends here because the read was killed at exit $_cre_rc, not because the command finished -- see COLLECTION-FAILED.txt beside this file for what that status does and does not establish"
+    fi
+    {
+      printf '%s\n' "[cozyreport] $(basename "$_cre_file"): this read runs a command inside a pod and ended at exit $_cre_rc, so whatever it produced stops where the stream stopped and not where the command's output did. What $_cre_rc means here is genuinely open: kubectl exec passes the remote command's own status through, so it is either the ${COZYREPORT_READ_TIMEOUT}s bound on this read firing or the command itself exiting $_cre_rc, and nothing in the status separates the two."
+      # Only for the two reads whose output is an archive. Printing it beside a
+      # cut-off .txt would describe a mechanism that read never went through,
+      # which is the same fault as naming a timeout that did not fire.
+      if [ "$_cre_prose" -eq 0 ]; then
+        printf '%s\n' "The file this note names is EITHER beside it and truncated -- it lists and extracts the members that crossed before the cut -- OR gone, because a read killed before the remote command wrote its first byte leaves zero bytes and the emptiness check at the call site removes it. This note cannot tell you which; the directory can."
+      fi
+      if [ "$_cre_said" -eq 1 ]; then
+        printf '%s\n' "It also said:"
+        cat "$_cre_err"
+      fi
+    } >> "$(dirname "$_cre_file")/COLLECTION-FAILED.txt" || true
   elif [ "$_cre_rc" -ne 0 ]; then
-    printf '%s\n' "[cozyreport] $(basename "$_cre_file"): the read exited $_cre_rc, so its output holds only what was streamed before that${_cre_said:+; it said: $_cre_said}" \
-      >> "$(dirname "$_cre_file")/COLLECTION-FAILED.txt" || true
-  elif [ -n "$_cre_said" ]; then
-    # Succeeded and still wrote to stderr -- `kubectl exec` on a Deployment with
-    # one container announces which container it defaulted to, on every call.
-    # Beside the output rather than merged into it, the same rule the object
-    # reader follows: one of these outputs is a tarball and the others are tables
-    # a person reads, and a kubectl line at the top of either is noise in the
-    # first case and a corrupt file in the second. Copied whole, since a read
-    # that succeeded has no failure preamble to pick a line out of.
+    # `# ` like every other in-file marker on a .txt: the object reader has given
+    # this prefix to every non-YAML target since before this reader existed, and
+    # two readers marking the same file type two ways means a triager grepping
+    # `^# [cozyreport]` across the tarball gets half of it and cannot tell.
+    # A partial table that died on the command's own terms, not on the clock,
+    # gets the same in-file marker: a `linstor n l` that streams three rows and
+    # exits 1 is a three-node listing to anyone who opens it. The timeout branch
+    # above marks its own case and the object reader marks this one; leaving it
+    # out here had the two readers disagree about the same shape.
+    if [ "$_cre_prose" -eq 1 ] && [ "$_cre_had_stdout" -eq 1 ]; then
+      cozyreport_append_note "$_cre_file" \
+        "# [cozyreport] TRUNCATED: this output ends here because the read exited $_cre_rc part way through, not because the command finished"
+    fi
+    {
+      printf '%s\n' "[cozyreport] $(basename "$_cre_file"): the read exited $_cre_rc, so its output holds only what was streamed before that."
+      if [ "$_cre_said" -eq 1 ]; then
+        # WHOLE, not the last line. `kubectl exec` appends `command terminated
+        # with exit code N` after whatever the remote command said, so the last
+        # line here is the one line that never carries the cause.
+        printf '%s\n' "It said:"
+        cat "$_cre_err"
+      fi
+    } >> "$(dirname "$_cre_file")/COLLECTION-FAILED.txt" || true
+  elif [ "$_cre_said" -eq 1 ]; then
+    # Succeeded and still wrote to stderr. Beside the output rather than merged
+    # into it, the same rule the object reader follows: one of these outputs is a
+    # tarball and the others are tables a person reads, and a stray line is noise
+    # in the first case and a corrupt file in the second.
     {
       printf '%s\n' "[cozyreport] $(basename "$_cre_file"): the read succeeded and also said:"
       cat "$_cre_err"
@@ -1100,9 +1324,9 @@ cozyreport_collect_broken_pods() {
   if [ -z "$COZYREPORT_BOUND" ]; then
     mkdir -p "$_cbp_root" || true
     printf '%s\n' \
-      "timeout is not on PATH, so the reads behind this directory ran unbounded" \
-      "this is a missing dependency on the machine that produced the report, not a statement about the cluster: no read here was cut off by a wall-clock timeout, because there was none to fire" \
-      "that is the only bound this note is about. The pod cap, the collection budget and the per-log --tail all still applied, and each says so in its own file where it fired" \
+      "timeout is not on PATH, so every read in this report ran unbounded -- not only the ones behind this directory" \
+      "this is a missing dependency on the machine that produced the report, not a statement about the cluster: no read anywhere in this tarball was cut off by a wall-clock timeout, because there was none to fire" \
+      "the note sits here because this is the section that always exists; it is a statement about the run. That is the only bound it is about. The pod cap, the collection budget and the per-log --tail all still applied, and each says so in its own file where it fired" \
       > "$_cbp_root/COLLECTION-UNBOUNDED.txt" || true
   fi
   # Both knobs fall back to their default on a malformed value, and both say so
@@ -1361,14 +1585,15 @@ REPORT_DIR=$REPORT_PDIR/$REPORT_NAME
 # -- check dependencies
 command -V kubectl >/dev/null || exit $?
 command -V tar >/dev/null || exit $?
-# `timeout` is what bounds every read in the pod section. Without it those reads
-# run with no ceiling instead, which is what the old unbounded loop did and is
-# strictly better than refusing to collect, so this is a warning rather than an
-# exit: the caller wraps this script in `|| true`, and exiting here would trade the
-# whole tarball -- Talos, LINSTOR, Flux, COSI, all of it -- for one dependency the
-# pod section alone needs. The section says so in COLLECTION-UNBOUNDED.txt.
+# `timeout` is what bounds every read in this file. Without it they run with no
+# ceiling instead, which is what this collector did throughout before the bounds
+# existed and is strictly better than refusing to collect, so this is a warning
+# rather than an exit: the caller wraps this script in `|| true`, and exiting here
+# would trade the whole tarball -- Talos, LINSTOR, Flux, COSI, all of it -- for one
+# dependency. COLLECTION-UNBOUNDED.txt says so in the artifact, and the step's own
+# ceiling is then the only thing left between a hung read and a lost tarball.
 if [ -z "$COZYREPORT_BOUND" ]; then
-  echo "WARNING: timeout is not on PATH; the not-Ready pod section will be collected with no read timeout and will say so"
+  echo "WARNING: timeout is not on PATH; every read will be taken with no ceiling, and the report will say so"
 fi
 
 # -- cozystack module
@@ -1380,55 +1605,64 @@ mkdir -p $REPORT_DIR/cozystack
 # which build produced everything after it -- carried `deployments.apps
 # "cozystack" not found` on every run. Same defect as the copy-pasted kamaji gate
 # below: a name that exists nowhere fails quietly and looks like evidence.
-kubectl get deploy -n cozy-system cozystack-operator -o jsonpath='{.spec.template.spec.containers[0].image}' > $REPORT_DIR/cozystack/image.txt 2>&1
-if kubectl get deploy -n cozy-system cozystack-operator >/dev/null 2>&1; then
-  kubectl logs -n cozy-system deploy/cozystack-operator --tail=2000 > $REPORT_DIR/cozystack/operator.log 2>&1
-  kubectl logs -n cozy-system deploy/cozystack-operator --tail=2000 --previous > $REPORT_DIR/cozystack/operator-previous.log 2>&1 || true
+cozyreport_read_object "$REPORT_DIR/cozystack/image.txt" \
+  kubectl get deploy -n cozy-system cozystack-operator -o jsonpath='{.spec.template.spec.containers[0].image}'
+if cozyreport_probe "cozystack operator logs" kubectl get deploy -n cozy-system cozystack-operator; then
+  cozyreport_read_object "$REPORT_DIR/cozystack/operator.log" \
+    kubectl logs -n cozy-system deploy/cozystack-operator --tail=2000
+  cozyreport_read_object "$REPORT_DIR/cozystack/operator-previous.log" \
+    kubectl logs -n cozy-system deploy/cozystack-operator --tail=2000 --previous
 fi
-kubectl get cm -n cozy-system --no-headers | awk '$1 ~ /^cozystack/' |
+cozyreport_select_objects "cozystack configmaps" kubectl get cm -n cozy-system --no-headers | awk '$1 ~ /^cozystack/' |
   while read NAME _; do
     DIR=$REPORT_DIR/cozystack/configs
     mkdir -p $DIR
-    kubectl get cm -n cozy-system $NAME -o yaml > $DIR/$NAME.yaml 2>&1
+    cozyreport_read_object "$DIR/$NAME.yaml" kubectl get cm -n cozy-system "$NAME" -o yaml
   done
 
 # -- flux module
 echo "Collecting Flux controller state..."
 mkdir -p $REPORT_DIR/flux
 for ctrl in helm-controller source-controller notification-controller kustomize-controller; do
-  if kubectl get deploy -n cozy-fluxcd $ctrl >/dev/null 2>&1; then
-    kubectl logs -n cozy-fluxcd deploy/$ctrl --tail=2000 > $REPORT_DIR/flux/$ctrl.log 2>&1
-    kubectl logs -n cozy-fluxcd deploy/$ctrl --tail=2000 --previous > $REPORT_DIR/flux/$ctrl-previous.log 2>&1 || true
+  if cozyreport_probe "flux $ctrl logs" kubectl get deploy -n cozy-fluxcd "$ctrl"; then
+    cozyreport_read_object "$REPORT_DIR/flux/$ctrl.log" \
+      kubectl logs -n cozy-fluxcd "deploy/$ctrl" --tail=2000
+    cozyreport_read_object "$REPORT_DIR/flux/$ctrl-previous.log" \
+      kubectl logs -n cozy-fluxcd "deploy/$ctrl" --tail=2000 --previous
   fi
 done
 
 echo "Collecting Flux sources..."
 for kind in helmrepositories.source.toolkit.fluxcd.io ocirepositories.source.toolkit.fluxcd.io gitrepositories.source.toolkit.fluxcd.io externalartifacts.source.toolkit.fluxcd.io; do
   short=${kind%%.*}
-  kubectl get $kind -A > $REPORT_DIR/flux/$short.txt 2>&1
-  kubectl get $kind -A -o yaml > $REPORT_DIR/flux/$short.yaml 2>&1
+  cozyreport_read_object "$REPORT_DIR/flux/$short.txt" kubectl get "$kind" -A
+  cozyreport_read_object "$REPORT_DIR/flux/$short.yaml" kubectl get "$kind" -A -o yaml
 done
 
 # -- cert-manager module
-if kubectl get crd certificates.cert-manager.io >/dev/null 2>&1; then
+if cozyreport_probe "cert-manager" kubectl get crd certificates.cert-manager.io; then
   echo "Collecting cert-manager state..."
   DIR=$REPORT_DIR/cert-manager
   mkdir -p $DIR
-  kubectl get certificates.cert-manager.io -A > $DIR/certificates.txt 2>&1
-  kubectl get certificaterequests.cert-manager.io -A > $DIR/certificaterequests.txt 2>&1
-  kubectl get orders.acme.cert-manager.io -A > $DIR/orders.txt 2>&1
-  kubectl get challenges.acme.cert-manager.io -A > $DIR/challenges.txt 2>&1
+  cozyreport_read_object "$DIR/certificates.txt" kubectl get certificates.cert-manager.io -A
+  cozyreport_read_object "$DIR/certificaterequests.txt" kubectl get certificaterequests.cert-manager.io -A
+  cozyreport_read_object "$DIR/orders.txt" kubectl get orders.acme.cert-manager.io -A
+  cozyreport_read_object "$DIR/challenges.txt" kubectl get challenges.acme.cert-manager.io -A
   # Per non-Ready cert: full yaml + describe
-  kubectl get certificates.cert-manager.io -A --no-headers 2>/dev/null | awk '$3 != "True"' | \
+  cozyreport_select_objects "certificates" kubectl get certificates.cert-manager.io -A --no-headers | awk '$3 != "True"' | \
     while read NAMESPACE NAME _; do
       cdir=$DIR/certificates/$NAMESPACE/$NAME
       mkdir -p $cdir
-      kubectl get certificates.cert-manager.io -n $NAMESPACE $NAME -o yaml > $cdir/cert.yaml 2>&1
-      kubectl describe certificates.cert-manager.io -n $NAMESPACE $NAME > $cdir/describe.txt 2>&1
+      cozyreport_read_object "$cdir/cert.yaml" \
+        kubectl get certificates.cert-manager.io -n "$NAMESPACE" "$NAME" -o yaml
+      cozyreport_read_object "$cdir/describe.txt" \
+        kubectl describe certificates.cert-manager.io -n "$NAMESPACE" "$NAME"
     done
-  if kubectl get deploy -n cozy-cert-manager cert-manager >/dev/null 2>&1; then
-    kubectl logs -n cozy-cert-manager deploy/cert-manager --tail=2000 > $DIR/cert-manager.log 2>&1
-    kubectl logs -n cozy-cert-manager deploy/cert-manager-webhook --tail=2000 > $DIR/cert-manager-webhook.log 2>&1
+  if cozyreport_probe "cert-manager logs" kubectl get deploy -n cozy-cert-manager cert-manager; then
+    cozyreport_read_object "$DIR/cert-manager.log" \
+      kubectl logs -n cozy-cert-manager deploy/cert-manager --tail=2000
+    cozyreport_read_object "$DIR/cert-manager-webhook.log" \
+      kubectl logs -n cozy-cert-manager deploy/cert-manager-webhook --tail=2000
   fi
 fi
 
@@ -1436,70 +1670,85 @@ fi
 
 echo "Collecting Kubernetes information..."
 mkdir -p $REPORT_DIR/kubernetes
-kubectl version > $REPORT_DIR/kubernetes/version.txt 2>&1
+cozyreport_read_object "$REPORT_DIR/kubernetes/version.txt" kubectl version
 
 echo "Collecting nodes..."
-kubectl get nodes -o wide > $REPORT_DIR/kubernetes/nodes.txt 2>&1
-kubectl get nodes --no-headers | awk '$2 != "Ready"' |
+cozyreport_read_object "$REPORT_DIR/kubernetes/nodes.txt" kubectl get nodes -o wide
+cozyreport_select_objects "nodes" kubectl get nodes --no-headers | awk '$2 != "Ready"' |
   while read NAME _; do
     DIR=$REPORT_DIR/kubernetes/nodes/$NAME
     mkdir -p $DIR
-    kubectl get node $NAME -o yaml > $DIR/node.yaml 2>&1
-    kubectl describe node $NAME > $DIR/describe.txt 2>&1
+    cozyreport_read_object "$DIR/node.yaml" kubectl get node "$NAME" -o yaml
+    cozyreport_read_object "$DIR/describe.txt" kubectl describe node "$NAME"
   done
 
 echo "Collecting namespaces..."
-kubectl get ns -o wide > $REPORT_DIR/kubernetes/namespaces.txt 2>&1
-kubectl get ns --no-headers | awk '$2 != "Active"' |
+cozyreport_read_object "$REPORT_DIR/kubernetes/namespaces.txt" kubectl get ns -o wide
+cozyreport_select_objects "namespaces" kubectl get ns --no-headers | awk '$2 != "Active"' |
   while read NAME _; do
     DIR=$REPORT_DIR/kubernetes/namespaces/$NAME
     mkdir -p $DIR
-    kubectl get ns $NAME -o yaml > $DIR/namespace.yaml 2>&1
-    kubectl describe ns $NAME > $DIR/describe.txt 2>&1
+    cozyreport_read_object "$DIR/namespace.yaml" kubectl get ns "$NAME" -o yaml
+    cozyreport_read_object "$DIR/describe.txt" kubectl describe ns "$NAME"
   done
 
 echo "Collecting events..."
-kubectl get events -A --sort-by=.lastTimestamp > $REPORT_DIR/kubernetes/events.txt 2>&1
+# The read most likely to hit the 30s ceiling in this whole file, and worth knowing
+# before `events.txt` is read as a complete picture. `--sort-by` sorts CLIENT-side,
+# so kubectl pulls every event in the cluster and orders them locally, against the
+# degraded apiserver this tool exists for -- and it does that under the same flat
+# ceiling as a single-object describe. A truncated events.txt says so on its last
+# line; an events.txt that is merely SHORT is the ordinary case for a large cluster.
+cozyreport_read_object "$REPORT_DIR/kubernetes/events.txt" \
+  kubectl get events -A --sort-by=.lastTimestamp
 # Filter to warning-class and recent for quick triage
-kubectl get events -A --sort-by=.lastTimestamp \
-  -o jsonpath='{range .items[?(@.type!="Normal")]}{.lastTimestamp}{"\t"}{.involvedObject.namespace}/{.involvedObject.kind}/{.involvedObject.name}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}' \
-  > $REPORT_DIR/kubernetes/events-warnings.txt 2>&1
+cozyreport_read_object "$REPORT_DIR/kubernetes/events-warnings.txt" \
+  kubectl get events -A --sort-by=.lastTimestamp \
+  -o jsonpath='{range .items[?(@.type!="Normal")]}{.lastTimestamp}{"\t"}{.involvedObject.namespace}/{.involvedObject.kind}/{.involvedObject.name}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
 
 echo "Collecting helmreleases..."
-kubectl get hr -A > $REPORT_DIR/kubernetes/helmreleases.txt 2>&1
-kubectl get hr -A --no-headers | awk '$4 != "True"' | \
+cozyreport_read_object "$REPORT_DIR/kubernetes/helmreleases.txt" kubectl get hr -A
+cozyreport_select_objects "helmreleases" kubectl get hr -A --no-headers | awk '$4 != "True"' | \
   while read NAMESPACE NAME _; do
     DIR=$REPORT_DIR/kubernetes/helmreleases/$NAMESPACE/$NAME
     mkdir -p $DIR
-    kubectl get hr -n $NAMESPACE $NAME -o yaml > $DIR/hr.yaml 2>&1
-    kubectl describe hr -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
-    # Helm storage secrets: latest revision per release.
-    kubectl get secret -n $NAMESPACE -l owner=helm,name=$NAME --sort-by='.metadata.creationTimestamp' --no-headers 2>/dev/null | \
+    cozyreport_read_object "$DIR/hr.yaml" kubectl get hr -n "$NAMESPACE" "$NAME" -o yaml
+    cozyreport_read_object "$DIR/describe.txt" kubectl describe hr -n "$NAMESPACE" "$NAME"
+    # Helm storage secrets: latest revision per release. Bounded with the bare
+    # wrapper rather than through a reader: both of these feed a pipeline whose
+    # output is decoded rather than kept, so there is no file for a marker to go
+    # on, and a note per HelmRelease would put one line per release into
+    # COLLECTION-FAILED.txt on a cluster whose apiserver is refusing -- which is
+    # the state a report is taken in. The release's own hr.yaml and describe.txt
+    # are beside this and carry their own markers.
+    # shellcheck disable=SC2086  # empty COZYREPORT_BOUND must vanish, not become ""
+    $COZYREPORT_BOUND kubectl get secret -n $NAMESPACE -l owner=helm,name=$NAME --sort-by='.metadata.creationTimestamp' --no-headers 2>/dev/null | \
       tail -1 | awk '{print $1}' | while read SECRET; do
         [ -z "$SECRET" ] && continue
-        kubectl get secret -n $NAMESPACE $SECRET -o jsonpath='{.data.release}' 2>/dev/null \
+        # shellcheck disable=SC2086
+        $COZYREPORT_BOUND kubectl get secret -n $NAMESPACE $SECRET -o jsonpath='{.data.release}' 2>/dev/null \
           | base64 -d | base64 -d | gzip -d > $DIR/helm-release.json 2>&1 || true
       done
   done
 
 echo "Collecting packages..."
-kubectl get packages > $REPORT_DIR/kubernetes/packages.txt 2>&1
-kubectl get packages --no-headers | awk '$3 != "True"' | \
+cozyreport_read_object "$REPORT_DIR/kubernetes/packages.txt" kubectl get packages
+cozyreport_select_objects "packages" kubectl get packages --no-headers | awk '$3 != "True"' | \
   while read NAME _; do
     DIR=$REPORT_DIR/kubernetes/packages/$NAME
     mkdir -p $DIR
-    kubectl get package $NAME -o yaml > $DIR/package.yaml 2>&1
-    kubectl describe package $NAME > $DIR/describe.txt 2>&1
+    cozyreport_read_object "$DIR/package.yaml" kubectl get package "$NAME" -o yaml
+    cozyreport_read_object "$DIR/describe.txt" kubectl describe package "$NAME"
   done
 
 echo "Collecting packagesources..."
-kubectl get packagesources > $REPORT_DIR/kubernetes/packagesources.txt 2>&1
-kubectl get packagesources --no-headers | awk '$3 != "True"' | \
+cozyreport_read_object "$REPORT_DIR/kubernetes/packagesources.txt" kubectl get packagesources
+cozyreport_select_objects "packagesources" kubectl get packagesources --no-headers | awk '$3 != "True"' | \
   while read NAME _; do
     DIR=$REPORT_DIR/kubernetes/packagesources/$NAME
     mkdir -p $DIR
-    kubectl get packagesource $NAME -o yaml > $DIR/packagesource.yaml 2>&1
-    kubectl describe packagesource $NAME > $DIR/describe.txt 2>&1
+    cozyreport_read_object "$DIR/packagesource.yaml" kubectl get packagesource "$NAME" -o yaml
+    cozyreport_read_object "$DIR/describe.txt" kubectl describe packagesource "$NAME"
   done
 
 echo "Collecting cozystack apps..."
@@ -1601,49 +1850,53 @@ cozyreport_select_objects "services" kubectl get svc -A --no-headers | cozyrepor
   done
 
 echo "Collecting pvcs..."
-kubectl get pvc -A > $REPORT_DIR/kubernetes/pvcs.txt 2>&1
-kubectl get pvc -A --no-headers | awk '$3 != "Bound"'  |
+cozyreport_read_object "$REPORT_DIR/kubernetes/pvcs.txt" kubectl get pvc -A
+cozyreport_select_objects "pvcs" kubectl get pvc -A --no-headers | awk '$3 != "Bound"'  |
   while read NAMESPACE NAME _; do
     DIR=$REPORT_DIR/kubernetes/pvc/$NAMESPACE/$NAME
     mkdir -p $DIR
-    kubectl get pvc -n $NAMESPACE $NAME -o yaml > $DIR/pvc.yaml 2>&1
-    kubectl describe pvc -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
+    cozyreport_read_object "$DIR/pvc.yaml" kubectl get pvc -n "$NAMESPACE" "$NAME" -o yaml
+    cozyreport_read_object "$DIR/describe.txt" kubectl describe pvc -n "$NAMESPACE" "$NAME"
   done
 
 # -- objectstorage (COSI) module
 
-if kubectl get crd bucketclaims.objectstorage.k8s.io >/dev/null 2>&1; then
+if cozyreport_probe "objectstorage (COSI)" kubectl get crd bucketclaims.objectstorage.k8s.io; then
   echo "Collecting objectstorage (COSI) state..."
   DIR=$REPORT_DIR/objectstorage
   mkdir -p $DIR
   # The COSI CRDs ship no printer columns, so plain `kubectl get` shows
   # only NAME/AGE — pull the readiness fields explicitly.
-  kubectl get bucketclaims.objectstorage.k8s.io -A \
-    -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.bucketReady,BUCKET:.status.bucketName,CLASS:.spec.bucketClassName' \
-    > $DIR/bucketclaims.txt 2>&1
-  kubectl get bucketaccesses.objectstorage.k8s.io -A \
-    -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,ACCOUNT:.status.accountID,CLAIM:.spec.bucketClaimName' \
-    > $DIR/bucketaccesses.txt 2>&1
-  kubectl get buckets.objectstorage.k8s.io \
-    -o custom-columns='NAME:.metadata.name,READY:.status.bucketReady,ID:.status.bucketID,CLAIMNS:.spec.bucketClaim.namespace,CLAIM:.spec.bucketClaim.name' \
-    > $DIR/buckets.txt 2>&1
+  cozyreport_read_object "$DIR/bucketclaims.txt" \
+    kubectl get bucketclaims.objectstorage.k8s.io -A \
+    -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.bucketReady,BUCKET:.status.bucketName,CLASS:.spec.bucketClassName'
+  cozyreport_read_object "$DIR/bucketaccesses.txt" \
+    kubectl get bucketaccesses.objectstorage.k8s.io -A \
+    -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,ACCOUNT:.status.accountID,CLAIM:.spec.bucketClaimName'
+  cozyreport_read_object "$DIR/buckets.txt" \
+    kubectl get buckets.objectstorage.k8s.io \
+    -o custom-columns='NAME:.metadata.name,READY:.status.bucketReady,ID:.status.bucketID,CLAIMNS:.spec.bucketClaim.namespace,CLAIM:.spec.bucketClaim.name'
   for kind in bucketclaims.objectstorage.k8s.io bucketaccesses.objectstorage.k8s.io; do
     short=${kind%%.*}
-    kubectl get $kind -A -o yaml > $DIR/$short.yaml 2>&1
+    cozyreport_read_object "$DIR/$short.yaml" kubectl get "$kind" -A -o yaml
   done
   for kind in buckets.objectstorage.k8s.io bucketclasses.objectstorage.k8s.io bucketaccessclasses.objectstorage.k8s.io; do
     short=${kind%%.*}
-    kubectl get $kind -o yaml > $DIR/$short.yaml 2>&1
+    cozyreport_read_object "$DIR/$short.yaml" kubectl get "$kind" -o yaml
   done
-  if kubectl get deploy -n cozy-objectstorage-controller container-object-storage-controller >/dev/null 2>&1; then
-    kubectl logs -n cozy-objectstorage-controller deploy/container-object-storage-controller --tail=2000 > $DIR/objectstorage-controller.log 2>&1
-    kubectl logs -n cozy-objectstorage-controller deploy/container-object-storage-controller --tail=2000 --previous > $DIR/objectstorage-controller-previous.log 2>&1 || true
+  if cozyreport_probe "objectstorage controller logs" kubectl get deploy -n cozy-objectstorage-controller container-object-storage-controller; then
+    cozyreport_read_object "$DIR/objectstorage-controller.log" \
+      kubectl logs -n cozy-objectstorage-controller deploy/container-object-storage-controller --tail=2000
+    cozyreport_read_object "$DIR/objectstorage-controller-previous.log" \
+      kubectl logs -n cozy-objectstorage-controller deploy/container-object-storage-controller --tail=2000 --previous
   fi
   # seaweedfs COSI provisioners run per seaweedfs instance, one per namespace
-  kubectl get deploy -A --no-headers 2>/dev/null | awk '$2 ~ /objectstorage-provisioner$/ {print $1" "$2}' |
+  cozyreport_select_objects "objectstorage provisioners" kubectl get deploy -A --no-headers | awk '$2 ~ /objectstorage-provisioner$/ {print $1" "$2}' |
     while read NAMESPACE NAME; do
-      kubectl logs -n $NAMESPACE deploy/$NAME --all-containers --tail=2000 > $DIR/provisioner-$NAMESPACE.log 2>&1
-      kubectl logs -n $NAMESPACE deploy/$NAME --all-containers --tail=2000 --previous > $DIR/provisioner-$NAMESPACE-previous.log 2>&1 || true
+      cozyreport_read_object "$DIR/provisioner-$NAMESPACE.log" \
+        kubectl logs -n "$NAMESPACE" "deploy/$NAME" --all-containers --tail=2000
+      cozyreport_read_object "$DIR/provisioner-$NAMESPACE-previous.log" \
+        kubectl logs -n "$NAMESPACE" "deploy/$NAME" --all-containers --tail=2000 --previous
     done
 fi
 
@@ -1656,20 +1909,29 @@ fi
 # KamajiControlPlanes and no TenantControlPlanes, with nothing saying why. A
 # tenant-kubernetes suite that times out on control-plane bootstrap is exactly the
 # run that needs them.
-if kubectl get deploy -n cozy-kamaji kamaji >/dev/null 2>&1; then
+if cozyreport_probe "kamaji" kubectl get deploy -n cozy-kamaji kamaji; then
   echo "Collecting kamaji resources..."
   DIR=$REPORT_DIR/kamaji
   mkdir -p $DIR
-  kubectl logs -n cozy-kamaji deployment/kamaji > $DIR/kamaji-controller.log 2>&1
-  kubectl get kamajicontrolplanes.controlplane.cluster.x-k8s.io -A > $DIR/kamajicontrolplanes.txt 2>&1
-  kubectl get kamajicontrolplanes.controlplane.cluster.x-k8s.io -A -o yaml > $DIR/kamajicontrolplanes.yaml 2>&1
-  kubectl get tenantcontrolplanes.kamaji.clastix.io -A > $DIR/tenantcontrolplanes.txt 2>&1
-  kubectl get tenantcontrolplanes.kamaji.clastix.io -A -o yaml > $DIR/tenantcontrolplanes.yaml 2>&1
+  # `--tail`, like every other controller log here. Without it this is the only
+  # unbounded-in-SIZE log in the file, which under a wall-clock ceiling makes it
+  # the one most likely to be cut off part way -- and a kamaji log cut off part way
+  # loses its END, which is where a control-plane bootstrap failure is.
+  cozyreport_read_object "$DIR/kamaji-controller.log" \
+    kubectl logs -n cozy-kamaji deployment/kamaji --tail=2000
+  cozyreport_read_object "$DIR/kamajicontrolplanes.txt" \
+    kubectl get kamajicontrolplanes.controlplane.cluster.x-k8s.io -A
+  cozyreport_read_object "$DIR/kamajicontrolplanes.yaml" \
+    kubectl get kamajicontrolplanes.controlplane.cluster.x-k8s.io -A -o yaml
+  cozyreport_read_object "$DIR/tenantcontrolplanes.txt" \
+    kubectl get tenantcontrolplanes.kamaji.clastix.io -A
+  cozyreport_read_object "$DIR/tenantcontrolplanes.yaml" \
+    kubectl get tenantcontrolplanes.kamaji.clastix.io -A -o yaml
 fi
 
 # -- linstor module
 
-if kubectl get deploy -n cozy-linstor linstor-controller >/dev/null 2>&1; then
+if cozyreport_probe "linstor" kubectl get deploy -n cozy-linstor linstor-controller; then
   echo "Collecting linstor resources..."
   DIR=$REPORT_DIR/linstor
   mkdir -p $DIR
@@ -1723,13 +1985,18 @@ if kubectl get deploy -n cozy-linstor linstor-controller >/dev/null 2>&1; then
   # driver-level symptom.
   DIR=$REPORT_DIR/linstor/error-reports
   mkdir -p "$DIR"
-  for pod in $(kubectl -n cozy-linstor get pods -l app.kubernetes.io/component=linstor-satellite -o name 2>/dev/null); do
+  COZYREPORT_SELECT_NOTE_DIR=$DIR
+  for pod in $(cozyreport_select_objects "linstor satellites" kubectl -n cozy-linstor get pods -l app.kubernetes.io/component=linstor-satellite -o name); do
     # Read the node name directly off the pod spec so the tarball key
     # is stable across piraeus DaemonSet regenerations. Fallback to the
     # pod name if .spec.nodeName is not readable for any reason (last
     # resort; collisions between DS pod generations are theoretically
     # possible but the bundle would still land in a distinct file).
-    node=$(kubectl -n cozy-linstor get "$pod" -o jsonpath='{.spec.nodeName}' 2>/dev/null)
+    # Bounded with the bare wrapper: the value is read into a variable, not into
+    # a file, so there is nothing for a marker to be attached to, and the fallback
+    # on the next line is what covers a read that does not answer.
+    # shellcheck disable=SC2086  # empty COZYREPORT_BOUND must vanish, not become ""
+    node=$($COZYREPORT_BOUND kubectl -n cozy-linstor get "$pod" -o jsonpath='{.spec.nodeName}' 2>/dev/null)
     [ -z "$node" ] && node=$(basename "$pod")
     # Tar the ErrorReport-*.log files into a per-satellite bundle so a
     # burst of retry-loop reports (dozens per incident) does not explode
@@ -1748,6 +2015,7 @@ if kubectl get deploy -n cozy-linstor linstor-controller >/dev/null 2>&1; then
       rm -f "$DIR/$node.tgz"
     fi
   done
+  COZYREPORT_SELECT_NOTE_DIR=""
   # Drop the empty parent directory when no satellite had reports.
   rmdir "$DIR" 2>/dev/null || true
 fi
@@ -1757,12 +2025,24 @@ fi
 echo "Collecting sandbox host context..."
 DIR=$REPORT_DIR/sandbox-host
 mkdir -p $DIR
-df -h > $DIR/df.txt 2>&1
-free -m > $DIR/free.txt 2>&1
-ps auxww > $DIR/ps.txt 2>&1
-dmesg | tail -200 > $DIR/dmesg.txt 2>&1 || true
+# Bounded although they touch no cluster: `df` blocks indefinitely on a stale NFS
+# or wedged fuse mount, and this script writes its archive on its last line.
+cozyreport_read_object "$DIR/df.txt" df -h
+cozyreport_read_object "$DIR/free.txt" free -m
+cozyreport_read_object "$DIR/ps.txt" ps auxww
+# A pipeline, so the bare wrapper rather than the reader: the reader owns the
+# redirect and `dmesg | tail` needs its own. dash has no pipefail, so the status
+# belongs to `tail` and a cut-off dmesg leaves no marker -- said here rather than
+# left to be found, and the 200-line tail is the bound that shapes this file
+# anyway.
+# shellcheck disable=SC2086  # empty COZYREPORT_BOUND must vanish, not become ""
+$COZYREPORT_BOUND dmesg 2>&1 | tail -200 > $DIR/dmesg.txt 2>&1 || true
 if [ -f /workspace/talosconfig ]; then
-  NODES=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' 2>/dev/null)
+  # Bare wrapper for the same reason as the satellite node name above: this is
+  # read into a variable and the documented fallback below covers a read that
+  # never answers.
+  # shellcheck disable=SC2086  # empty COZYREPORT_BOUND must vanish, not become ""
+  NODES=$($COZYREPORT_BOUND kubectl get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' 2>/dev/null)
   for node in ${NODES:-192.168.123.11 192.168.123.12 192.168.123.13}; do
     [ -z "$node" ] && continue
     cozyreport_collect_talos_node /workspace/talosconfig "$node" "$DIR"

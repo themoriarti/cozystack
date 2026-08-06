@@ -89,12 +89,16 @@ fold_source() {
   # `-n cozy-kamaji` that any gate in this module carries, so a gate naming a
   # deployment that does not exist in that namespace -- which would keep the module
   # shut forever -- passed unnoticed.
-  gate=$(awk '/^# -- kamaji module/,/^  echo "Collecting kamaji/' "$SCRIPT" | grep '^if kubectl get')
+  # Matched as "the gate line", not as "a line starting with kubectl": the gates
+  # run through cozyreport_probe, so the read no longer begins the line and a
+  # pattern anchored on it finds nothing and fails on the empty result rather
+  # than on a wrong gate.
+  gate=$(awk '/^# -- kamaji module/,/^  echo "Collecting kamaji/' "$SCRIPT" | grep -E '^if .*kubectl get')
   case "$gate" in
     *"cozy-kamaji kamaji"*) ;;
     *) echo "FAIL: the kamaji module is not gated on cozy-kamaji/kamaji: $gate"; false ;;
   esac
-  gate=$(awk '/^# -- linstor module/,/^  echo "Collecting linstor/' "$SCRIPT" | grep '^if kubectl get')
+  gate=$(awk '/^# -- linstor module/,/^  echo "Collecting linstor/' "$SCRIPT" | grep -E '^if .*kubectl get')
   case "$gate" in
     *"cozy-linstor linstor-controller"*) ;;
     *) echo "FAIL: the linstor module is not gated on cozy-linstor/linstor-controller: $gate"; false ;;
@@ -119,14 +123,21 @@ fold_source() {
   # Literal names only. The flux and per-object loops build a name from the
   # cluster's own output at runtime; there is nothing to pin and nothing to get
   # stale.
+  # A trailing `;` is stripped from every name. The gates used to end in
+  # `>/dev/null 2>&1; then`, which put the shell separator on a field of its own;
+  # through cozyreport_probe the deployment name is the last word before it, so
+  # without this the same name appears twice, once as itself and once with the
+  # semicolon attached, and the guard reports a set that changed when nothing did.
   found=$(awk '
     /kubectl/ {
       ns = ""
       for (i = 1; i < NF; i++) if ($i == "-n") { ns = $(i + 1); break }
       if (ns == "") next
       for (i = 1; i <= NF; i++) {
-        if ($i ~ /^deploy\//) { n = $i; sub(/^deploy\//, "", n); print ns "/" n }
-        else if ($i == "deploy" && i < NF && $(i + 1) == "-n" && i + 2 < NF && $(i + 3) !~ /^-/) print ns "/" $(i + 3)
+        if ($i ~ /^deploy\//) { n = $i; sub(/^deploy\//, "", n); sub(/;$/, "", n); print ns "/" n }
+        else if ($i == "deploy" && i < NF && $(i + 1) == "-n" && i + 2 < NF && $(i + 3) !~ /^-/) {
+          n = $(i + 3); sub(/;$/, "", n); print ns "/" n
+        }
       }
     }
   ' "$SCRIPT" | grep -v '\$' | LC_ALL=C sort -u | tr '\n' ' ')
@@ -322,7 +333,12 @@ $(printf '%s\n' "$body" | grep -oE 'COZY_[A-Z_]+' || true)"
   code=$(fold_source "$SCRIPT")
 
   # 1. No exec reaches the readers whose 124 means "our deadline fired".
-  bounded=$(printf '%s\n' "$code" | grep -E '\$COZYREPORT_BOUND[[:space:]]|cozyreport_read_object[[:space:]]' || true)
+  # Every reader that reaches cozyreport_cutoff_desc, not just the two that were
+  # thought of first: cozyreport_probe and cozyreport_select_objects call it too,
+  # so an exec routed through either would be misclassified AND invisible here.
+  # The guard's reach has to equal the helper's, or it reports a clean sweep of
+  # the half it happens to look at.
+  bounded=$(printf '%s\n' "$code" | grep -E '\$COZYREPORT_BOUND[[:space:]]|cozyreport_(read_object|probe|select_objects)[[:space:]]' || true)
   [ -n "$bounded" ] || { echo "FAIL: found no bounded reads at all"; false; }
   if printf '%s\n' "$bounded" | grep -qE "[[:space:]]exec[[:space:]]"; then
     echo "FAIL: a bounded read is an exec, whose exit status is the remote command's"
@@ -383,7 +399,19 @@ case "${STUB_EXEC_MODE:-}" in
   # Killed mid-stream: the last line has no terminating newline, which is what a
   # stream cut short actually leaves behind.
   cut)     printf 'Node | ONLINE\nsrv1 | partial ro'; exit 124 ;;
+  # Killed before the command inside the pod wrote a byte -- the wedged controller
+  # the ticket is about. No stdout AND no stderr, because there was nothing to say
+  # it with.
+  silentcut) exit 124 ;;
+  # Rows out, then a failure on the command's own terms rather than on the clock.
+  # A wedged controller does not have to produce 124.
+  partialfail) printf 'Node | Ready\nsrv1 | Yes\nsrv2 | Ye'
+               echo 'error: rpc failed' >&2; exit 1 ;;
   refused) echo 'error: unable to upgrade connection: container not found' >&2; exit 1 ;;
+  # What `kubectl exec` really leaves behind when the remote command fails: the
+  # cause first, and its own `command terminated` line appended LAST.
+  linstor) echo 'ERROR: unable to connect to linstor://localhost:3370' >&2
+           echo 'command terminated with exit code 10' >&2; exit 10 ;;
   *)       echo 'Defaulted container "linstor-controller" out of: linstor-controller, init' >&2
            printf 'Node | ONLINE\nsrv1 | Yes\n' ;;
 esac
@@ -409,6 +437,14 @@ STUB
   # The partial output is kept, never discarded: it is the only copy of what the
   # read managed to get out of the pod.
   grep -q 'partial ro' "$tmp/out/nodes.txt"
+  # And the table says so about ITSELF, like every other .txt in the tarball. A
+  # short node list with the explanation one directory up reads as a small
+  # cluster, and that walk is the one a triager does not make.
+  grep -q '^# \[cozyreport\] TRUNCATED' "$tmp/out/nodes.txt" || {
+    echo "FAIL: a cut-off table carries no marker of its own, or not in the shared form"
+    cat "$tmp/out/nodes.txt"
+    false
+  }
   [ -f "$tmp/out/COLLECTION-FAILED.txt" ] || {
     echo "FAIL: a cut-off exec left no note at all"; false; }
   grep -q 'nodes.txt' "$tmp/out/COLLECTION-FAILED.txt"
@@ -429,6 +465,277 @@ STUB
     cozyreport_read_exec "$tmp/out/pools.txt" kubectl exec -n ns deploy/c -- linstor sp l
   grep -q 'container not found' "$tmp/out/COLLECTION-FAILED.txt"
   [ "$(grep -c 'passes the remote command' "$tmp/out/COLLECTION-FAILED.txt")" -eq 1 ]
+
+  # A refusal is what the LISTING has to say for itself, so it goes in the file
+  # too. Sent only beside it, `pools.txt` is zero bytes -- the "did it return
+  # nothing, or never run" question this collector exists to answer, and the shape
+  # the object reader argues against for exactly the same reason.
+  [ -s "$tmp/out/pools.txt" ] || {
+    echo "FAIL: a refused listing was left as a zero-byte file"; false; }
+  grep -q 'container not found' "$tmp/out/pools.txt"
+
+  # And the WHOLE message survives, not its last line. `kubectl exec` appends
+  # `command terminated with exit code N` after whatever the remote command said,
+  # so on this path the last line is the one line that never carries the cause --
+  # the opposite of the `kubectl get` klog preamble this file quotes tail -n 1 for.
+  STUB_EXEC_MODE=linstor PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/res.txt" kubectl exec -n ns deploy/c -- linstor r l
+  grep -q 'unable to connect to linstor' "$tmp/out/COLLECTION-FAILED.txt" || {
+    echo "FAIL: only kubectl's own trailer survived; the cause was dropped"
+    grep 'res.txt' -A3 "$tmp/out/COLLECTION-FAILED.txt"
+    false
+  }
+  grep -q 'unable to connect to linstor' "$tmp/out/res.txt"
+
+  # The archive sentence belongs only to the two reads that stream one. A cut-off
+  # .txt that carried it would be told about a mechanism its read never went
+  # through -- the same fault as naming a timeout that did not fire.
+  STUB_EXEC_MODE=cut PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/idx.txt" kubectl exec -n ns deploy/c -- linstor error-reports list
+  if grep -q 'idx.txt' "$tmp/out/COLLECTION-FAILED.txt" &&
+     grep -A2 'idx.txt' "$tmp/out/COLLECTION-FAILED.txt" | grep -q 'EITHER beside it'; then
+    echo "FAIL: a cut-off listing was described as an archive"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "both readers mark the same file type in the same greppable form" {
+  # Nothing held this and the two readers had drifted: the object reader wrote
+  # `# [cozyreport]` into a .txt and the exec reader wrote it bare. A triager greps
+  # `^# [cozyreport]` over the unpacked tarball, gets part of it, and has no way to
+  # know the rest exists.
+  #
+  # BOTH outcomes, because the first version of this test checked only the path
+  # where the command produced output -- and the three zero-output branches drifted
+  # underneath it, in the same commit that stated the rule. Zero output is the
+  # ticket's own case: a wedged controller killed before it writes a byte.
+  tmp=$(mktemp -d)
+  exec_stub_dir "$tmp"
+  printf '#!/bin/sh\nprintf "row one\\nrow tw"\nexit 1\n' > "$tmp/objstub"
+  chmod +x "$tmp/objstub"
+
+  STUB_EXEC_MODE=cut PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/exec-partial.txt" kubectl exec -n ns deploy/c -- linstor n l
+  STUB_EXEC_MODE=silentcut PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/exec-empty.txt" kubectl exec -n ns deploy/c -- linstor n l
+  COZYREPORT_BOUND="" cozyreport_read_object "$tmp/out/object-partial.txt" "$tmp/objstub"
+
+  for f in exec-partial.txt exec-empty.txt object-partial.txt; do
+    [ -s "$tmp/out/$f" ] || { echo "FAIL: $f is empty"; false; }
+    grep -q '^# \[cozyreport\]' "$tmp/out/$f" || {
+      echo "FAIL: $f does not carry the shared marker form"
+      tail -n 2 "$tmp/out/$f"
+      false
+    }
+  done
+  # And no `[cozyreport]` line anywhere in them escapes the form.
+  for f in exec-partial.txt exec-empty.txt object-partial.txt; do
+    if grep -q '^\[cozyreport\]' "$tmp/out/$f"; then
+      echo "FAIL: $f carries an unprefixed [cozyreport] line"
+      grep -n '^\[cozyreport\]' "$tmp/out/$f"
+      false
+    fi
+  done
+  rm -rf "$tmp"
+}
+
+@test "the satellite walk points the selector at its own directory" {
+  # The behaviour is parameterised and the parameterisation is tested -- but the
+  # CALL SITE that sets it was held by nothing: deleting the assignment left every
+  # test green while satellite notes went back to the shared kubernetes file. That
+  # is the gap two other guards in this file exist for, and neither can see this
+  # one, because what is missing is a variable rather than a function.
+  body=$(fold_source "$SCRIPT" | awk '/^  DIR=\$REPORT_DIR\/linstor\/error-reports$/,/^  rmdir /')
+  [ -n "$body" ] || { echo "FAIL: could not locate the satellite walk"; false; }
+  printf '%s\n' "$body" | grep -q '^  COZYREPORT_SELECT_NOTE_DIR=\$DIR$' || {
+    echo "FAIL: the satellite walk does not point the selector at its own directory"
+    printf '%s\n' "$body" | head -5
+    false
+  }
+  printf '%s\n' "$body" | grep -q '^  COZYREPORT_SELECT_NOTE_DIR=""$' || {
+    echo "FAIL: the satellite walk leaves the note directory set for the next caller"
+    false
+  }
+}
+
+@test "a table that died part way through says so in the table itself" {
+  # Not every wedged controller produces 124. One that streams three rows and then
+  # exits 1 leaves a file that reads as a complete three-node listing, and the note
+  # a directory up is the walk a triager does not make -- the same argument the
+  # timeout branch already acts on, and the same one the object reader acts on for
+  # this exact shape.
+  tmp=$(mktemp -d)
+  exec_stub_dir "$tmp"
+
+  STUB_EXEC_MODE=partialfail PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/nodes.txt" kubectl exec -n ns deploy/c -- linstor n l
+
+  grep -q 'srv2 | Ye' "$tmp/out/nodes.txt"
+  grep -q '^# \[cozyreport\] TRUNCATED' "$tmp/out/nodes.txt" || {
+    echo "FAIL: a partial table that failed on its own terms carries no marker, or not in the shared form"
+    cat "$tmp/out/nodes.txt"
+    false
+  }
+  # And it does not borrow the timeout branch's wording, which names a clock that
+  # did not fire.
+  if grep -q 'killed at exit' "$tmp/out/nodes.txt"; then
+    echo "FAIL: a non-timeout failure is described as a kill"; false; fi
+  rm -rf "$tmp"
+}
+
+@test "a table that got nothing still says why instead of shipping empty" {
+  # The sharpest case in the ticket: a wedged controller holds the stream open and
+  # the read is killed before the command writes a byte, so there is no stdout to
+  # mark and no stderr to copy. Left alone, `linstor/nodes.txt` ships at zero
+  # length and reads as a cluster with no nodes -- and unlike the two archive
+  # reads, these four have no call-site emptiness check to remove it.
+  tmp=$(mktemp -d)
+  exec_stub_dir "$tmp"
+
+  STUB_EXEC_MODE=silentcut PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/nodes.txt" kubectl exec -n ns deploy/c -- linstor n l
+
+  [ -s "$tmp/out/nodes.txt" ] || {
+    echo "FAIL: a killed table shipped as a zero-byte file"; false; }
+  grep -q 'killed at exit 124 before the command inside the pod wrote anything' "$tmp/out/nodes.txt"
+
+  # And it must say what the emptiness is ABOUT. "This file is empty" is a fact
+  # about the file; without the contrast a reader supplies the other subject and
+  # concludes the command found nothing.
+  grep -q 'not because the command' "$tmp/out/nodes.txt" || {
+    echo "FAIL: the placeholder does not separate an empty file from an empty result"
+    cat "$tmp/out/nodes.txt"
+    false
+  }
+  rm -rf "$tmp"
+}
+
+@test "an exec read with nowhere to write stderr does not claim it was silent" {
+  # `mktemp` fails on a machine with no writable temp dir, so stderr goes to
+  # /dev/null and the reader cannot know whether the command spoke. Every other
+  # reader in this file carries that distinction; this one did not, and the merge
+  # base put the message in the file unconditionally through `2>&1`, so losing it
+  # here is a narrow regression rather than a gap.
+  tmp=$(mktemp -d)
+  exec_stub_dir "$tmp"
+  ro="$tmp/readonly"; mkdir -p "$ro"; chmod 500 "$ro"
+
+  STUB_EXEC_MODE=refused TMPDIR="$ro" PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/pools.txt" kubectl exec -n ns deploy/c -- linstor sp l
+
+  chmod 700 "$ro"
+  [ -s "$tmp/out/pools.txt" ] || {
+    echo "FAIL: the read left nothing at all behind"; false; }
+  grep -q 'could not be captured' "$tmp/out/pools.txt" || {
+    echo "FAIL: a lost message is reported as the command having said nothing"
+    cat "$tmp/out/pools.txt"
+    false
+  }
+  rm -rf "$tmp"
+}
+
+@test "a cut-off bundle note says both of the two things that can happen to it" {
+  # The note used to assert one outcome and was wrong both times it tried. A
+  # stream that got members across is kept and truncated; a stream killed before
+  # its first byte leaves zero bytes and the call site's emptiness check removes
+  # it. This path runs before that check, so it cannot know which -- and the
+  # wedged controller the ticket is about is the second case, the one the
+  # confident wording denied.
+  tmp=$(mktemp -d)
+  exec_stub_dir "$tmp"
+
+  STUB_EXEC_MODE=cut PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/bundle.tgz" kubectl exec -n ns deploy/c -- sh -c 'true'
+
+  note="$tmp/out/COLLECTION-FAILED.txt"
+  # The archive gets NO in-file marker: a line of prose inside a gzip stream is a
+  # file nothing can open, which is the whole reason this reader writes beside.
+  if tr -d '\0' < "$tmp/out/bundle.tgz" 2>/dev/null | grep -q 'cozyreport'; then
+    echo "FAIL: prose was appended into an archive"
+    false
+  fi
+  grep -q 'EITHER beside it and truncated' "$note" || {
+    echo "FAIL: the note does not offer the kept-and-truncated outcome"; cat "$note"; false; }
+  grep -q 'OR gone' "$note" || {
+    echo "FAIL: the note does not offer the removed-because-empty outcome"; cat "$note"; false; }
+  rm -rf "$tmp"
+}
+
+@test "a read that is not kubectl is not reported as kubectl in its own marker" {
+  # This reader served kubectl alone until the sweep gave it talosctl and the four
+  # host commands. Its markers named kubectl and called every non-YAML target an
+  # object, so a `df` that hit a stale mount produced "kubectl exited 1 ... not
+  # because the object ended" -- two false statements in one line, in an artifact
+  # whose whole premise is that its notes can be believed.
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/bin" "$tmp/out"
+  cat > "$tmp/bin/df" <<'STUB'
+#!/bin/sh
+printf 'Filesystem Size\n/dev/disk1 100G\n'
+echo 'df: cannot read table of mounted file systems' >&2
+exit 1
+STUB
+  chmod +x "$tmp/bin/df"
+
+  COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH" \
+    cozyreport_read_object "$tmp/out/df.txt" df -h
+
+  marker=$(tail -n 1 "$tmp/out/df.txt")
+  case "$marker" in
+    *kubectl*) echo "FAIL: a df read is reported as kubectl: $marker"; false ;;
+  esac
+  case "$marker" in
+    *"the object ended"*) echo "FAIL: a df listing is called an object: $marker"; false ;;
+  esac
+  printf '%s\n' "$marker" | grep -q 'df exited 1'
+  rm -rf "$tmp"
+}
+
+@test "a probe cut off is not left looking like a component that is absent" {
+  tmp=$(mktemp -d)
+  exec_stub_dir "$tmp"
+  REPORT_DIR="$tmp/report"
+  mkdir -p "$REPORT_DIR/kubernetes"
+
+  # The gate keeps its meaning: a probe that did not answer is not a probe that
+  # answered "no", so the caller still skips the module.
+  rc=0
+  STUB_EXEC_MODE=cut PATH="$tmp/bin:$PATH" \
+    cozyreport_probe "linstor" kubectl get deploy -n cozy-linstor linstor-controller || rc=$?
+  [ "$rc" -ne 0 ] || { echo "FAIL: a cut-off probe reported the module as present"; false; }
+
+  # And the skip is recorded, because the tree it leaves behind is the tree a
+  # cluster without LINSTOR leaves: no directory, no marker, nothing to read.
+  [ -f "$REPORT_DIR/kubernetes/COLLECTION-FAILED.txt" ] || {
+    echo "FAIL: a cut-off probe skipped its section in silence"; false; }
+  grep -q 'linstor' "$REPORT_DIR/kubernetes/COLLECTION-FAILED.txt"
+  grep -q 'NOT a statement that the component is absent' "$REPORT_DIR/kubernetes/COLLECTION-FAILED.txt"
+  rm -rf "$tmp"
+}
+
+@test "a probe answering plainly leaves nothing behind either way" {
+  tmp=$(mktemp -d)
+  exec_stub_dir "$tmp"
+  REPORT_DIR="$tmp/report"
+  mkdir -p "$REPORT_DIR/kubernetes"
+
+  PATH="$tmp/bin:$PATH" cozyreport_probe "kamaji" kubectl get deploy -n cozy-kamaji kamaji
+
+  # A component that IS installed writes no note, and neither does one that is
+  # not: "this cluster does not run that" is the cluster answering correctly, and
+  # a marker that fires on every install without KubeVirt or without LINSTOR is
+  # one a triager learns to skip -- which costs the runs where it names something
+  # real. Only the read that never came back is worth a line.
+  rc=0
+  STUB_EXEC_MODE=refused PATH="$tmp/bin:$PATH" \
+    cozyreport_probe "cert-manager" kubectl get crd certificates.cert-manager.io || rc=$?
+  [ "$rc" -ne 0 ] || { echo "FAIL: an absent component was reported as present"; false; }
+  if [ -f "$REPORT_DIR/kubernetes/COLLECTION-FAILED.txt" ]; then
+    echo "FAIL: an ordinary probe filed a collection failure"
+    cat "$REPORT_DIR/kubernetes/COLLECTION-FAILED.txt"
+    false
+  fi
   rm -rf "$tmp"
 }
 
@@ -458,41 +765,80 @@ STUB
   rm -rf "$tmp"
 }
 
-@test "the header names exactly the sections whose reads are bounded" {
-  # The frozen inventory below pins the sections that read WITHOUT a ceiling. The
-  # header also makes the opposite claim -- which sections ARE bounded -- and that
-  # half was pinned by nothing, so it went stale inside the same commit that
-  # bounded two more sections: the sentence still named the pod and VM/VMI
-  # sections while the code had added cozystack-apps and services.
+@test "no read in the report body is taken without a wall clock ceiling" {
+  # This replaces a guard that froze WHICH sections were bounded, and a second one
+  # that froze how many unbounded reads each of the others had. Both were lists,
+  # and a list is the wrong shape for this claim: the header named four sections
+  # while the file had ten, and the counts went stale inside the commit that was
+  # relying on them. The claim worth holding is universal -- no read here runs
+  # without a ceiling -- and a universal claim is checked by finding a
+  # counterexample, not by matching a table.
   #
-  # Derived from the code, not restated: a section is bounded when its body calls
-  # the bounded reader.
-  bounded=$(fold_source "$SCRIPT" | awk '
-    /^[[:space:]]*echo "Collecting / { sec=$0
-      sub(/^[[:space:]]*echo "Collecting /,"",sec); sub(/\.\.\.".*/,"",sec); sub(/".*/,"",sec) }
-    /cozyreport_read_object/ { if (sec != "") seen[sec] = 1 }
-    END { for (s in seen) print s }' | LC_ALL=C sort | tr '\n' '|')
+  # Scoped to the report BODY, below the library guard. Above it the same words
+  # appear in the sentences these readers write into the artifact, so a scan of
+  # the whole file answers "where is kubectl mentioned" rather than "what does
+  # this script run"; the readers themselves are asserted elsewhere, one by one.
+  guard=$(grep -n 'COZYREPORT_LIB:-' "$SCRIPT" | head -1 | cut -d: -f1)
+  [ -n "$guard" ] || { echo "FAIL: could not find the library guard"; false; }
+  body=$(awk -v g="$guard" 'NR>g' "$SCRIPT" | grep -v '^[[:space:]]*#' |
+    awk '{ line = line $0
+           if (line ~ /\\$/) { sub(/\\$/, " ", line); next }
+           print line; line = "" }
+         END { if (line != "") print line }')
 
-  # The pod section is bounded through cozyreport_collect_pod rather than by
-  # calling the reader inline, so it is named here rather than derived.
-  expected='cozystack apps|pods|services|virtualmachine instances|virtualmachines|'
-  if [ "$bounded" != "$expected" ]; then
-    echo "FAIL: the set of sections calling the bounded reader changed."
-    echo "  expected: $expected"
-    echo "  found:    $bounded"
+  # `command -V kubectl` is the dependency check, not a read: it never contacts a
+  # cluster and cannot hang on one.
+  #
+  # The four host commands are in the pattern too, anchored at command position so
+  # the words cannot match prose. They talk to no cluster, which is exactly why
+  # they were missed: `df` blocks forever on a stale mount and takes the tarball
+  # with it, and a scan that only knows about kubectl reports a clean sweep while
+  # the header's claim -- EVERY read -- is false about four lines of the file.
+  reads=$(printf '%s\n' "$body" |
+    grep -E '(kubectl|talosctl)[[:space:]]|^[[:space:]]*(df|free|ps|dmesg)[[:space:]]' |
+    grep -v 'command -V' || true)
+  # A scan that suddenly matches nothing is a broken scan, not a clean file, and
+  # it would report the strongest possible result while checking nothing at all.
+  n=$(printf '%s\n' "$reads" | grep -c . || true)
+  # A FLOOR against a scan that stopped matching, not a count of the reads: the
+  # body has around ninety, so a pattern that broke would fall far below this
+  # rather than just under it. It was set at 40 while the real figure was 94, which
+  # left room for a dozen reads to go invisible without the floor noticing -- the
+  # number is now close enough to the truth to be worth something, and deliberately
+  # not exact, because an exact one is a frozen count and this file has spent the
+  # whole change removing those.
+  [ "$n" -ge 80 ] || {
+    echo "FAIL: the scan found only $n reads in the report body, which is far fewer than this file has;"
+    echo "the pattern has stopped matching rather than the reads having gone away."
+    false
+  }
+
+  # Bounded means: through one of the four readers, through the collector that
+  # uses them, or through the bare wrapper at the sites where the reader cannot own
+  # the redirect -- a value captured into a variable, or a pipeline that transforms
+  # the output before anything lands. Described rather than counted: the header
+  # carried "three" of those while the file had five.
+  offenders=$(printf '%s\n' "$reads" |
+    grep -vE 'cozyreport_(read_object|read_exec|select_objects|probe|collect_pod|collect_broken_pods|collect_talos_node)|\$COZYREPORT_BOUND' || true)
+  if [ -n "$offenders" ]; then
+    echo "FAIL: a read in the report body runs with no wall-clock ceiling:"
+    printf '%s\n' "$offenders"
+    echo "The tarball is written on this script's last line, so a read that never"
+    echo "returns loses the whole artifact rather than truncating one file."
     false
   fi
 
-  # And every one of them, plus the pod section, is named in the header sentence.
-  header=$(sed -n '1,60p' "$SCRIPT" | sed -n '/^# Bounded, with their cutoffs recorded/,/^# *$/p')
-  [ -n "$header" ] || { echo "FAIL: the header no longer states which sections are bounded"; false; }
-  for name in "pod" "VM" "VMI" "cozystack-apps" "services"; do
-    printf '%s\n' "$header" | grep -q -- "$name" || {
-      echo "FAIL: the header does not name the $name section as bounded"
-      printf '%s\n' "$header"
-      false
-    }
-  done
+  # What this cannot see, said out loud rather than left to be found: a folded
+  # line carrying two commands satisfies it if either one is bounded. Nothing in
+  # this file is written that way, and the gates below hold the other spellings.
+  #
+  # And the header makes the same claim in words, beside the code that keeps it.
+  # A guard on the code alone leaves the sentence free to drift, which is the
+  # failure the list-shaped version of this test kept having.
+  head -n 60 "$SCRIPT" | grep -q '^# EVERY read below carries a wall-clock ceiling' || {
+    echo "FAIL: the header no longer claims that every read is bounded"
+    false
+  }
 }
 
 @test "the step that runs this collector has a ceiling of its own everywhere" {
@@ -803,54 +1149,25 @@ STUB
   # a read whose `>` sits one continuation down, or which writes to `${DIR}/x`
   # rather than `$DIR/x`, is the same unbounded read and was invisible to a
   # pattern that assumed one line and one form.
-  inventory=$(fold_source "$SCRIPT" | awk -v KRE="$KUBECTL_RE" '
-    /^[[:space:]]*echo "Collecting / { sec=$0; sub(/^[[:space:]]*echo "Collecting /,"",sec); sub(/\.\.\.".*/,"",sec); sub(/".*/,"",sec) }
-    # `kubectl` reached however POSIX allows: through `command` or `env`, and with
-    # any whitespace after the word. A pattern demanding the bare name and one
-    # space counts spellings rather than reads.
-    #
-    # Where this stops, said out loud rather than left to be discovered: an
-    # absolute path (`/usr/bin/kubectl`), a variable (`$KUBECTL`), `sudo`, or a
-    # shell function wrapping the name would all be invisible here. None of them
-    # appears in this file and none is meant to, so the boundary is enforced below
-    # instead of assumed -- a guard whose limit is written in a comment is a guard
-    # whose limit nobody checks.
-    $0 ~ ("^[[:space:]]+" KRE ".*>[[:space:]]*\"?\\$\\{?[A-Za-z_][A-Za-z_]*\\}?/") { n[sec]++ }
-    END { for (s in n) printf "%s=%d\n", s, n[s] }
-  ' | LC_ALL=C sort | tr '\n' ' ')
-  # helmreleases went 2 -> 3 and objectstorage 6 -> 9 when the scan started folding
-  # continuations. The code did not change: those four reads put their redirect on
-  # the next physical line and the old pattern could not see them, so the frozen
-  # figures had been an undercount for as long as the guard existed. A guard whose
-  # numbers describe its own blind spot rather than the file is worse than no
-  # guard, because it is quoted as evidence.
-  # linstor dropped off this list when its reads moved to cozyreport_read_exec.
-  # The two bundle reads were never ON it: their redirect sits below the `sh -c`
-  # script rather than on the kubectl line, and no amount of folding joins those,
-  # so the scan counted four of the six. Worth knowing before this figure is
-  # quoted as "how many unbounded reads a section has" -- it is how many of them
-  # this pattern can see.
-  expected='Cozystack information=3 Flux controller state=2 Flux sources=2 cert-manager state=8 helmreleases=3 kamaji resources=5 namespaces=2 nodes=2 objectstorage (COSI) state=9 packages=2 packagesources=2 pvcs=2 '
-
-  # The boundary itself. If kubectl ever starts being invoked by path, through a
-  # variable, or under sudo, the inventory above stops seeing those reads, and it
-  # should fail here rather than keep reporting a number that no longer describes
-  # the file.
+  # The per-section inventory of unbounded reads that used to sit here is gone,
+  # and its replacement is the guard above: every read in the body is bounded, so
+  # the counts it froze are all zero and a table of zeroes says less than the
+  # sentence does. It was also blind by construction -- it matched a redirect to
+  # `$VAR/`, which no gate, selector or command substitution has -- so its numbers
+  # were "how many of a section's unbounded reads this pattern can see", and they
+  # were quoted as though they were all of them.
+  #
+  # What stays here is the BOUNDARY every one of these scans rests on. They all
+  # look for the bare name, so kubectl invoked by path, through a variable, or
+  # under sudo is invisible to them -- and an invisible read is reported as no
+  # read at all, which is the strongest possible result and the wrong one. Fail
+  # here instead, in the same commit that introduces the spelling.
   offbeat=$(fold_source "$SCRIPT" \
     | grep -nE '(^|[[:space:]|(])(/[A-Za-z0-9_/.-]*kubectl|sudo[[:space:]]+kubectl|\$\{?KUBECTL)' || true)
   if [ -n "$offbeat" ]; then
-    echo "FAIL: kubectl is invoked in a form this inventory cannot see:"
+    echo "FAIL: kubectl is invoked in a form these scans cannot see:"
     printf '%s\n' "$offbeat"
-    echo "Either keep invoking it by bare name, or widen the scan above in the same commit."
-    false
-  fi
-
-  if [ "$inventory" != "$expected" ]; then
-    echo "FAIL: the inventory of unbounded per-object reads changed."
-    echo "  expected: $expected"
-    echo "  found:    $inventory"
-    echo "A new section must route its reads through cozyreport_read_object;"
-    echo "if you bounded an existing one, update this list in the same commit."
+    echo "Either keep invoking it by bare name, or widen the scans in the same commit."
     false
   fi
 }
@@ -1334,6 +1651,185 @@ tenant-a  obj-$i  <pending>"
   rm -rf "$tmp"
 }
 
+@test "a selector failing before its marker directory exists still records it" {
+  # Every note this function writes goes under $REPORT_DIR/kubernetes, and that
+  # directory is created part way down the report -- after the cozystack and
+  # cert-manager sections, both of which now select through here. A redirect into
+  # a directory that does not exist fails, `|| true` swallows the failure, and the
+  # marker is gone: the function whose whole job is that a failed selection cannot
+  # pass for an empty cluster would have failed silently in exactly the sections
+  # that run first.
+  #
+  # The directory is deliberately NOT created here, which is the whole test.
+  tmp=$(mktemp -d)
+  fake="$tmp/fakectl"; printf '#!/bin/sh\nexit 124\n' > "$fake"; chmod +x "$fake"
+
+  REPORT_DIR="$tmp" COZYREPORT_BOUND="" cozyreport_select_objects "cozystack configmaps" "$fake" >/dev/null
+
+  [ -f "$tmp/kubernetes/COLLECTION-FAILED.txt" ] || {
+    echo "FAIL: the marker was lost because its directory did not exist yet"
+    ls -R "$tmp"
+    false
+  }
+  grep -q 'cozystack configmaps' "$tmp/kubernetes/COLLECTION-FAILED.txt"
+  rm -rf "$tmp"
+}
+
+@test "an empty listing says so in the file instead of arriving as zero bytes" {
+  # `kubectl get` writes `No resources found` to STDERR and exits 0
+  # (kubernetes/kubectl#1667), so an empty list reaches the reader as "succeeded,
+  # wrote nothing, and said something". Routed beside the file, that leaves a
+  # zero-byte `orders.txt` -- the exact "returned nothing, or never ran" question
+  # this collector exists to answer -- plus a READ-WARNINGS.txt on every healthy
+  # run, because `orders` and `challenges` are empty on any install with no ACME
+  # issuer. Before these listings moved onto the bounded reader their `2>&1` put
+  # the sentence in the file, where a person finds it.
+  tmp=$(mktemp -d)
+  fake="$tmp/fakectl"
+  printf '#!/bin/sh\necho "No resources found in cozy-system namespace." >&2\nexit 0\n' > "$fake"
+  chmod +x "$fake"
+
+  COZYREPORT_BOUND="" cozyreport_read_object "$tmp/orders.txt" "$fake"
+
+  [ -s "$tmp/orders.txt" ] || { echo "FAIL: an empty listing arrived as a zero-byte file"; false; }
+  grep -q 'No resources found' "$tmp/orders.txt"
+  if [ -f "$tmp/READ-WARNINGS.txt" ]; then
+    echo "FAIL: an ordinary empty list filed a warnings marker on a healthy run"
+    cat "$tmp/READ-WARNINGS.txt"
+    false
+  fi
+
+  # The YAML side keeps the opposite rule, and for its own reason: an unprefixed
+  # kubectl line in a document a parser reads costs the whole document. Fixing the
+  # listing by loosening this would trade one unreadable file for another.
+  COZYREPORT_BOUND="" cozyreport_read_object "$tmp/pod.yaml" "$fake"
+  if grep -q '^No resources found' "$tmp/pod.yaml" 2>/dev/null; then
+    echo "FAIL: a bare kubectl line landed in a YAML document"
+    cat "$tmp/pod.yaml"
+    false
+  fi
+  grep -q 'No resources found' "$tmp/READ-WARNINGS.txt"
+  rm -rf "$tmp"
+}
+
+@test "a truncated controller log is marked the way a log is, not the way an object is" {
+  # The bounded reader used to write objects, describes and section listings only.
+  # It now also writes thirteen controller logs, and its marker was shaped for the
+  # first set: a `#` prefix, which is a YAML comment and nothing at all in a log,
+  # and the words "not because the object ended" about a file that is not an
+  # object. The platform's controllers log JSON per line, so the prefix is the
+  # part that matters -- `# [cozyreport] ...` is a line no reader of that file can
+  # take.
+  #
+  # The marker still goes INSIDE the log, which is the other half of this test.
+  # cozyreport_read_container_log appends its own TRUNCATED line into a partial
+  # log, so moving this one beside the file would have two readers in one tarball
+  # answering the same question two ways -- worse than either answer on its own.
+  tmp=$(mktemp -d)
+  exec_stub_dir "$tmp"
+
+  STUB_EXEC_MODE=cut PATH="$tmp/bin:$PATH" \
+    cozyreport_read_object "$tmp/out/controller.log" kubectl logs deploy/x --tail=2000
+
+  grep -q 'TRUNCATED' "$tmp/out/controller.log"
+  if grep -q '^# \[cozyreport\]' "$tmp/out/controller.log"; then
+    echo "FAIL: a log carries the YAML-comment marker, which is not a comment in a log"
+    tail -n 1 "$tmp/out/controller.log"
+    false
+  fi
+  if grep -q 'because the object ended' "$tmp/out/controller.log"; then
+    echo "FAIL: the marker on a log calls it an object"
+    tail -n 1 "$tmp/out/controller.log"
+    false
+  fi
+
+  # And the object side is unchanged: a YAML target still gets the prefix, or the
+  # fix would have traded one unparseable file for another.
+  STUB_EXEC_MODE=cut PATH="$tmp/bin:$PATH" \
+    cozyreport_read_object "$tmp/out/pod.yaml" kubectl get pod -o yaml
+  grep -q '^# \[cozyreport\] TRUNCATED' "$tmp/out/pod.yaml" || {
+    echo "FAIL: an object lost the comment prefix its parser needs"
+    tail -n 1 "$tmp/out/pod.yaml"
+    false
+  }
+  rm -rf "$tmp"
+}
+
+@test "an empty selection does not run the loop body once with an empty name" {
+  # `printf '%s\n' ""` emits a blank LINE, not nothing, so a selector that
+  # succeeded with no rows used to hand its caller one empty row. Every loop that
+  # existed before filtered with `NF &&` and dropped it; the loops that moved onto
+  # this selector filter on a named column instead -- `$2 != "Ready"` and friends
+  # -- and a blank line satisfies every one of them, because an absent field is
+  # not the string it is compared against.
+  #
+  # The cost is not a wasted iteration. The body runs with an empty name, reads
+  # `kubectl get node "" -o yaml`, and the refusal lands in the file the reader
+  # opens: a `nodes/node.yaml` holding "resource name may not be empty" reads as a
+  # failed read of a real node. Before the selector was wired in, kubectl printed
+  # nothing on an empty list and the loop simply never ran.
+  #
+  # Fixed once in the selector rather than seven times in its callers: every one
+  # of them routes through it, and the next loop to be added would need the guard
+  # again.
+  tmp=$(mktemp -d)
+  fake="$tmp/fakectl"; printf '#!/bin/sh\nexit 0\n' > "$fake"; chmod +x "$fake"
+
+  # The caller's exact shape, filter included, since the filter is half the defect.
+  ran=$(REPORT_DIR="$tmp" COZYREPORT_BOUND="" cozyreport_select_objects "nodes" "$fake" |
+    awk '$2 != "Ready"' |
+    while read NAME _; do printf 'RAN[%s]\n' "$NAME"; done)
+
+  [ -z "$ran" ] || {
+    echo "FAIL: an empty selection still ran the loop body: $ran"
+    false
+  }
+  rm -rf "$tmp"
+}
+
+@test "a selector note lands beside the walk it describes, not in a shared file" {
+  # Twelve callers read a Kubernetes listing and their notes belong under
+  # kubernetes/. The LINSTOR satellite walk does not: its bundles land under
+  # linstor/error-reports/, and a note there saying the pod list came back short is
+  # the difference between "three bundles because three satellites" and "three
+  # because the list was cut off". Filed in the shared kubernetes file it is in a
+  # directory that reader has no reason to open.
+  tmp=$(mktemp -d)
+  fake="$tmp/fakectl"; printf '#!/bin/sh\nexit 124\n' > "$fake"; chmod +x "$fake"
+
+  COZYREPORT_SELECT_NOTE_DIR="$tmp/linstor/error-reports" \
+    REPORT_DIR="$tmp" COZYREPORT_BOUND="" \
+    cozyreport_select_objects "linstor satellites" "$fake" >/dev/null
+
+  [ -f "$tmp/linstor/error-reports/COLLECTION-FAILED.txt" ] || {
+    echo "FAIL: the note did not land beside the walk"; ls -R "$tmp"; false; }
+  if [ -f "$tmp/kubernetes/COLLECTION-FAILED.txt" ]; then
+    echo "FAIL: the note also went to the shared kubernetes file"; false; fi
+
+  # And the default is unchanged for every other caller.
+  COZYREPORT_SELECT_NOTE_DIR="" REPORT_DIR="$tmp" COZYREPORT_BOUND="" \
+    cozyreport_select_objects "nodes" "$fake" >/dev/null
+  grep -q 'nodes' "$tmp/kubernetes/COLLECTION-FAILED.txt"
+  rm -rf "$tmp"
+}
+
+@test "a selector that succeeds leaves no marker directory behind it" {
+  # The other half: creating the directory on every call would put an empty
+  # kubernetes/ into reports that never needed one, and an empty directory in this
+  # tree is a thing a reader interprets.
+  tmp=$(mktemp -d)
+  fake="$tmp/fakectl"; printf '#!/bin/sh\nprintf "ns name\\n"\n' > "$fake"; chmod +x "$fake"
+
+  out=$(REPORT_DIR="$tmp" COZYREPORT_BOUND="" cozyreport_select_objects "nodes" "$fake")
+
+  [ "$out" = "ns name" ]
+  if [ -d "$tmp/kubernetes" ]; then
+    echo "FAIL: a clean selection created the failure-marker directory anyway"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
 @test "a refused selector carries kubectl's reason, not only its exit code" {
   tmp=$(mktemp -d); mkdir -p "$tmp/kubernetes"
   fake="$tmp/fakectl"
@@ -1640,7 +2136,9 @@ metadata:" \
   # by a different route. The reason rides on the marker line, not in the body,
   # because the body is what gets parsed.
   head -n 1 "$tmp/pod.yaml" | grep -q '^apiVersion:'
-  grep -q '^# \[cozyreport\] TRUNCATED.*kubectl exited 1 part way through' "$tmp/pod.yaml"
+  # Not anchored on the tool's name: the marker names whatever was run, which a
+  # test of its own pins. What matters here is that a partial object says so.
+  grep -q '^# \[cozyreport\] TRUNCATED.*exited 1 part way through' "$tmp/pod.yaml"
   grep -q 'unexpected EOF' "$tmp/pod.yaml"
   rm -rf "$tmp"
 }
@@ -1658,7 +2156,7 @@ metadata:" \
     cozyreport_read_object "$tmp/pod.yaml" "$tmp/fakectl"
 
   [ -s "$tmp/pod.yaml" ] || { echo "FAIL: the file is empty and explains nothing"; false; }
-  grep -q '^# \[cozyreport\] kubectl exited 143' "$tmp/pod.yaml"
+  grep -q '^# \[cozyreport\] [a-z]* *exited 143' "$tmp/pod.yaml"
   rm -rf "$tmp"
 }
 
