@@ -299,7 +299,7 @@ $(printf '%s\n' "$body" | grep -oE 'COZY_[A-Z_]+' || true)"
   done
 }
 
-@test "no bounded read is an exec, which would carry a foreign exit status" {
+@test "an exec is bounded through its own reader and classified by neither" {
   # The cut-off classification rests on 124 meaning the deadline expired. That
   # holds only because `timeout` passes a command's own status through and no
   # command given to the wrapper returns 124: `get`, `logs` and `describe` do not.
@@ -308,22 +308,154 @@ $(printf '%s\n' "$body" | grep -oE 'COZY_[A-Z_]+' || true)"
   # timeout" -- a sentence about the report's machine describing something that
   # happened inside a pod.
   #
-  # Matched on the argv the wrapper is handed, not on the file as a whole: the
-  # linstor module runs several `kubectl exec` calls and they are deliberately
-  # unbounded, so a file-wide grep would answer a different question.
-  # Line continuations are folded first. Both forms below routinely put the argv on
-  # the next physical line, so matching per line asks whether the word `exec`
+  # Three assertions, because the earlier one-line form was satisfied by leaving
+  # every exec unbounded, and that is the state this file was in: the sharpest
+  # reads in it -- a shell inside a pod, streaming a tarball -- had no ceiling of
+  # any kind, and the guard read as though that were the safe arrangement.
+  # Bounding them without the middle assertion is worse than leaving them alone,
+  # because a 124 would then be classified as this script's own deadline.
+  #
+  # Line continuations are folded first. Every form below routinely puts the argv
+  # on the next physical line, so matching per line asks whether the word `exec`
   # shares a line with the call rather than whether it is in its arguments -- and
   # passes while the exec sits one line down, which is where it would actually be.
   code=$(fold_source "$SCRIPT")
 
+  # 1. No exec reaches the readers whose 124 means "our deadline fired".
   bounded=$(printf '%s\n' "$code" | grep -E '\$COZYREPORT_BOUND[[:space:]]|cozyreport_read_object[[:space:]]' || true)
   [ -n "$bounded" ] || { echo "FAIL: found no bounded reads at all"; false; }
-  if printf '%s\n' "$bounded" | grep -q 'kubectl exec'; then
+  if printf '%s\n' "$bounded" | grep -qE "[[:space:]]exec[[:space:]]"; then
     echo "FAIL: a bounded read is an exec, whose exit status is the remote command's"
-    printf '%s\n' "$bounded" | grep 'kubectl exec'
+    printf '%s\n' "$bounded" | grep -E "[[:space:]]exec[[:space:]]"
     false
   fi
+
+  # 2. And every exec IS bounded, through the reader written for one. Matched on
+  # the verb as a field rather than on the string `kubectl exec`: half of these
+  # calls spell it `kubectl -n cozy-linstor exec`, which that string never sees,
+  # and a guard blind to half its subject reports a clean sweep of the other half.
+  #
+  # The reader's own body is cut out first. It is the one place in this file
+  # whose subject IS the exec -- in its code and in the sentence it writes into
+  # the report -- so scanning it answers "where is an exec mentioned" while
+  # reading as "which reads are execs", and every future edit to that sentence
+  # fails this guard for a reason unrelated to it. Its boundedness is asserted
+  # on its own terms below instead of inferred from the scan.
+  sites=$(printf '%s\n' "$code" |
+    awk '/^cozyreport_read_exec\(\) \{/ {inb=1} !inb {print} inb && /^}$/ {inb=0}')
+  execs=$(printf '%s\n' "$sites" | grep -E "$KUBECTL_RE" | grep -E "[[:space:]]exec[[:space:]]" || true)
+  [ -n "$execs" ] || { echo "FAIL: found no exec reads at all, so this proves nothing"; false; }
+  unbounded=$(printf '%s\n' "$execs" | grep -v 'cozyreport_read_exec' || true)
+  if [ -n "$unbounded" ]; then
+    echo "FAIL: an exec read runs with no ceiling; a wedged pod holds it open forever"
+    printf '%s\n' "$unbounded"
+    false
+  fi
+
+  # 3. That reader states the ambiguity rather than resolving it. Reaching the
+  # shared describer from in there is the whole defect wearing a different call
+  # site: the sentence it returns names this script's timeout as the cause.
+  body=$(awk '/^cozyreport_read_exec\(\) \{/ {inb=1} inb {print} inb && /^}$/ {exit}' "$SCRIPT" |
+    grep -Ev '^[[:space:]]*#')
+  [ -n "$body" ] || { echo "FAIL: could not locate cozyreport_read_exec"; false; }
+  # Cutting its body out of the scan above costs the one assertion that scan
+  # would have made about it, so make that one here: the reader every exec now
+  # routes through has to be the thing that applies the ceiling.
+  printf '%s\n' "$body" | grep -q '\$COZYREPORT_BOUND' || {
+    echo "FAIL: the exec reader does not apply the wall-clock bound"
+    false
+  }
+  if printf '%s\n' "$body" | grep -q 'cozyreport_cutoff_desc'; then
+    echo "FAIL: the exec reader describes its cutoff with the helper written for reads whose 124 is unambiguous"
+    false
+  fi
+}
+
+# Stub PATH for the exec reader: a `kubectl` whose behaviour is chosen by
+# STUB_EXEC_MODE and a `timeout` that runs its command rather than timing it, so
+# the assertions do not depend on the host having GNU coreutils.
+exec_stub_dir() {
+  _sd=$1
+  mkdir -p "$_sd/bin" "$_sd/out"
+  cat > "$_sd/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "${STUB_EXEC_MODE:-}" in
+  # Killed mid-stream: the last line has no terminating newline, which is what a
+  # stream cut short actually leaves behind.
+  cut)     printf 'Node | ONLINE\nsrv1 | partial ro'; exit 124 ;;
+  refused) echo 'error: unable to upgrade connection: container not found' >&2; exit 1 ;;
+  *)       echo 'Defaulted container "linstor-controller" out of: linstor-controller, init' >&2
+           printf 'Node | ONLINE\nsrv1 | Yes\n' ;;
+esac
+STUB
+  chmod +x "$_sd/bin/kubectl"
+  cat > "$_sd/bin/timeout" <<'STUB'
+#!/bin/sh
+[ "$1" = "-k" ] && shift 2
+shift
+exec "$@"
+STUB
+  chmod +x "$_sd/bin/timeout"
+  COZYREPORT_BOUND="timeout -k 5 $COZYREPORT_READ_TIMEOUT"
+}
+
+@test "an exec cut off short says what its status cannot tell apart" {
+  tmp=$(mktemp -d)
+  exec_stub_dir "$tmp"
+
+  STUB_EXEC_MODE=cut PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/nodes.txt" kubectl exec -n ns deploy/c -- linstor n l
+
+  # The partial output is kept, never discarded: it is the only copy of what the
+  # read managed to get out of the pod.
+  grep -q 'partial ro' "$tmp/out/nodes.txt"
+  [ -f "$tmp/out/COLLECTION-FAILED.txt" ] || {
+    echo "FAIL: a cut-off exec left no note at all"; false; }
+  grep -q 'nodes.txt' "$tmp/out/COLLECTION-FAILED.txt"
+  grep -q 'passes the remote command' "$tmp/out/COLLECTION-FAILED.txt"
+  # And it does NOT borrow the sentence written for reads whose 124 is this
+  # script's own clock. That sentence is the false claim this path exists to
+  # avoid, so its absence is the assertion, not a nicety.
+  if grep -q "its own ${COZYREPORT_READ_TIMEOUT}s timeout" "$tmp/out/COLLECTION-FAILED.txt"; then
+    echo "FAIL: the note names a mechanism the status does not establish"
+    cat "$tmp/out/COLLECTION-FAILED.txt"
+    false
+  fi
+
+  # A refusal is a different fact and gets a different sentence. Pasting the
+  # ambiguity onto every failure would make the wording noise a reader skips,
+  # which costs exactly the case it was written for.
+  STUB_EXEC_MODE=refused PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/pools.txt" kubectl exec -n ns deploy/c -- linstor sp l
+  grep -q 'container not found' "$tmp/out/COLLECTION-FAILED.txt"
+  [ "$(grep -c 'passes the remote command' "$tmp/out/COLLECTION-FAILED.txt")" -eq 1 ]
+  rm -rf "$tmp"
+}
+
+@test "an exec that finished leaves no failure note and no prose in its output" {
+  tmp=$(mktemp -d)
+  exec_stub_dir "$tmp"
+
+  PATH="$tmp/bin:$PATH" \
+    cozyreport_read_exec "$tmp/out/nodes.txt" kubectl exec -n ns deploy/c -- linstor n l
+
+  grep -q 'srv1 | Yes' "$tmp/out/nodes.txt"
+  if [ -f "$tmp/out/COLLECTION-FAILED.txt" ]; then
+    echo "FAIL: a read that finished was filed as a failure"
+    cat "$tmp/out/COLLECTION-FAILED.txt"
+    false
+  fi
+  # kubectl announces the container it defaulted to on every exec against a
+  # Deployment. Merged into the output it is a line at the top of a table a
+  # person reads, and in the two calls that stream a tarball it is a corrupt
+  # archive, so it goes beside the file the same way a warning on any other
+  # successful read does.
+  if grep -q 'Defaulted container' "$tmp/out/nodes.txt"; then
+    echo "FAIL: kubectl's own line was merged into the output it describes"
+    false
+  fi
+  grep -q 'Defaulted container' "$tmp/out/READ-WARNINGS.txt"
+  rm -rf "$tmp"
 }
 
 @test "the header names exactly the sections whose reads are bounded" {
@@ -692,7 +824,13 @@ $(printf '%s\n' "$body" | grep -oE 'COZY_[A-Z_]+' || true)"
   # figures had been an undercount for as long as the guard existed. A guard whose
   # numbers describe its own blind spot rather than the file is worse than no
   # guard, because it is quoted as evidence.
-  expected='Cozystack information=3 Flux controller state=2 Flux sources=2 cert-manager state=8 helmreleases=3 kamaji resources=5 linstor resources=4 namespaces=2 nodes=2 objectstorage (COSI) state=9 packages=2 packagesources=2 pvcs=2 '
+  # linstor dropped off this list when its reads moved to cozyreport_read_exec.
+  # The two bundle reads were never ON it: their redirect sits below the `sh -c`
+  # script rather than on the kubectl line, and no amount of folding joins those,
+  # so the scan counted four of the six. Worth knowing before this figure is
+  # quoted as "how many unbounded reads a section has" -- it is how many of them
+  # this pattern can see.
+  expected='Cozystack information=3 Flux controller state=2 Flux sources=2 cert-manager state=8 helmreleases=3 kamaji resources=5 namespaces=2 nodes=2 objectstorage (COSI) state=9 packages=2 packagesources=2 pvcs=2 '
 
   # The boundary itself. If kubectl ever starts being invoked by path, through a
   # variable, or under sudo, the inventory above stops seeing those reads, and it

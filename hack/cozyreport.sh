@@ -27,10 +27,17 @@
 # the report.
 #
 # Bounded, with their cutoffs recorded: the not-Ready pod section, the VM and VMI
-# sections, the cozystack-apps listings and the services loop. Sections outside
-# that list read without a ceiling; both lists are frozen by tests, because a
-# sentence naming which sections are bounded drifts exactly as easily as the
-# count of the ones that are not.
+# sections, the cozystack-apps listings, the services loop, and the LINSTOR reads
+# that run a command inside a pod. Sections outside that list read without a
+# ceiling; both lists are frozen by tests, because a sentence naming which
+# sections are bounded drifts exactly as easily as the count of the ones that are
+# not.
+#
+# The LINSTOR ones are bounded through their own reader and their cutoff is
+# recorded BESIDE the output rather than in it. Both differences come from the
+# same fact: `kubectl exec` returns the remote command's status, so a 124 there
+# does not say whose it is, and two of those six reads stream a tarball a line of
+# prose would corrupt.
 # The pod cap and collection budget apply to the pod section only. The fixed
 # --tail=2000 reads elsewhere in this file do not name their bound.
 #
@@ -63,12 +70,20 @@
 #                         per read but sits outside every budget window -- the three
 #                         object deadlines are set AFTER their own listing read.
 #                                                                 6 x 35 =  210s
+#   LINSTOR EXEC READS  = the three listings, the error-report index, the
+#                         controller bundle, and ONE BUNDLE PER SATELLITE. Bounded
+#                         per read, in no budget window, and the only reads here
+#                         whose duration is a workload's rather than the
+#                         apiserver's. Written with its n rather than with a
+#                         cluster's worth folded in, because this is the term that
+#                         grows with the storage nodes.
+#                                                          (5 + n) x 35 = 175 + 35n
 #                                                                          ------
-#                                                                           1880s
+#                                                                    2055s + 35n
 #
-# So roughly 31 minutes on defaults, and that is a FLOOR, not a bound: the sections
-# listed above as unbounded have no ceiling of any kind and are not in this sum, so
-# the real worst case is open-ended.
+# So roughly 36 minutes on a three-satellite sandbox, and that is a FLOOR, not a
+# bound: the sections listed above as unbounded have no ceiling of any kind and
+# are not in this sum, so the real worst case is open-ended.
 #
 # TWO ceilings sit outside it, and they fail differently. The job is capped at
 # `timeout-minutes: 180`, and reaching that cancels every step still to come --
@@ -133,8 +148,11 @@ fi
 # status through, so a command that itself exits 124 is indistinguishable -- but
 # every command handed to this wrapper is a kubectl `get`, `logs` or `describe`,
 # and none of those returns 124. The one construct that would break that is
-# `kubectl exec`, which propagates the remote command's status; no bounded read is
-# an exec, and a test holds that. 137 is 128+SIGKILL,
+# `kubectl exec`, which propagates the remote command's status. Six bounded reads
+# ARE execs, so the invariant is narrower than "no bounded read is an exec": none
+# of them is described by THIS helper. They go through cozyreport_read_exec, which
+# states the ambiguity rather than resolving it and never calls in here, and a test
+# holds both halves. 137 is 128+SIGKILL,
 # which our own `-k` grace produces and so does anything else that SIGKILLs the
 # read -- the OOM killer on a loaded runner, a teardown that signals the process
 # group. Both belong in the cut-off branch, since either way the file ends before
@@ -567,6 +585,88 @@ cozyreport_read_object() {
         "# [cozyreport] kubectl exited $_cro_rc without a message and wrote nothing"
     fi
   fi
+  return 0
+}
+
+# cozyreport_read_exec <output-file> <kubectl-exec-args...>
+#
+# One bounded read whose command runs INSIDE a pod. Everything above reads the
+# apiserver; these read a workload, so their duration is set by whatever is
+# happening in the container rather than by how fast the apiserver answers, and a
+# wedged pod holds the stream open with nothing on either end to close it.
+#
+# Kept apart from cozyreport_read_object for one reason, and it is the reason the
+# comment on cozyreport_cutoff_desc already gives: `kubectl exec` passes the
+# REMOTE command's exit status through. A 124 here is either this script's
+# deadline expiring or a command that itself exited 124, and the status does not
+# tell them apart -- so describing it as "its own 30s timeout", which is what
+# that helper does and is correct for every `get`, `logs` and `describe`, would
+# state a mechanism about the machine writing the report for something that may
+# have happened inside a pod. This path states the ambiguity instead of resolving
+# it, and never reaches that helper; a test holds both halves.
+#
+# The note goes BESIDE the output, never into it, and kubectl's own message goes
+# with it. Two of the calls here stream a gzipped tarball, and a line of prose
+# appended to one is an archive no reader can open -- one rule for every exec is
+# worth more than a rule that changes with the output format.
+#
+# A cut-off bundle is KEPT, and the note says so rather than guessing. The check
+# at those two call sites asks whether the archive lists a first member, which a
+# truncated gzip does: `tar -tzf` walks the headers that survived the cut, prints
+# them, and only then fails. Measured on a 1.8MB bundle cut to a third -- three
+# members listed. And a cut-off bundle is by definition one whose stream ran the
+# full 30s, so it has completed members; kept is the ordinary outcome and not the
+# exception. That is the right outcome -- a partial capture is the only copy of
+# something already gone from the satellite -- but it makes "probably not there"
+# the wrong sentence to write beside it.
+cozyreport_read_exec() {
+  _cre_file=$1
+  shift
+  _cre_err=$(mktemp "${TMPDIR:-/tmp}/cozyreport-exec.XXXXXX" 2>/dev/null) || _cre_err=""
+  # Status taken in an explicit `else`, for the reason the readers above spell
+  # out: a compound `if` whose condition fails and which has no else leaves `$?`
+  # at 0, so reading it after `fi` reports a clean exit for every failure.
+  # shellcheck disable=SC2086  # empty COZYREPORT_BOUND must vanish, not become ""
+  if $COZYREPORT_BOUND "$@" > "$_cre_file" 2>"${_cre_err:-/dev/null}"; then
+    _cre_rc=0
+  else
+    _cre_rc=$?
+  fi
+  _cre_said=""
+  if [ -n "$_cre_err" ] && [ -s "$_cre_err" ]; then
+    _cre_said=$(tail -n 1 "$_cre_err" | cut -c1-200)
+  fi
+  # The same guard cozyreport_select_objects and cozyreport_probe carry, for the
+  # same failure: a note appended into a directory that does not exist fails, the
+  # `|| true` swallows it, and the marker is gone. Both call sites create the
+  # directory today, so this is defence rather than a fix -- but two of the three
+  # readers here guard it and the third having to be checked by hand is how the
+  # next call site loses its note.
+  mkdir -p "$(dirname "$_cre_file")" 2>/dev/null || true
+
+  # printf, not echo: the remote command's text is untrusted and dash's echo
+  # expands backslash escapes, so a message carrying one could forge a line in a
+  # file a triager reads as fact.
+  if cozyreport_timed_out "$_cre_rc"; then
+    printf '%s\n' "[cozyreport] $(basename "$_cre_file"): this read runs a command inside a pod and ended at exit $_cre_rc, so whatever it produced stops where the stream stopped and not where the command's output did. For the two reads here that stream an archive that means the file beside this note is a TRUNCATED archive rather than an absent one: it lists and extracts the members that made it across and then fails part way, so treat a short member list as this cut-off and not as a satellite with few reports. What $_cre_rc means here is genuinely open: kubectl exec passes the remote command's own status through, so it is either the ${COZYREPORT_READ_TIMEOUT}s bound on this read firing or the command itself exiting $_cre_rc, and nothing in the status separates the two${_cre_said:+. It also said: $_cre_said}" \
+      >> "$(dirname "$_cre_file")/COLLECTION-FAILED.txt" || true
+  elif [ "$_cre_rc" -ne 0 ]; then
+    printf '%s\n' "[cozyreport] $(basename "$_cre_file"): the read exited $_cre_rc, so its output holds only what was streamed before that${_cre_said:+; it said: $_cre_said}" \
+      >> "$(dirname "$_cre_file")/COLLECTION-FAILED.txt" || true
+  elif [ -n "$_cre_said" ]; then
+    # Succeeded and still wrote to stderr -- `kubectl exec` on a Deployment with
+    # one container announces which container it defaulted to, on every call.
+    # Beside the output rather than merged into it, the same rule the object
+    # reader follows: one of these outputs is a tarball and the others are tables
+    # a person reads, and a kubectl line at the top of either is noise in the
+    # first case and a corrupt file in the second. Copied whole, since a read
+    # that succeeded has no failure preamble to pick a line out of.
+    {
+      printf '%s\n' "[cozyreport] $(basename "$_cre_file"): the read succeeded and also said:"
+      cat "$_cre_err"
+    } >> "$(dirname "$_cre_file")/READ-WARNINGS.txt" || true
+  fi
+  [ -z "$_cre_err" ] || rm -f "$_cre_err"
   return 0
 }
 
@@ -1573,22 +1673,36 @@ if kubectl get deploy -n cozy-linstor linstor-controller >/dev/null 2>&1; then
   echo "Collecting linstor resources..."
   DIR=$REPORT_DIR/linstor
   mkdir -p $DIR
-  kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor --no-color n l > $DIR/nodes.txt 2>&1
-  kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor --no-color sp l > $DIR/storage-pools.txt 2>&1
-  kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor --no-color r l > $DIR/resources.txt 2>&1
+  # `--container` named explicitly, like the two bundle reads below. Without it
+  # kubectl announces which container it defaulted to, on stderr, on every call --
+  # so a healthy cluster would leave a READ-WARNINGS.txt here on every single run,
+  # and this file argues at length that a marker firing on healthy installs is one
+  # a reader learns to skip. Removed at the source rather than filtered afterwards.
+  cozyreport_read_exec "$DIR/nodes.txt" \
+    kubectl exec -n cozy-linstor deploy/linstor-controller --container=linstor-controller \
+    -- linstor --no-color n l
+  cozyreport_read_exec "$DIR/storage-pools.txt" \
+    kubectl exec -n cozy-linstor deploy/linstor-controller --container=linstor-controller \
+    -- linstor --no-color sp l
+  cozyreport_read_exec "$DIR/resources.txt" \
+    kubectl exec -n cozy-linstor deploy/linstor-controller --container=linstor-controller \
+    -- linstor --no-color r l
   # Cluster-wide ErrorReport index (IDs + timestamps + node + category)
   # for fast triage before diving into the per-satellite bundles below.
-  kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor --no-color error-reports list > $DIR/error-reports-index.txt 2>&1 || true
+  cozyreport_read_exec "$DIR/error-reports-index.txt" \
+    kubectl exec -n cozy-linstor deploy/linstor-controller --container=linstor-controller \
+    -- linstor --no-color error-reports list
 
   # Controller-side ErrorReports live on the controller pod at
   # /var/log/linstor-controller/ and cover autoplace decisions, RPC
   # errors, and controller-JVM exceptions the index above only
   # references by ID. Bundle them the same way as the satellite ones
   # below so both ends of the storage stack are recoverable offline.
-  kubectl -n cozy-linstor exec deploy/linstor-controller --container=linstor-controller -- sh -c '
+  cozyreport_read_exec "$DIR/controller-error-reports.tgz" \
+    kubectl -n cozy-linstor exec deploy/linstor-controller --container=linstor-controller -- sh -c '
     cd /var/log/linstor-controller 2>/dev/null || exit 0
     tar -czf - ErrorReport-*.log 2>/dev/null || true
-  ' > "$DIR/controller-error-reports.tgz" 2>/dev/null || true
+  '
   # Drop the bundle if empty. `tar -czf - <no-match>` produces a valid
   # 45-byte gzipped empty archive (extracts cleanly, `tar -tzf` exits
   # 0), so a plain readability check keeps that stub in the tree.
@@ -1621,10 +1735,11 @@ if kubectl get deploy -n cozy-linstor linstor-controller >/dev/null 2>&1; then
     # burst of retry-loop reports (dozens per incident) does not explode
     # the artefact tree, and a missing directory or empty set never
     # fails the whole cozyreport run.
-    kubectl -n cozy-linstor exec "$pod" --container=linstor-satellite -- sh -c '
+    cozyreport_read_exec "$DIR/$node.tgz" \
+      kubectl -n cozy-linstor exec "$pod" --container=linstor-satellite -- sh -c '
       cd /var/log/linstor-satellite 2>/dev/null || exit 0
       tar -czf - ErrorReport-*.log 2>/dev/null || true
-    ' > "$DIR/$node.tgz" 2>/dev/null || true
+    '
     # Drop the bundle if empty. `tar -czf - <no-match>` yields a valid
     # 45-byte gzipped empty archive that would otherwise slip past a
     # readability check. Require at least one member to keep it. A
