@@ -175,7 +175,19 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 	app, err := r.getMongoDBApp(ctx, j.Namespace, j.Spec.ApplicationRef.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("MongoDB application not found: %s/%s", j.Namespace, j.Spec.ApplicationRef.Name))
+			// A GitOps apply that lands the MongoDB app and the BackupJob in one
+			// commit can reconcile the BackupJob before the app CR is visible in
+			// the cache. Tolerate a not-yet-present app with the same bounded
+			// grace the psmdb-CR existence gate below uses, instead of failing
+			// terminally on a transient ordering race. StartedAt was persisted
+			// above, so the deadline clock is already running.
+			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+					"MongoDB application %s/%s not found within %s",
+					j.Namespace, j.Spec.ApplicationRef.Name, psmdbDefaultBackupDeadline))
+			}
+			return r.requeueMongoDBBackupWaiting(ctx, j, "MongoDBApplicationNotReady",
+				fmt.Sprintf("waiting for MongoDB application %s/%s to exist", j.Namespace, j.Spec.ApplicationRef.Name))
 		}
 		return ctrl.Result{}, err
 	}
@@ -310,6 +322,54 @@ func psmdbBackupPrecondition(cluster *psmdbtypes.PerconaServerMongoDB, storageNa
 		return fmt.Sprintf("spec.backup.storages does not declare storage %q", storageName)
 	}
 	return ""
+}
+
+// psmdbTargetCredentialsSecret returns the s3 credentialsSecret name the target
+// cluster declares for its backup storage, so a restore authenticates with the
+// TARGET's own credentials rather than the (possibly deleted) source's. It
+// prefers the storage whose name the source backup used, then the chart's
+// default storage, then — only when the cluster declares exactly one storage —
+// that sole storage. Returns "" when nothing is resolvable, in which case the
+// caller keeps the source reference. spec.backup.storages is decoded on demand
+// from runtime.RawExtension (the partial type keeps only the key set for the
+// precondition gate), so no upstream storage shape is mirrored here.
+func psmdbTargetCredentialsSecret(cluster *psmdbtypes.PerconaServerMongoDB, preferredStorage string) string {
+	storages := cluster.Spec.Backup.Storages
+	if len(storages) == 0 {
+		return ""
+	}
+	if preferredStorage != "" {
+		if cred := psmdbStorageS3CredentialsSecret(storages[preferredStorage]); cred != "" {
+			return cred
+		}
+	}
+	if cred := psmdbStorageS3CredentialsSecret(storages[psmdbDefaultStorageName]); cred != "" {
+		return cred
+	}
+	if len(storages) == 1 {
+		for _, raw := range storages {
+			return psmdbStorageS3CredentialsSecret(raw)
+		}
+	}
+	return ""
+}
+
+// psmdbStorageS3CredentialsSecret extracts .s3.credentialsSecret from one
+// psmdb spec.backup.storages entry. Returns "" for an empty/non-object entry,
+// a non-s3 storage, or an entry that names no secret.
+func psmdbStorageS3CredentialsSecret(raw runtime.RawExtension) string {
+	if len(raw.Raw) == 0 {
+		return ""
+	}
+	var st struct {
+		S3 struct {
+			CredentialsSecret string `json:"credentialsSecret"`
+		} `json:"s3"`
+	}
+	if err := json.Unmarshal(raw.Raw, &st); err != nil {
+		return ""
+	}
+	return st.S3.CredentialsSecret
 }
 
 // psmdbBackupDeadlineExceeded reports whether enough wall-clock time elapsed
@@ -518,6 +578,17 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 	// than failing — so a bad recoveryTime fails terminally below.
 	options, unknownKeys, err := parseMongoDBRestoreOptions(restoreJob.Spec.Options)
 	if err != nil {
+		// Falling back to defaults is safe for most malformed options, but not
+		// when the blob carries a recoveryTime key: silently degrading a PITR
+		// request to a plain snapshot restore is exactly the wrong-point restore
+		// pitrSpec fails terminally to prevent. spec.options is free-form
+		// runtime.RawExtension, so a non-string recoveryTime (e.g. {"recoveryTime":
+		// 20260805}) passes admission yet fails the typed decode here — fail
+		// terminally rather than restore to the snapshot and report Succeeded.
+		if restoreOptionsCarryRecoveryTimeKey(restoreJob.Spec.Options) {
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+				"restoreJob.spec.options carries a recoveryTime but is malformed (%v); refusing to fall back to a plain snapshot restore, which would silently ignore the requested point-in-time", err))
+		}
 		logger.Info("malformed restoreJob.spec.options; falling back to defaults", "error", err)
 		r.Recorder.Eventf(restoreJob, corev1.EventTypeWarning, "MalformedOptions",
 			"spec.options is not valid JSON; falling back to defaults: %v", err)
@@ -573,6 +644,27 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		}
 		return r.requeueMongoDBRestoreWaiting(ctx, restoreJob, "TargetPerconaServerMongoDBBackupsDisabled",
 			fmt.Sprintf("waiting for target psmdb.percona.com/PerconaServerMongoDB %s/%s to enable backups", target.Namespace, targetPSMDBName))
+	}
+
+	// Re-point the restore at the TARGET cluster's own S3 credentials. The
+	// backupSource carries the SOURCE cluster's credentialsSecret (read back from
+	// the source backup status / snapshot), which names the source release's
+	// -s3-creds Secret. That Secret is deleted together with the source app —
+	// exactly the disaster-recovery case backups exist for — so a restore into a
+	// fresh, differently-named target must not depend on it. The restore replays
+	// into the target, whose own -s3-creds Secret is guaranteed present
+	// (backup.enabled was gated just above) and grants access to the backup's
+	// bucket. The backupSource's bucket/prefix/endpoint still come from the
+	// source (that is where the archive lives); only the credential reference is
+	// swapped. Falls back to the source reference when the target declares no
+	// discoverable s3 credentials (in-place restore into the still-present source
+	// resolves to the same Secret, so this is a no-op there).
+	if source.S3 != nil {
+		if cred := psmdbTargetCredentialsSecret(targetCluster, source.StorageName); cred != "" && cred != source.S3.CredentialsSecret {
+			logger.Debug("re-pointing MongoDB restore credentials at target cluster storage",
+				"restorejob", restoreJob.Name, "from", source.S3.CredentialsSecret, "to", cred)
+			source.S3.CredentialsSecret = cred
+		}
 	}
 
 	mdbRestore, err := r.ensureMongoDBRestore(ctx, restoreJob, targetPSMDBName, source, pitr)
@@ -649,6 +741,7 @@ func (r *RestoreJobReconciler) resolveMongoDBBackupSource(ctx context.Context, b
 				return &psmdbtypes.BackupSource{
 					Type:        psmdbBackupTypeOrDefault(live.Status.Type),
 					Destination: live.Status.Destination,
+					StorageName: live.Status.StorageName,
 					S3:          live.Status.S3.DeepCopy(),
 				}, nil
 			}
@@ -678,6 +771,7 @@ func (r *RestoreJobReconciler) resolveMongoDBBackupSource(ctx context.Context, b
 		if snap.Type != "" {
 			src.Type = snap.Type
 		}
+		src.StorageName = snap.StorageName
 		src.S3 = snap.S3.DeepCopy()
 	}
 	return src, nil
@@ -909,6 +1003,25 @@ func parseMongoDBRestoreOptions(opts *runtime.RawExtension) (MongoDBRestoreOptio
 	// unknown key is present.
 	unknown := unknownJSONKeys(opts.Raw, mongodbKnownRestoreOptionKeys)
 	return out, unknown, nil
+}
+
+// restoreOptionsCarryRecoveryTimeKey reports whether spec.options parses as a
+// JSON object with a "recoveryTime" key present, regardless of that value's
+// type. The caller uses it to decide whether a typed-decode failure is
+// load-bearing (a malformed recoveryTime must fail terminally) or benign (a
+// malformed unrelated field can fall back to defaults). A blob that is not a
+// JSON object at all returns false — there is no recoveryTime to honour, so the
+// permissive fall-back applies.
+func restoreOptionsCarryRecoveryTimeKey(opts *runtime.RawExtension) bool {
+	if opts == nil || len(opts.Raw) == 0 {
+		return false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(opts.Raw, &obj); err != nil {
+		return false
+	}
+	_, ok := obj["recoveryTime"]
+	return ok
 }
 
 // unknownJSONKeys returns the top-level object keys in raw that are not in

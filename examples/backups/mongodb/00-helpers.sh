@@ -124,11 +124,15 @@ wait_hr_ready() {
 
 # Wait until the psmdb.percona.com/PerconaServerMongoDB CR reports state=ready
 # (the operator's own readiness signal — the rs0 members are up and initialised
-# and, when backup.enabled, the pbm agents are running).
+# and, when backup.enabled, the pbm agents are running). No fail-fast value: the
+# cluster state is recomputed every operator reconcile and can pass through
+# "error" transiently during replset init before it converges to "ready", so a
+# terminal-on-error gate would fail the whole run on one blip. Poll for the
+# positive value only, bounded by the timeout.
 wait_psmdb_ready() {
     local cr="$1" timeout="${2:-600}"
     wait_for_field perconaservermongodbs.psmdb.percona.com "$cr" \
-        '{.status.state}' ready "$NAMESPACE" "$timeout" error
+        '{.status.state}' ready "$NAMESPACE" "$timeout"
 }
 
 # Name of the first data-bearing pod of a PerconaServerMongoDB CR's rs0 replica

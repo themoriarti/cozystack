@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -109,6 +110,74 @@ func TestPsmdbBackupPrecondition(t *testing.T) {
 			t.Fatalf("expected no precondition message, got %q", msg)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Restore credentials re-pointed at the target cluster (DR after source delete)
+// ---------------------------------------------------------------------------
+
+// TestPsmdbTargetCredentialsSecret pins the fix for the disaster-recovery gap:
+// a restore into a differently-named target must authenticate with the TARGET
+// cluster's own S3 credentials, because the source release's -s3-creds Secret is
+// deleted together with the source app. The selector prefers the source's
+// storage name, then the chart default, then a sole storage.
+func TestPsmdbTargetCredentialsSecret(t *testing.T) {
+	s3Storage := func(secret string) runtime.RawExtension {
+		return runtime.RawExtension{Raw: []byte(fmt.Sprintf(`{"type":"s3","s3":{"credentialsSecret":%q}}`, secret))}
+	}
+	clusterWith := func(storages map[string]runtime.RawExtension) *psmdbtypes.PerconaServerMongoDB {
+		return &psmdbtypes.PerconaServerMongoDB{
+			Spec: psmdbtypes.PerconaServerMongoDBSpec{
+				Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{Storages: storages},
+			},
+		}
+	}
+	cases := []struct {
+		name      string
+		storages  map[string]runtime.RawExtension
+		preferred string
+		want      string
+	}{
+		{
+			name:      "preferred storage wins",
+			storages:  map[string]runtime.RawExtension{"s3-storage": s3Storage("target-creds"), "other": s3Storage("other-creds")},
+			preferred: "s3-storage",
+			want:      "target-creds",
+		},
+		{
+			name:      "falls back to chart default when preferred absent",
+			storages:  map[string]runtime.RawExtension{"s3-storage": s3Storage("target-creds")},
+			preferred: "nonexistent",
+			want:      "target-creds",
+		},
+		{
+			name:     "sole non-default storage is used",
+			storages: map[string]runtime.RawExtension{"custom": s3Storage("custom-creds")},
+			want:     "custom-creds",
+		},
+		{
+			name:     "ambiguous (multiple, none default, no preferred) yields empty",
+			storages: map[string]runtime.RawExtension{"a": s3Storage("a-creds"), "b": s3Storage("b-creds")},
+			want:     "",
+		},
+		{
+			name:     "no storages yields empty",
+			storages: nil,
+			want:     "",
+		},
+		{
+			name:     "non-s3 storage yields empty",
+			storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"azure","azure":{"container":"c"}}`)}},
+			want:     "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := psmdbTargetCredentialsSecret(clusterWith(tc.storages), tc.preferred); got != tc.want {
+				t.Errorf("psmdbTargetCredentialsSecret: got %q want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +406,32 @@ func TestParseMongoDBRestoreOptionsAndPITR(t *testing.T) {
 		o := MongoDBRestoreOptions{RestoreTimeoutSeconds: 120}
 		if o.effectiveRestoreDeadline().Seconds() != 120 {
 			t.Errorf("deadline: got %v want 120s", o.effectiveRestoreDeadline())
+		}
+	})
+	// A non-string recoveryTime (spec.options is free-form runtime.RawExtension,
+	// so {"recoveryTime": 20260805} passes admission) must be treated as a
+	// load-bearing decode failure: the caller fails the RestoreJob terminally
+	// rather than silently degrading the PITR request to a snapshot restore. The
+	// two conditions the caller ANDs are (a) the typed decode errors and (b) the
+	// recoveryTime key is present.
+	t.Run("non-string recoveryTime is a load-bearing decode failure (major-2 guard)", func(t *testing.T) {
+		opts := &runtime.RawExtension{Raw: []byte(`{"recoveryTime":20260805}`)}
+		if _, _, err := parseMongoDBRestoreOptions(opts); err == nil {
+			t.Fatal("expected a typed-decode error for a numeric recoveryTime")
+		}
+		if !restoreOptionsCarryRecoveryTimeKey(opts) {
+			t.Fatal("expected the recoveryTime key to be detected so the caller fails terminally")
+		}
+	})
+	t.Run("recoveryTime-key detection is scoped to object blobs carrying the key", func(t *testing.T) {
+		if restoreOptionsCarryRecoveryTimeKey(nil) {
+			t.Error("nil options must report no recoveryTime key")
+		}
+		if restoreOptionsCarryRecoveryTimeKey(&runtime.RawExtension{Raw: []byte(`{"restoreTimeoutSeconds":30}`)}) {
+			t.Error("a blob without recoveryTime must report no key (benign fall-back applies)")
+		}
+		if restoreOptionsCarryRecoveryTimeKey(&runtime.RawExtension{Raw: []byte(`"garbage`)}) {
+			t.Error("a non-object blob must report no key (no recoveryTime to honour)")
 		}
 	})
 }
