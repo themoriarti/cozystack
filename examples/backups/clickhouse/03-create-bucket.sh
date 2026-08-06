@@ -106,14 +106,28 @@ if [[ -n "$S3_CA_SECRET" ]]; then
 fi
 if [[ -n "$S3_CA_SECRET" ]]; then
     log_substep "Copying S3 CA ${S3_CA_NAMESPACE}/${S3_CA_SECRET}[${S3_CA_KEY}] -> ${CH_CA_SECRET_NAME}..."
+    # The destination name is predictable, so don't clobber a Secret this demo
+    # does not own. A get that succeeds returns the ownership label (empty if
+    # absent); a get that fails means the Secret is gone, which is fine.
+    if existing_owner=$(kubectl -n "$NAMESPACE" get secret "$CH_CA_SECRET_NAME" \
+            -o jsonpath="{.metadata.labels.${CH_CA_SECRET_LABEL_KEY//./\\.}}" 2>/dev/null); then
+        if [[ "$existing_owner" != "$CH_CA_SECRET_LABEL_VALUE" ]]; then
+            log_error "Secret ${NAMESPACE}/${CH_CA_SECRET_NAME} already exists and is not owned by this demo (missing ${CH_CA_SECRET_LABEL_KEY}=${CH_CA_SECRET_LABEL_VALUE}). Refusing to overwrite it; set CH_CA_SECRET_NAME to a free name."
+            exit 1
+        fi
+    fi
     # The dot in the default key has to be escaped for kubectl jsonpath.
     ca_pem=$(kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" \
         -o jsonpath="{.data.${S3_CA_KEY//./\\.}}" | base64 -d)
     [[ -n "$ca_pem" ]] || { log_error "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} has no ${S3_CA_KEY}"; exit 1; }
-    # apply (not create) so a stale copy from an earlier run is corrected.
+    # apply (not create) so a stale copy from an earlier run is corrected;
+    # kubectl label --local stamps the ownership label into the manifest.
     kubectl -n "$NAMESPACE" create secret generic "$CH_CA_SECRET_NAME" \
         --from-literal="ca.crt=${ca_pem}" \
-        --dry-run=client -o yaml | kubectl apply -f -
+        --dry-run=client -o yaml | \
+        kubectl label --local -f - "${CH_CA_SECRET_LABEL_KEY}=${CH_CA_SECRET_LABEL_VALUE}" \
+            --dry-run=client -o yaml | \
+        kubectl apply -f -
     CH_BACKUP_CA_SECRET="$CH_CA_SECRET_NAME"
 else
     log_warning "S3_CA_SECRET empty: leaving backup.endpointCA unset (assumes a publicly-trusted S3 endpoint)."

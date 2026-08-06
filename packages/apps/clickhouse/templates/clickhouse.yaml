@@ -307,41 +307,11 @@ spec:
                 - name: S3_SECRET_KEY
                   valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $secretKeyKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
 {{- if $endpointCAName }}
-                {{- /*
-                  SSL_CERT_DIR points clickhouse-backup at the mounted CA
-                  bundle so it can verify an S3 endpoint signed by a private
-                  CA — Cozystack's in-cluster SeaweedFS
-                  (seaweedfs-s3.<tenant>:8333) serves the self-signed
-                  "SeaweedFS CA", which no system trust store carries.
-
-                  SSL_CERT_DIR and NOT AWS_CA_BUNDLE, deliberately. Both are
-                  honoured by this image — the shipped
-                  altinity-clickhouse-backup:v1.6.0 is built FROM upstream
-                  altinity/clickhouse-backup:2.7.4 (see
-                  images/altinity-clickhouse-backup/Dockerfile), which is the
-                  binary the behaviour below was measured against — but they
-                  differ in one
-                  way that matters: Go reads SSL_CERT_DIR *in addition to*
-                  the default system bundle file, whereas AWS_CA_BUNDLE
-                  REPLACES the SDK's trust pool. Measured against a private
-                  CA and public AWS S3 in turn: with SSL_CERT_DIR both
-                  verify; with AWS_CA_BUNDLE the private endpoint verifies
-                  and public S3 fails `x509: certificate signed by unknown
-                  authority`. So AWS_CA_BUNDLE would silently break a
-                  release that also talks to a publicly-trusted endpoint.
-                  S3_DISABLE_CERT_VERIFICATION is the third option and is
-                  rejected on purpose: it drops verification entirely rather
-                  than trusting one more CA.
-
-                  /etc/ssl/certs is listed explicitly alongside our directory.
-                  Go would still read the default bundle FILE
-                  (/etc/ssl/certs/ca-certificates.crt) even if SSL_CERT_DIR
-                  named only our dir — that is what the measurement above
-                  showed — but that leaves the public-CA half of the contract
-                  resting on a file this image happens to ship. Naming the
-                  system directory costs nothing and survives a base-image
-                  bump that moves the bundle.
-                */}}
+                # Trust the mounted private-CA bundle for the S3 endpoint (see
+                # the `backup.endpointCA` field in values.yaml). SSL_CERT_DIR,
+                # not AWS_CA_BUNDLE: Go reads it in addition to the system store,
+                # so a private and a public endpoint both verify, whereas
+                # AWS_CA_BUNDLE replaces the trust pool and breaks public S3.
                 - name: SSL_CERT_DIR
                   value: /etc/ssl/cozy-s3-ca:/etc/ssl/certs
 {{- end }}
@@ -383,35 +353,11 @@ spec:
                 seccompProfile:
                   type: RuntimeDefault
 {{- if $endpointCAName }}
-          {{- /*
-            The CA bundle the sidecar's SSL_CERT_DIR points at. Projected
-            under the fixed filename ca.crt regardless of the key it occupies
-            in the Secret, because SSL_CERT_DIR reads whole directories and
-            the filename is what lands in the trust set.
-
-            Deliberately NOT `optional: true`, unlike the credential
-            secretKeyRefs above on the useSystemBucket path. The asymmetry is
-            intended and the two cases are not alike:
-
-              - credentials are projected by the platform AFTER the release
-                installs, so a strict ref would wedge every fresh
-                useSystemBucket release in CreateContainerConfigError until
-                the first BackupJob fired. Optional lets the Pod start and
-                surfaces the problem later, when a backup is actually run.
-              - this CA is named by the tenant, must already exist when they
-                name it, and is trust material. Optional would mount an empty
-                directory, the Pod would come up looking healthy, and the
-                first backup would fail deep inside clickhouse-backup with an
-                x509 error naming neither the Secret nor this chart.
-
-            So it fails closed: a missing Secret holds the Pod in
-            ContainerCreating with `MountVolume.SetUp failed ... secret not
-            found` on it, which names the exact missing object in
-            `kubectl describe pod`. Note the blast radius is the whole
-            ClickHouse Pod, not just the sidecar — that is the cost of the
-            legible failure, and the reason the field is opt-in and empty by
-            default.
-          */}}
+          # Private-CA bundle for the backup sidecar, projected as ca.crt for
+          # SSL_CERT_DIR above. Not optional on purpose: a missing Secret holds
+          # the whole ClickHouse Pod in ContainerCreating (naming the Secret in
+          # `kubectl describe`) rather than mounting an empty trust dir and
+          # failing later inside clickhouse-backup with an opaque x509 error.
           volumes:
             - name: backup-s3-ca
               secret:

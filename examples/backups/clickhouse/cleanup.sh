@@ -31,9 +31,15 @@ teardown_rc=0
 wait_deleted clickhouse "$CLICKHOUSE_RESTORE_NAME" 180 || teardown_rc=1
 wait_deleted clickhouse "$CLICKHOUSE_NAME" 180 || teardown_rc=1
 wait_deleted bucket "$BUCKET_NAME" 180 || teardown_rc=1
-# The S3 endpoint CA copied out of the seaweedfs CA Secret by step 03. The
-# source Secret in S3_CA_NAMESPACE is the platform's and is never touched.
-kubectl -n "$NAMESPACE" delete secret "$CH_CA_SECRET_NAME" --ignore-not-found
+# The S3 endpoint CA copied out of the seaweedfs CA Secret by step 03. Delete
+# it only when it carries this demo's ownership label, so a foreign Secret that
+# happens to share the name survives. The source Secret in S3_CA_NAMESPACE is
+# the platform's and is never touched.
+if ca_owner=$(kubectl -n "$NAMESPACE" get secret "$CH_CA_SECRET_NAME" \
+        -o jsonpath="{.metadata.labels.${CH_CA_SECRET_LABEL_KEY//./\\.}}" 2>/dev/null) \
+        && [[ "$ca_owner" == "$CH_CA_SECRET_LABEL_VALUE" ]]; then
+    kubectl -n "$NAMESPACE" delete secret "$CH_CA_SECRET_NAME" --ignore-not-found
+fi
 rm -f "$SCRIPT_DIR/.bucket-info.env"
 kubectl delete backupclass "$BACKUPCLASS_NAME" --ignore-not-found
 kubectl delete altinity.strategy.backups.cozystack.io "$STRATEGY_NAME" --ignore-not-found

@@ -51,7 +51,12 @@ export S3_CA_SECRET="${S3_CA_SECRET:-seaweedfs-ca-cert}"
 export S3_CA_NAMESPACE="${S3_CA_NAMESPACE:-tenant-root}"
 export S3_CA_KEY="${S3_CA_KEY:-ca.crt}"
 # Per-release Secret the CA is copied into; referenced by backup.endpointCA.
-export CH_CA_SECRET_NAME="${CH_CA_SECRET_NAME:-clickhouse-backup-s3-ca}"
+# Scoped to CLICKHOUSE_NAME so two instances in one namespace don't share a
+# name, and stamped with the ownership label below so step 03 refuses to
+# overwrite a foreign Secret and cleanup only deletes one this demo created.
+export CH_CA_SECRET_NAME="${CH_CA_SECRET_NAME:-${CLICKHOUSE_NAME}-backup-s3-ca}"
+export CH_CA_SECRET_LABEL_KEY="cozystack.io/owned-by-demo"
+export CH_CA_SECRET_LABEL_VALUE="clickhouse-backup"
 # The clickhouse-backup sidecar lives in the application Pod (rendered by the
 # chart when backup.enabled=true). Tenants don't manage a separate Secret;
 # the chart projects bucket coordinates into <release>-backup-s3 from the
@@ -197,16 +202,21 @@ wait_sts_ready() {
 # `kubectl wait --for=delete` is not used: it errors out when the resource is
 # already absent, which is the normal case on a clean namespace (cleanup.sh is
 # idempotent and runs as a pre-clean too), and swallowing that error would also
-# swallow a genuine failure. Polling `get` treats "already gone" and "gone now"
-# as the same success.
+# swallow a genuine failure. Polling `get --ignore-not-found` treats "already
+# gone" and "gone now" as the same success (empty output, exit 0) while a
+# retrieval failure — RBAC, API-server, transport — is a non-zero exit that
+# must NOT be read as deletion, or cleanup settles on a false success and leaves
+# half-uninstalled resources for the next run. Such an error just keeps us
+# polling until the resource is confirmed gone or the timeout fires.
 wait_deleted() {
     local resource_type="$1"
     local resource_name="$2"
     local timeout="${3:-300}"
     local elapsed=0
+    local got
 
     while true; do
-        if ! kubectl -n "$NAMESPACE" get "$resource_type" "$resource_name" >/dev/null 2>&1; then
+        if got=$(kubectl -n "$NAMESPACE" get "$resource_type" "$resource_name" --ignore-not-found 2>/dev/null) && [[ -z "$got" ]]; then
             [[ $elapsed -gt 0 ]] && log_success "$resource_type/$resource_name is gone"
             return 0
         fi
