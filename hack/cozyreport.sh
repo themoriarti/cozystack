@@ -68,12 +68,24 @@
 #
 # So roughly 31 minutes on defaults, and that is a FLOOR, not a bound: the sections
 # listed above as unbounded have no ceiling of any kind and are not in this sum, so
-# the real worst case is open-ended. It sits inside a job capped at
-# `timeout-minutes: 180` whose artifact upload is a LATER step, so a report step
-# that runs past the job limit does not truncate the tarball -- the upload never
-# runs and the tarball is lost entirely. Anyone raising a budget here should check
-# this sum against the job's remaining budget rather than against the section they
-# are editing.
+# the real worst case is open-ended.
+#
+# TWO ceilings sit outside it, and they fail differently. The job is capped at
+# `timeout-minutes: 180`, and reaching that cancels every step still to come --
+# the artifact upload among them. The step running this script is capped at 30 of
+# its own, and reaching THAT ends only this step: the uploads after it still run,
+# and `continue-on-error` on that step keeps the overrun out of the job's result,
+# so a passing run whose collection was slow is still reported as passing.
+# Neither ceiling saves this report: the tarball is written on the last line of
+# this file, so an overrun of either loses it rather than truncating it. What the
+# step ceiling buys is the rest of the job.
+#
+# The step's 30 minutes is deliberately UNDER the sum above rather than over it.
+# The sum is what a run costs when essentially every read hits its ceiling, and
+# the measured collection takes well under a minute; sizing the step for the
+# pathological case would spend a sixth of the job budget waiting for a report
+# that is already worthless. Anyone raising a budget here should check this sum
+# against that 30 minutes, not against the section they are editing.
 #
 # Default pod cap, shared with hack/cozyreport-summary.sh so the two start from
 # the same number. Their resulting counts can still differ: the collector also
@@ -90,9 +102,9 @@ COZYREPORT_PODS_DEFAULT=40
 # filtered for, so that loop had never executed. Correcting it is what makes a
 # large selection possible, and the platform ships LoadBalancer services in
 # quantity, so an install with no LB provider selects all of them at once. At two
-# reads per object and a 30s ceiling each, an unbounded loop clears the job's own
-# limit long before it finishes; the report step carries no timeout and the upload
-# runs after it, so the overrun does not truncate the tarball, it loses it.
+# reads per object and a 30s ceiling each, an unbounded loop clears the step's own
+# 30-minute ceiling long before it finishes; the tarball is written on this file's
+# last line, so the overrun does not truncate it, it loses it.
 COZYREPORT_OBJECTS_DEFAULT=25
 COZYREPORT_OBJECTS_BUDGET_DEFAULT=240
 
@@ -1480,8 +1492,10 @@ cozyreport_select_objects "services" kubectl get svc -A --no-headers | cozyrepor
     # column that never carries the value it looked for. Correcting the selector
     # is what makes a hang here possible at all, and the platform ships several
     # LoadBalancer services, so a failed install with no LB provider selects all
-    # of them at once. The report is collected without an outer timeout, so one
-    # read that never returns costs the whole tarball rather than this section.
+    # of them at once. The tarball is written on this file's last line, so a read
+    # that never returns costs the whole report rather than this section: the
+    # step's outer ceiling ends the step, and there is nothing written yet to
+    # upload.
     cozyreport_read_object "$DIR/service.yaml" kubectl get svc -n "$NAMESPACE" "$NAME" -o yaml
     cozyreport_read_object "$DIR/describe.txt" kubectl describe svc -n "$NAMESPACE" "$NAME"
   done

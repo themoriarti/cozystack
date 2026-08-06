@@ -363,6 +363,78 @@ $(printf '%s\n' "$body" | grep -oE 'COZY_[A-Z_]+' || true)"
   done
 }
 
+@test "the step that runs this collector has a ceiling of its own everywhere" {
+  # Every bound inside the script protects one read. None of them protects the
+  # STEP: the tarball is written on the collector's last line, the upload is the
+  # next step in the job, and a step with no ceiling of its own inherits only the
+  # job's -- so a read that never returns spends the rest of the job budget, the
+  # job is cancelled, and the upload never runs. That loses the artifact instead
+  # of truncating it, on the run where it is the only evidence left.
+  #
+  # All three workflows that run the collector, not the one that was looked at:
+  # the same step is copied into each, and a ceiling added to one of them leaves
+  # the other two with the defect while the fix looks done.
+  for wf in pull-requests nightly e2e-tag; do
+    f="$HACK_DIR/../.github/workflows/$wf.yaml"
+    [ -f "$f" ] || { echo "FAIL: .github/workflows/$wf.yaml is missing"; false; }
+    # The job's own cap is the last one seen above the step, told apart from the
+    # step's by indentation: job keys sit at four spaces, step keys at eight.
+    # Comparing against it is what makes the step's number mean something -- a
+    # ceiling at or above the job's is the same as no ceiling at all.
+    caps=$(awk '
+      /^    timeout-minutes: [0-9]+$/  { job = $2 }
+      /^      - name: Collect report$/ { inb = 1; next }
+      inb && /^      - name: /         { inb = 0 }
+      inb && /^        timeout-minutes: [0-9]+$/ { step = $2; cap = job }
+      inb && /^        continue-on-error: true$/ { tol = "yes" }
+      END { print cap "/" step "/" tol }' "$f")
+    cap=${caps%%/*}
+    rest=${caps#*/}
+    step=${rest%/*}
+    tol=${rest#*/}
+    if [ -z "$step" ]; then
+      echo "FAIL: the Collect report step in $wf.yaml carries no timeout-minutes"
+      echo "Without one it inherits the job's, and a hung read costs the upload"
+      echo "that follows it rather than costing this step."
+      false
+    fi
+    [ -n "$cap" ] || { echo "FAIL: could not find the job cap in $wf.yaml"; false; }
+    if [ "$step" -ge "$cap" ]; then
+      echo "FAIL: the Collect report step in $wf.yaml is capped at $step minutes,"
+      echo "which the job's own $cap does not leave room under."
+      false
+    fi
+    # And the ceiling must not change what the job REPORTS. `|| true` on the make
+    # call is this step's standing statement that collecting diagnostics is never
+    # fatal; a step killed at its ceiling never reaches that `|| true`, because the
+    # runner ends the process rather than the shell. Without continue-on-error a
+    # passing E2E run whose collection ran long is published as a failed one, and
+    # every later `failure()` in the job starts meaning "the tests failed OR the
+    # report was slow" -- a ceiling added for diagnostics would then be deciding
+    # merges.
+    if [ "$tol" != "yes" ]; then
+      echo "FAIL: the Collect report step in $wf.yaml has a ceiling but no continue-on-error,"
+      echo "so hitting that ceiling turns a passing run red on a diagnostics overrun."
+      false
+    fi
+    # And the overrun stays visible. `continue-on-error` keeps a fired ceiling out
+    # of the job's result, which also keeps it out of everyone's view: the step
+    # renders green and the only trace is in the raw log. This collector's whole
+    # standard is that a bound which fires is recorded, and the outer bound is not
+    # exempt from it -- so the step is addressable by id and a later step turns its
+    # outcome into a warning annotation.
+    grep -q '^        id: collect_report$' "$f" || {
+      echo "FAIL: the Collect report step in $wf.yaml has no id, so nothing can key on its outcome"
+      false
+    }
+    grep -q "steps.collect_report.outcome == 'failure'" "$f" || {
+      echo "FAIL: nothing in $wf.yaml surfaces a Collect report overrun;"
+      echo "continue-on-error renders it green and the ceiling fires in silence."
+      false
+    }
+  done
+}
+
 @test "every helper these scripts define is wired to at least one call site" {
   # Written as a shape rather than as a list of "these two calls must appear in
   # those three loops", because that shape of guard is blind to the helper added
