@@ -83,9 +83,9 @@ spec:
           name="${TEST_NAME:-unknown-test}"
           snap="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${name}"
           # The global catch fires once per failed operation; capture once per
-          # test. Creating the directory up front (rather than letting the
-          # helper create it only when it finds something) is what makes this
-          # dedupe hold on a test with no restarts at all.
+          # test. The directory is created here, before the helper runs, so the
+          # `-d` check below is decided by whether this block already ran rather
+          # than by what the helper found.
           if [ -d "${snap}/previous-logs" ]; then exit 0; fi
           mkdir -p "${snap}/previous-logs" 2>/dev/null || true
           # `kubectl logs` shows only the CURRENT container instance, so for a
