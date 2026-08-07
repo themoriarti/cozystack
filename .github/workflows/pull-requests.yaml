@@ -12,24 +12,30 @@ on:
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
 #
-# `labeled` events get their OWN group so labelling an open PR cannot cancel a
-# live opened/synchronize run. A label other than full-e2e makes `plan` skip,
-# and `e2e-report` skips with it, so before this split the pair "cancel the real
-# run, then skip" left the head SHA with no "E2E Tests" status at all — and an
-# unposted required status stays "Expected", blocking the merge until someone
-# pushes again or re-runs the cancelled run. Observed on live CI: run
-# 30614258694 (cancelled) followed by 30614280603 (skipped) on the same SHA,
-# 24s apart, from a maintainer adding kind/* labels just after a push.
-# (`pr-labeler` cannot cause this — it labels with the default GITHUB_TOKEN,
-# which by design triggers no further workflow runs.)
+# A `labeled` event that `plan` discards gets its OWN group, so labelling an
+# open PR cannot cancel a live opened/synchronize run. Any label other than
+# full-e2e makes `plan` skip, and `e2e-report` skips with it, so without the
+# split the pair "cancel the real run, then skip" left the head SHA with no
+# "E2E Tests" status at all — and an unposted required status stays "Expected",
+# blocking the merge until someone pushes again or re-runs the cancelled run.
+# Observed on live CI: run 30614258694 (cancelled) followed by 30614280603
+# (skipped) on the same SHA, 24s apart, from a maintainer adding kind/* labels
+# just after a push. (`pr-labeler` cannot cause this — it labels with the
+# default GITHUB_TOKEN, which by design triggers no further workflow runs.)
 #
-# Two label runs still supersede each other, and a `labeled` run carrying
-# full-e2e now runs alongside the head run rather than replacing it. Both post
-# the same `E2E Tests` context and commit statuses are latest-wins per context,
-# so the full-e2e verdict lands last only if its suite finishes last; that is
-# acceptable because the label is an explicit opt-in to a longer run.
+# The condition is the exact complement of `plan`'s guard, so only a run that
+# will publish NOTHING is moved aside. A `labeled` run carrying full-e2e does
+# publish, so it stays in the main group and supersedes the head run the way a
+# push does. That keeps exactly one publisher of the `E2E Tests` context alive
+# per head SHA, which the status depends on: two live publishers are latest-wins
+# per context, and the full suite is the superset, so a full-e2e run that fails
+# early — a build flake, a suite failing at minute twenty — would finish before
+# the narrower head run it was meant to widen, and that run's later green would
+# erase the failure. Cancelling also means opting into the full suite costs one
+# suite rather than two, and a second label landing afterwards cannot cancel the
+# full-e2e run, because it is no longer in the same group as it.
 concurrency:
-  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ github.event.action == 'labeled' && '-label' || '' }}
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-e2e') && '-label' || '' }}
   cancel-in-progress: true
 
 # Top-level token defaults to read-only; jobs request the minimum extra scopes.

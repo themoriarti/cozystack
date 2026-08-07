@@ -77,13 +77,33 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 1 ]
 }
 
-@test "same-repo gate: labeled events keep their own concurrency group" {
+@test "same-repo gate: only a label run that publishes nothing is moved aside" {
   line="$(code_lines < "$PULL_REQUESTS" | grep '^  group: pr-')"
   [ -n "$line" ]
 
   count="$(printf '%s\n' "$line" | grep -c "github\.event\.action == 'labeled'" || true)"
   [ "${count:-0}" -eq 1 ]
 
+  # The group key must EXCLUDE the publishing label, not every label: a run that
+  # posts `E2E Tests` has to stay in the main group and supersede the head run,
+  # or both publish the same context and the later narrower green erases the
+  # earlier full-suite failure.
+  count="$(printf '%s\n' "$line" | grep -c "github\.event\.label\.name != '" || true)"
+  [ "${count:-0}" -eq 1 ]
+
   count="$(code_lines < "$PULL_REQUESTS" | grep -c '^  cancel-in-progress: true$' || true)"
   [ "${count:-0}" -eq 1 ]
+}
+
+@test "same-repo gate: the publishing label is one name in every guard" {
+  # `plan`, `e2e-report` and the concurrency key each decide from the label name
+  # whether this run owns the status. Renaming it in one place and not the
+  # others splits the decision without changing a line that reads load-bearing.
+  names="$(code_lines < "$PULL_REQUESTS" \
+    | grep -o "github\.event\.label\.name [!=]= '[a-z0-9-]*'" \
+    | sed "s/.*'\\(.*\\)'/\\1/" \
+    | sort -u)"
+
+  [ -n "$names" ]
+  [ "$(printf '%s\n' "$names" | wc -l | tr -d ' ')" -eq 1 ]
 }
