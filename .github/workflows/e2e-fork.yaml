@@ -29,8 +29,19 @@ on:
 # Cancel a stale privileged run when the fork pushes again (a newer Pull Request
 # run for the same fork branch supersedes it). Keyed by fork repo + branch since
 # the PR number is not known at workflow level.
+#
+# A triggering run that concluded `cancelled` or `skipped` gets a group of its
+# OWN, keyed by that run's id. Such a run built nothing — labelling an open fork
+# PR produces one, because `plan` in pull-requests.yaml discards every label
+# other than full-e2e and every job skips — and `resolve` recognises it and
+# posts no status at all. In the shared group it would still cancel the live
+# privileged run that DOES own the status for that head SHA, and the pair
+# "cancel the owner, then post nothing" leaves the SHA at "Expected" with
+# nothing left to flip it: the run that replaced the owner is the very one that
+# decided to stay silent, so only a new push recovers it. Keyed by run id, a
+# discarded run can cancel only itself.
 concurrency:
-  group: e2e-fork-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  group: e2e-fork-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}${{ (github.event.workflow_run.conclusion == 'cancelled' || github.event.workflow_run.conclusion == 'skipped') && format('-discarded-{0}', github.event.workflow_run.id) || '' }}
   cancel-in-progress: true
 
 env:
