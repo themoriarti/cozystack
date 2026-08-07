@@ -244,4 +244,16 @@ resolve_silent_conclusions() {
 
   [ -n "$names" ]
   [ "$(printf '%s\n' "$names" | wc -l | tr -d ' ')" -eq 1 ]
+
+  # Agreement on the name is not the same as the guard being present. Deleting
+  # `e2e-report`'s copy outright leaves the remaining two agreeing with each
+  # other, so the check above stays green while a discarded label event starts
+  # publishing again and clobbers the verdict of the run that actually tested
+  # the SHA. Require it per job, not just consistent across the file.
+  for job in plan e2e-report; do
+    block="$(job_block "$job" "$PULL_REQUESTS" | code_lines)"
+    [ -n "$block" ]
+    count="$(printf '%s\n' "$block" | grep -c "github\.event\.label\.name == '" || true)"
+    [ "${count:-0}" -eq 1 ]
+  done
 }
