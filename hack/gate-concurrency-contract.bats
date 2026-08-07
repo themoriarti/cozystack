@@ -66,7 +66,7 @@ resolve_silent_conclusions() {
   line="$(code_lines < "$FORK" | grep '^  group: e2e-fork-')"
   [ -n "$line" ]
 
-  count="$(printf '%s\n' "$line" | grep -c 'github\.event\.workflow_run\.id' || true)"
+  count="$(printf '%s\n' "$line" | grep -o 'github\.event\.workflow_run\.id' | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
 }
 
@@ -74,10 +74,10 @@ resolve_silent_conclusions() {
   line="$(code_lines < "$FORK" | grep '^  group: e2e-fork-')"
   [ -n "$line" ]
 
-  count="$(printf '%s\n' "$line" | grep -c 'workflow_run\.head_repository\.full_name' || true)"
+  count="$(printf '%s\n' "$line" | grep -o 'workflow_run\.head_repository\.full_name' | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$line" | grep -c 'workflow_run\.head_branch' || true)"
+  count="$(printf '%s\n' "$line" | grep -o 'workflow_run\.head_branch' | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
 
   count="$(code_lines < "$FORK" | grep -c '^  cancel-in-progress: true$' || true)"
@@ -88,14 +88,14 @@ resolve_silent_conclusions() {
   line="$(code_lines < "$PULL_REQUESTS" | grep '^  group: pr-')"
   [ -n "$line" ]
 
-  count="$(printf '%s\n' "$line" | grep -c "github\.event\.action == 'labeled'" || true)"
+  count="$(printf '%s\n' "$line" | grep -o "github\.event\.action == 'labeled'" | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
 
   # The group key must EXCLUDE the publishing label, not every label: a run that
   # posts `E2E Tests` has to stay in the main group and supersede the head run,
   # or both publish the same context and the later narrower green erases the
   # earlier full-suite failure.
-  count="$(printf '%s\n' "$line" | grep -c "github\.event\.label\.name != '" || true)"
+  count="$(printf '%s\n' "$line" | grep -o "github\.event\.label\.name != '" | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
 
   count="$(code_lines < "$PULL_REQUESTS" | grep -c '^  cancel-in-progress: true$' || true)"
