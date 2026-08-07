@@ -125,9 +125,14 @@ jobs:
           # produced — an unfixable red on a legitimate contribution, with no
           # label override and no push that clears it. Both lanes have to answer
           # "is this docs-only" the same way, and the only answer that is also
-          # correct keeps both sides of a rename. The build matrix keeps reading
-          # the rename-detected list: it selects packages to rebuild, and a path
-          # that no longer exists has nothing to build.
+          # correct keeps both sides of a rename.
+          #
+          # The build matrix still reads the rename-detected list, which is not
+          # a claim that doing so is right. Moving a file between packages
+          # leaves the source package changed and unselected, so the matrix
+          # under-builds on a cross-package rename. That behaviour predates this
+          # line and is not what the docs-only decision is for, so it is left
+          # alone here rather than widened by a side effect.
           git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
           echo "Changed files:"; sed 's/^/  /' /tmp/changed_norenames.txt
           if grep -qvE '^docs/' /tmp/changed_norenames.txt; then
