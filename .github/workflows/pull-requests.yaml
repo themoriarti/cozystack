@@ -114,8 +114,23 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/changed.txt
-          echo "Changed files:"; sed 's/^/  /' /tmp/changed.txt
-          if grep -qvE '^docs/' /tmp/changed.txt; then
+          # The docs-only decision reads a RENAME-BLIND list. `git diff
+          # --name-only` applies rename detection and reports a rename as its
+          # new path alone, so moving a code file into docs/ reads as a
+          # docs-only change: nothing builds, no e2e runs, and the removal of
+          # that code path ships untested. It also deadlocks the fork lane,
+          # which answers the same question from `pulls.listFiles` and does see
+          # the old path through `previous_filename`. That lane concludes e2e is
+          # required, then fails closed on a pr-patch artifact this lane never
+          # produced — an unfixable red on a legitimate contribution, with no
+          # label override and no push that clears it. Both lanes have to answer
+          # "is this docs-only" the same way, and the only answer that is also
+          # correct keeps both sides of a rename. The build matrix keeps reading
+          # the rename-detected list: it selects packages to rebuild, and a path
+          # that no longer exists has nothing to build.
+          git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
+          echo "Changed files:"; sed 's/^/  /' /tmp/changed_norenames.txt
+          if grep -qvE '^docs/' /tmp/changed_norenames.txt; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
@@ -128,10 +143,10 @@ jobs:
           # unit-test job opt back in, and only that job: it deliberately does not
           # feed `code`, so a docs PR still builds nothing.
           #
-          # Detect the map by its old path too: a rename is reported as the new path
-          # alone, so a PR that moves the map would skip the very test that pins the
-          # literal below to it, and break for whoever pushes next.
-          git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
+          # Detect the map by its old path too, which is why this reads the
+          # rename-blind list above: a PR that moves the map would otherwise skip
+          # the very test that pins the literal below to it, and break for
+          # whoever pushes next.
           if grep -qxF 'docs/agents/contributing.md' /tmp/changed_norenames.txt; then
             echo "trigger_map=true" >> "$GITHUB_OUTPUT"
           else

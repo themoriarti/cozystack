@@ -1,7 +1,9 @@
 #!/usr/bin/env bats
 
-# Contract for the concurrency keys that decide which run owns the required
-# "E2E Tests" commit status (see docs/agents/e2e-testing.md §10).
+# Contract for the invariants that decide who owns, publishes and skips the
+# required "E2E Tests" commit status (see docs/agents/e2e-testing.md §10): the
+# concurrency keys, the publishing points, and the docs-only decision the two
+# lanes have to answer identically.
 #
 # The gate is a status, not a job, so a run that dies without posting leaves the
 # head SHA at "Expected" and blocks the merge forever. That makes the pairing
@@ -167,6 +169,35 @@ resolve_silent_conclusions() {
   block="$(job_block report "$FORK" | code_lines)"
   [ -n "$block" ]
   count="$(printf '%s\n' "$block" | grep -c "context: 'E2E Tests'" || true)"
+  [ "${count:-0}" -eq 1 ]
+}
+
+@test "both lanes answer docs-only with both sides of a rename" {
+  # The two lanes decide docs-only from different sources — a git diff in
+  # `plan`, the PR file list in `resolve` — and they must agree. `git diff
+  # --name-only` reports a rename as its new path alone, so a code file moved
+  # into docs/ reads as docs-only there while the fork lane, which sees
+  # `previous_filename`, reads it as code. Disagreement is not a near-miss: the
+  # fork lane then requires an artifact the same-repo lane never built, and the
+  # PR is unfixably red. `plan` therefore reads the rename-blind list.
+  plan_block="$(job_block plan "$PULL_REQUESTS" | code_lines)"
+  [ -n "$plan_block" ]
+
+  count="$(printf '%s\n' "$plan_block" | grep -c "grep -qvE '\^docs/' /tmp/changed_norenames.txt" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # The rename-detected list may still feed the build matrix, but never this.
+  count="$(printf '%s\n' "$plan_block" | grep -c "grep -qvE '\^docs/' /tmp/changed.txt" || true)"
+  [ "${count:-0}" -eq 0 ]
+
+  # The fork half of the same agreement: both sides of a rename are inspected.
+  # Pinned on the docs-only expression itself — `previous_filename` also appears
+  # in the TIA file list a few lines down, so counting the identifier would stay
+  # satisfied by that one with this check deleted.
+  block="$(job_block resolve "$FORK" | code_lines)"
+  [ -n "$block" ]
+  count="$(printf '%s\n' "$block" \
+    | grep -c 'f\.previous_filename && !isDocs(f\.previous_filename)' || true)"
   [ "${count:-0}" -eq 1 ]
 }
 
