@@ -18,8 +18,10 @@
 # THIRD silent path, taken when the triggering run succeeded but its `Plan
 # build` job skipped, and the concurrency key does not represent it. That is
 # deliberate and currently unreachable — every job in pull-requests.yaml either
-# carries the discarded-label guard or needs `plan`'s outputs, so a skipped
-# `plan` means a skipped run, which the conclusion check already catches. It
+# carries the discarded-label guard or reaches `plan` through its `needs`, some
+# of them only via another job's result rather than by reading plan's outputs
+# directly, so a skipped `plan` means a skipped run, which the conclusion check
+# already catches. Transitivity is the load-bearing part of that claim. It
 # stops being unreachable the moment a job is added that runs independently of
 # `plan`, and the extraction below, which matches on `CONCLUSION === '…'`,
 # will not notice. Whoever adds such a job owns that.
