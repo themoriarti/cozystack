@@ -81,8 +81,9 @@ jobs:
       head_sha:     ${{ steps.r.outputs.head_sha }}
       run_id:       ${{ steps.r.outputs.run_id }}
       # TIA inputs derived from TRUSTED base-repo data (the PR file list and
-      # labels), NOT the fork-controlled merge-ref diff — so suite selection
-      # keeps the same anti-forgery property as the docs-only decision (#3257).
+      # labels), NOT the fork-controlled merge-ref diff. That covers the INPUTS
+      # only — the selector and the suites themselves run from the fork tree in
+      # the `e2e` job; see that job's header for what actually holds.
       changed_b64:  ${{ steps.r.outputs.changed_b64 }}
       full_e2e:     ${{ steps.r.outputs.full_e2e }}
     steps:
@@ -245,9 +246,10 @@ jobs:
             // docs-only decision above: the base-repo PR file list drives suite
             // selection (base64 so newlines survive the job output), and the
             // base-repo PR labels drive the full-e2e override. Deriving these
-            // from `git diff` on the fork-controlled merge ref would let a fork
-            // shape the diff so TIA selects nothing and e2e is skipped — the
-            // same class of bypass #3257 closes. Note select-e2e.sh escalates
+            // from `git diff` on the fork-controlled merge ref would hand a
+            // fork a second way to make TIA select nothing, on top of the one
+            // it already has — the selector runs from the fork tree, so this
+            // hardens the input and not the decision. Note select-e2e.sh escalates
             // to the full suite for an unrecognised path INSIDE packages/, but
             // silently selects nothing for a path it does not recognise at all
             // (e.g. hack/*.mk) — a pre-existing fail-open shared with the
@@ -461,8 +463,18 @@ jobs:
   # Run the e2e suite against the pushed closure. NO OCIR push token here — the
   # sandbox pulls images anonymously; the fork's images/scripts run only in this
   # ephemeral job. Mirrors pull-requests.yaml's in-tree e2e, including Chainsaw
-  # Test-Impact Analysis — scoped from resolve's TRUSTED base-repo file list
-  # (not a fork-controlled merge-ref diff), so suite selection can only narrow.
+  # Test-Impact Analysis, whose INPUTS come from resolve's trusted base-repo
+  # file list rather than a merge-ref diff the fork could shape.
+  #
+  # What that does NOT buy: this job runs from the fork's own tree, so the
+  # selector (hack/select-e2e.sh), the suites under hack/e2e-chainsaw/, the
+  # install bats and packages/core/testing's recipes are all fork-authored. A
+  # fork that wants its own suite to pass can simply edit them, and no amount
+  # of input hardening changes that. This job is a correctness gate that stops
+  # an honest contributor shipping a regression, not a boundary against a
+  # hostile one — the boundary is the maintainer approval required before any
+  # fork run executes at all (see §10 of docs/agents/e2e-testing.md), plus the
+  # fact that nothing here holds a credential worth stealing.
   e2e:
     name: E2E (fork run)
     needs: [resolve, publish]
@@ -553,7 +565,8 @@ jobs:
       # Test-Impact Analysis: select only the Chainsaw suites the PR diff
       # affects. The changed-file list is resolve's TRUSTED base-repo listFiles
       # (base64 through the job output), NOT a git diff on the fork-controlled
-      # merge ref — so a fork cannot shape the diff to make TIA select nothing.
+      # merge ref. The script below is the fork's own, so this hardens what the
+      # selector reads and not what it decides — see the job header.
       # select-e2e.sh escalates to the full suite for an unrecognised path
       # inside packages/; a path it does not recognise at all selects nothing
       # and the run below is skipped (#3392 — same in the in-tree lane).
