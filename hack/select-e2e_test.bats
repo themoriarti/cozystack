@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 15 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # -----------------------------------------------------------------------------
 # Unit tests for hack/select-e2e.sh
 #

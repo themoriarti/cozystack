@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 8 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Regression coverage for tenant-worker Talos diagnostics in
 # hack/e2e-chainsaw/_lib/run-kubernetes.sh. cozytest.sh ends an @test block at
 # the first bare closing brace, so command mocks stay at top level.
