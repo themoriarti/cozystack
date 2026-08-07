@@ -10,13 +10,30 @@ COZYREPORT_LIB=1
 # shellcheck source=/dev/null
 . "$SCRIPT"
 
-# cozytest.sh's parser ends an @test block at the first bare `}`, so keep the
-# talosctl mock at top level rather than nesting a function inside the test.
-talosctl() {
-  printf '%s\n' "$*" >> "$calls"
-  [ -z "${TALOSCTL_FAIL:-}" ] && return 0
-  echo 'error: rpc error: code = Unavailable desc = connection refused' >&2
-  return 1
+# A PATH stub, not a shell function. These reads now go through the bounded
+# reader, which runs them under `timeout` -- an external binary that execs its
+# argument and therefore cannot see a function defined in this shell. A function
+# mock is not merely bypassed, it is bypassed SILENTLY: the real talosctl runs, and
+# what the test then reports is whatever the machine happens to have installed.
+#
+# cozytest.sh's parser ends an @test block at the first bare `}`, so the helper
+# stays at top level rather than nested inside a test.
+talos_stub_dir() {
+  _td=$1
+  mkdir -p "$_td/bin"
+  cat > "$_td/bin/talosctl" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$TALOSCTL_CALLS"
+[ -z "${TALOSCTL_FAIL:-}" ] && exit 0
+echo 'error: rpc error: code = Unavailable desc = connection refused' >&2
+exit 1
+STUB
+  chmod +x "$_td/bin/talosctl"
+  # And a `timeout` that runs its command rather than timing it, so the assertions
+  # do not depend on the host having GNU coreutils.
+  printf '#!/bin/sh\n[ "$1" = "-k" ] && shift 2\nshift\nexec "$@"\n' > "$_td/bin/timeout"
+  chmod +x "$_td/bin/timeout"
+  COZYREPORT_BOUND="timeout -k 5 $COZYREPORT_READ_TIMEOUT"
 }
 
 @test "Talos host diagnostics pass an endpoint and use valid dmesg flags" {
@@ -28,9 +45,11 @@ talosctl() {
   # cleanup line is never reached and the directory survives for inspection, which
   # is what you want from a test that just failed.
   tmp=$(mktemp -d)
+  talos_stub_dir "$tmp"
   calls="$tmp/talosctl.calls"
 
-  cozyreport_collect_talos_node /workspace/talosconfig 192.0.2.11 "$tmp"
+  TALOSCTL_CALLS="$calls" PATH="$tmp/bin:$PATH" \
+    cozyreport_collect_talos_node /workspace/talosconfig 192.0.2.11 "$tmp"
 
   [ "$(sed -n '1p' "$calls")" = "--talosconfig /workspace/talosconfig -e 192.0.2.11 -n 192.0.2.11 dmesg" ]
   [ "$(sed -n '2p' "$calls")" = "--talosconfig /workspace/talosconfig -e 192.0.2.11 -n 192.0.2.11 logs kubelet --tail=500" ]
@@ -45,9 +64,11 @@ talosctl() {
 
 @test "a Talos node that refuses the connection leaves the reason in its files" {
   tmp=$(mktemp -d)
+  talos_stub_dir "$tmp"
   calls="$tmp/talosctl.calls"
 
-  TALOSCTL_FAIL=1 cozyreport_collect_talos_node /workspace/talosconfig 192.0.2.11 "$tmp"
+  TALOSCTL_FAIL=1 TALOSCTL_CALLS="$calls" PATH="$tmp/bin:$PATH" \
+    cozyreport_collect_talos_node /workspace/talosconfig 192.0.2.11 "$tmp"
 
   # The reads are best-effort and must not abort the report, but "did not abort"
   # and "produced nothing" are different outcomes and only one of them is about
