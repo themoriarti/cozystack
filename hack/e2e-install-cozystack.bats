@@ -106,6 +106,11 @@
       (..|select(has("containers"))|.containers[]|.image),
       (..|select(has("initContainers"))|.initContainers[]|.image)
     ' "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" > "$images_list"
+  # The failure-only Talos diagnostics Pod can land on any node. The sandbox's
+  # upstream talosctl binary is static, so cache its pinned Alpine base on every
+  # node while the cluster is healthy instead of cold-pulling on a failure path.
+  printf '%s\n' 'docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47' \
+    >> "$images_list"
   hack/e2e-prepull-images.sh < "$images_list"
   rm -f "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" "$images_list"
 }
