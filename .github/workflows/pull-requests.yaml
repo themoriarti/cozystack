@@ -81,6 +81,14 @@ jobs:
       # privileged.
       - name: Open the "E2E Tests" status for this run
         if: ${{ !github.event.pull_request.head.repo.fork }}
+        # A transient status-API failure here must not take the run with it.
+        # This step is the first in `plan`, and `plan` is what `checks`,
+        # `build`, `build-talos`, `finalize` and `e2e` all hang off, so a
+        # failure costs a full rebuild for nothing. Skipping the opener only
+        # degrades to the behaviour that preceded it — the terminal status
+        # still gets posted by `e2e-report`, and a run that dies before that
+        # leaves the merge blocked either way.
+        continue-on-error: true
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
