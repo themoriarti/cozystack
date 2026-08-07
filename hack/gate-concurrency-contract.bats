@@ -131,15 +131,14 @@ resolve_silent_conclusions() {
   # lane therefore writes `E2E Tests` from two places — an opener and a
   # terminal report — and dropping either half is invisible until someone
   # merges during a re-run.
-  for f in "$PULL_REQUESTS" "$FORK"; do
-    writers="$(code_lines < "$f" | grep -c "context: 'E2E Tests'" || true)"
-    [ "${writers:-0}" -ge 2 ]
-  done
+  # Every assertion is scoped to the job that owns it. Counting writers per
+  # FILE does not work and looked like it did: on the fork lane the context
+  # string occurs in the shared `setStatus` helper and in `report`, so the
+  # opener — which calls that helper rather than naming the context itself —
+  # adds no occurrence, and deleting it left the count at two. A pin has to
+  # name the call it is protecting, not a string that happens to appear twice.
 
-  # Scoped to the `plan` job, not the file. The bare fork guard appears on
-  # several steps in other jobs, so a whole-file "at least one" would still
-  # pass with the opener's guard deleted — it would pin the other jobs' guards
-  # and call that coverage.
+  # Same-repo lane: `plan` opens, `e2e-report` concludes.
   plan_block="$(job_block plan "$PULL_REQUESTS" | code_lines)"
   [ -n "$plan_block" ]
 
@@ -148,8 +147,26 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 1 ]
 
   # …and same-repo only: a fork's pull_request token cannot write a status, so
-  # an unguarded call would 403 and fail this job on every fork PR.
+  # an unguarded call would 403 and fail this job on every fork PR. Scoped to
+  # `plan` because the same bare guard sits on steps in several other jobs.
   count="$(printf '%s\n' "$plan_block" | grep -c 'head\.repo\.fork' || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  block="$(job_block e2e-report "$PULL_REQUESTS" | code_lines)"
+  [ -n "$block" ]
+  count="$(printf '%s\n' "$block" | grep -c "context: 'E2E Tests'" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # Fork lane: `resolve` opens, `report` concludes. The opener goes through the
+  # helper, so pin the call.
+  block="$(job_block resolve "$FORK" | code_lines)"
+  [ -n "$block" ]
+  count="$(printf '%s\n' "$block" | grep -c "setStatus('pending'" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  block="$(job_block report "$FORK" | code_lines)"
+  [ -n "$block" ]
+  count="$(printf '%s\n' "$block" | grep -c "context: 'E2E Tests'" || true)"
   [ "${count:-0}" -eq 1 ]
 }
 
