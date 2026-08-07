@@ -257,9 +257,19 @@ jobs:
             // Both sides of a rename go to TIA too: the old path is a removal
             // the selector must see (a moved packages/<app>/… still affects
             // that app's suite). Extra paths can only widen the selection.
+            // Trailing newline is load-bearing, not cosmetic. select-e2e.sh
+            // reads this with `while IFS= read -r file`, and POSIX read returns
+            // non-zero at EOF without a newline, so the loop body never runs for
+            // an unterminated last line and that path is silently dropped. For a
+            // one-file PR that empties the selection outright: the Chainsaw step
+            // is skipped, the job succeeds, and the gate goes green with nothing
+            // tested. The in-tree lane never hit it because `git diff
+            // --name-only` terminates its output; this is the first caller that
+            // builds the list itself. The log would not have shown it either —
+            // `sed` prints an unterminated last line just like a terminated one.
             const changed = files
               .flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename])
-              .join('\n');
+              .join('\n') + '\n';
             core.setOutput('changed_b64', Buffer.from(changed, 'utf8').toString('base64'));
             const fullE2e = (pr.labels || []).some(l => l.name === 'full-e2e');
             core.setOutput('full_e2e', fullE2e ? 'true' : 'false');
