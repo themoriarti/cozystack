@@ -2551,7 +2551,7 @@ STUB
   # converted: all of them are owned by other branches, and a conflict there costs
   # more than an uncovered trap. What the freeze buys is that none of this arrived
   # silently.
-  frozen='build-matrix_test.bats=14 capture-dataplane.bats=1 e2e-test-openapi.bats=1 multus-install-cni-plugins.bats=12 nightly-mirror_test.bats=5 overlay-main-images_test.bats=11 release-changelog-behaviour.bats=9 release-changelog-contract.bats=1 select-e2e_test.bats=15 '
+  frozen='build-matrix_test.bats=14 capture-dataplane.bats=1 e2e-test-openapi.bats=1 multus-install-cni-plugins.bats=12 nightly-mirror_test.bats=5 overlay-main-images_test.bats=11 release-changelog-behaviour.bats=9 release-changelog-contract.bats=1 run-kubernetes-talos-diagnostics_test.bats=8 select-e2e_test.bats=15 '
 
   found=""
   for f in "$HACK_DIR"/*.bats; do
