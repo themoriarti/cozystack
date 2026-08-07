@@ -162,6 +162,22 @@ jobs:
               return;
             }
 
+            // Past the two silent returns, this run owns the status for this
+            // SHA, so claim it before doing anything that can throw. Every
+            // lookup below is a network call, and github-script turns a 5xx
+            // into a failed job: `report` is then skipped for want of
+            // should_run, nothing writes the context, and a head SHA that was
+            // already green stays green with no suite behind it. Opening here
+            // makes that path leave `pending` instead, which blocks. Later
+            // branches overwrite it through `decide()` as before.
+            //
+            // The jobs lookup above cannot move below this line: the
+            // discarded-label decision depends on it, and posting before that
+            // decision is what would let a run stamp a status it does not own.
+            // A failure there therefore still leaves the SHA untouched, which
+            // is the deliberate half of the trade rather than an oversight.
+            await setStatus('pending', 'Running e2e in the privileged fork workflow…');
+
             // Fork build did not succeed → fail the required status (fail-closed).
             if (CONCLUSION !== 'success') {
               await decide('failure', `Pull Request workflow concluded '${CONCLUSION}'; e2e not run`);
@@ -274,9 +290,9 @@ jobs:
             const fullE2e = (pr.labels || []).some(l => l.name === 'full-e2e');
             core.setOutput('full_e2e', fullE2e ? 'true' : 'false');
 
-            // Real run: post a pending status now; `report` flips it to the
-            // terminal state after publish + e2e.
-            await setStatus('pending', 'Running e2e in the privileged fork workflow…');
+            // Real run: the pending status was posted above, as soon as this
+            // run was known to own the SHA. `report` flips it to the terminal
+            // state after publish + e2e.
             core.setOutput('should_run', 'true');
 
   # Push the fork-built image archives to OCIR by digest and flux-push the
