@@ -147,8 +147,24 @@ kubelet:
   evictionSoftMemory: 8%
 EOF
 
+# --- Case: guest serial console logging enabled ---
+cat >"$WORK/case-serialconsole.yaml" <<'EOF'
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: []
+resources:
+  cpu: "2"
+  memory: 4Gi
+gpus: []
+kubelet: {}
+logSerialConsole: true
+EOF
+
 RC=0
-for c in resources gpu kubelet; do
+for c in resources gpu kubelet serialconsole; do
   write_values "$WORK/case-${c}.yaml"
   diff_kinds "$c" || RC=1
 done
