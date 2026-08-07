@@ -13,6 +13,16 @@
 # way no reviewer diff makes obvious — a third discarded conclusion added to the
 # JS guard alone silently restores the wedge. These tests pin executable lines
 # only: a commented-out key must never satisfy the contract.
+#
+# Scope, so the pin is not read as covering more than it does: `resolve` has a
+# THIRD silent path, taken when the triggering run succeeded but its `Plan
+# build` job skipped, and the concurrency key does not represent it. That is
+# deliberate and currently unreachable — every job in pull-requests.yaml either
+# carries the discarded-label guard or needs `plan`'s outputs, so a skipped
+# `plan` means a skipped run, which the conclusion check already catches. It
+# stops being unreachable the moment a job is added that runs independently of
+# `plan`, and the extraction below, which matches on `CONCLUSION === '…'`,
+# will not notice. Whoever adds such a job owns that.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 FORK="$REPO_ROOT/.github/workflows/e2e-fork.yaml"
