@@ -12,8 +12,11 @@ name: E2E (fork)
 #      commit status back on the PR head SHA (jobs `e2e` + `report`).
 #
 # Security boundary: the untrusted fork code produced only opaque artifacts. The
-# OCIR push token is live ONLY in `publish`, which runs trusted binaries
-# (git/skopeo/flux/yq) over data — never `make` or any fork-authored script. The
+# OCIR push token is live ONLY in `publish`, and only after its last step that
+# runs anything but a fixed binary (git/skopeo/flux) over data. `publish` does
+# evaluate Makefiles once, with `make -n`, to derive the image allowlist — from
+# the BASE tree and before the login, never from the fork's Makefiles and never
+# with the credential loaded. No fork-authored script runs in that job at all. The
 # fork's images and test scripts run only in `e2e`, which has NO push token and
 # runs in an ephemeral sandbox. This is why the split exists instead of a
 # pull_request_target run that would hand fork code the credentials directly.
@@ -261,8 +264,10 @@ jobs:
             core.setOutput('should_run', 'true');
 
   # Push the fork-built image archives to OCIR by digest and flux-push the
-  # digest-pinned packages tree. Only trusted binaries touch the fork's content
-  # while the OCIR token is live — no `make`/fork script runs here.
+  # digest-pinned packages tree. No fork-authored script runs here at all, and
+  # while the OCIR token is live only fixed binaries touch the fork's content:
+  # the one step that evaluates Makefiles (`make -n` over the BASE tree, for the
+  # image allowlist) is ordered ahead of the login. Keep that order.
   publish:
     name: Push fork images + packages artifact
     needs: [resolve]
@@ -328,25 +333,6 @@ jobs:
           path: _out/oci
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ needs.resolve.outputs.run_id }}
-      - name: Login to OCIR
-        env:
-          OCIR_USER:  ${{ secrets.OCIR_USER }}
-          OCIR_TOKEN: ${{ secrets.OCIR_TOKEN }}
-          # Keep the push credential out of the runner's DEFAULT auth stores
-          # (~/.docker/config.json, $XDG_RUNTIME_DIR/containers/auth.json) and
-          # in a run-scoped path instead, matching every other OCIR login in
-          # this repo (pull-requests.yaml's build / build-talos / finalize).
-          # `Set up Docker config` in those jobs copies ~/.docker verbatim into
-          # the build context, so a token left in the default store is a token
-          # handed to whatever runs next.
-          DOCKER_CONFIG: ${{ runner.temp }}/.docker
-          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
-        run: |
-          # skopeo (image copies) and flux (artifact push, via the docker
-          # keychain) each need OCIR auth. Token via stdin, never argv.
-          mkdir -p "$DOCKER_CONFIG"
-          echo "$OCIR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin --authfile "$REGISTRY_AUTH_FILE"
-          echo "$OCIR_TOKEN" | docker login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
       # Trusted allowlist of image repo names. Every OCI archive a fork PR pushes
       # under ${REGISTRY}/ must be one the BASE tree can itself export — derived
       # from the base parent (HEAD^1), never the fork's Makefiles, so a fork
@@ -355,6 +341,13 @@ jobs:
       # build); COZYSTACK_VERSION is set so the version probe in common-envs.mk
       # stays dormant. The charset guard in the push loop stays as defence in
       # depth; this narrows it to the exact expected set.
+      #
+      # Ordered BEFORE the login on purpose. `make -n` expands no recipe, but it
+      # does evaluate the base tree's Makefiles, and that is the only step in
+      # this job that runs anything other than a fixed binary over data. Keeping
+      # it above the login means it never sees the push credential, which is
+      # what lets the job comment claim no build machinery runs while the token
+      # is live. It needs nothing the login provides.
       - name: Derive trusted image allowlist (base tree)
         run: |
           set -eu
@@ -376,6 +369,25 @@ jobs:
           n="$(wc -l < _allow.txt)"
           [ "$n" -ge 1 ] || { echo "::error::image allowlist derivation produced no names"; exit 1; }
           echo "Allowed image repos ($n):"; sed 's/^/  /' _allow.txt
+      - name: Login to OCIR
+        env:
+          OCIR_USER:  ${{ secrets.OCIR_USER }}
+          OCIR_TOKEN: ${{ secrets.OCIR_TOKEN }}
+          # Keep the push credential out of the runner's DEFAULT auth stores
+          # (~/.docker/config.json, $XDG_RUNTIME_DIR/containers/auth.json) and
+          # in a run-scoped path instead, matching every other OCIR login in
+          # this repo (pull-requests.yaml's build / build-talos / finalize).
+          # `Set up Docker config` in those jobs copies ~/.docker verbatim into
+          # the build context, so a token left in the default store is a token
+          # handed to whatever runs next.
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
+        run: |
+          # skopeo (image copies) and flux (artifact push, via the docker
+          # keychain) each need OCIR auth. Token via stdin, never argv.
+          mkdir -p "$DOCKER_CONFIG"
+          echo "$OCIR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin --authfile "$REGISTRY_AUTH_FILE"
+          echo "$OCIR_TOKEN" | docker login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
       - name: Push images by digest + packages artifact
         id: push
         env:
