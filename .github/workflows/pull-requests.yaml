@@ -75,10 +75,16 @@ jobs:
       # status says so at the start and concludes it in e2e-report.
       #
       # Same-repo only. A fork's `pull_request` token is read-only, so this call
-      # would 403 and fail `plan` on every fork PR — and that read-only token is
+      # would 403 and fail `plan` on every fork PR, and that read-only token is
       # exactly what makes the whole commit-status design safe (§10). Fork PRs
       # get their pending from e2e-fork.yaml's `resolve` instead, which is
       # privileged.
+      #
+      # Note what that costs a fork. `resolve` cannot start until this entire
+      # run has finished, so the window this step shuts in seconds stays open
+      # for the length of the build on the fork lane. Structural rather than an
+      # oversight, since a read-only token cannot post a status at any point in
+      # the run, and bounded by the build. §10 records it.
       - name: Open the "E2E Tests" status for this run
         if: ${{ !github.event.pull_request.head.repo.fork }}
         # A transient status-API failure here must not take the run with it.

@@ -133,6 +133,15 @@ resolve_silent_conclusions() {
   # lane therefore writes `E2E Tests` from two places — an opener and a
   # terminal report — and dropping either half is invisible until someone
   # merges during a re-run.
+  #
+  # Scope: this pins that each lane HAS an opener, not that the opener lands
+  # before the window opens. Only the same-repo one does, being `plan`'s first
+  # step. The fork opener sits in the privileged workflow, which starts only
+  # after the unprivileged build has finished, so on that lane the window is
+  # bounded by the build rather than closed. A grep cannot express the
+  # difference; read this test as "both openers exist" and §10 of
+  # docs/agents/e2e-testing.md for when each of them lands.
+  #
   # Every assertion is scoped to the job that owns it. Counting writers per
   # FILE does not work and looked like it did: on the fork lane the context
   # string occurs in the shared `setStatus` helper and in `report`, so the
