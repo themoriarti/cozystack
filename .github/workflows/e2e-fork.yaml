@@ -171,9 +171,13 @@ jobs:
             // is empty for forks). Only OPEN PRs count — never fall back to a
             // closed/merged association, which a fork could point at a stale
             // commit to smuggle a green through.
-            const assoc = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-              owner, repo, commit_sha: HEAD_SHA,
-            });
+            // Paginated, like every other lookup in this script: the check
+            // below counts open associations, so reading only the first page
+            // would miss the second PR in exactly the case it exists to catch.
+            const assoc = await github.paginate(
+              github.rest.repos.listPullRequestsAssociatedWithCommit,
+              { owner, repo, commit_sha: HEAD_SHA, per_page: 100 },
+            );
             // Exactly one, not the first one: a single branch may have several
             // open PRs against different base branches, and every decision
             // below is taken from whichever PR this picks — the merge-ref
@@ -184,7 +188,7 @@ jobs:
             // The HEAD^2 == head_sha assert downstream cannot catch it: that
             // holds for every PR sitting on the commit. Fail closed, and name
             // the count so the state is diagnosable from the status alone.
-            const open = assoc.data.filter(p => p.state === 'open');
+            const open = assoc.filter(p => p.state === 'open');
             if (open.length !== 1) {
               await decide('failure', `expected exactly one open PR for ${HEAD_SHA}, found ${open.length}`);
               return;
