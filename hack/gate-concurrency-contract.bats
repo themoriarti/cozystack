@@ -18,8 +18,15 @@ REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 FORK="$REPO_ROOT/.github/workflows/e2e-fork.yaml"
 PULL_REQUESTS="$REPO_ROOT/.github/workflows/pull-requests.yaml"
 
-# Drop YAML `#` and JavaScript `//` comment lines. grep exits 1 when nothing is
-# selected (legitimate) and 2 on a real error, so only the latter propagates.
+# Drop YAML `#` and JavaScript `//` comment lines, so a commented-out key can
+# never satisfy a pin. grep exits 1 when it selects nothing, legitimate here,
+# and 2 on a real error; the `rc` check turns only the latter into a failure.
+# It does so under the bats binary and not under `hack/cozytest.sh`, whose
+# translator appends `return 0` to every line that is exactly `}`, file-level
+# helpers included, so a helper's last command never decides its status there.
+# Either way the tests fail closed: each one asserts its extraction is
+# non-empty before comparing, so a swallowed grep error surfaces as empty
+# input rather than as a pass.
 code_lines() {
   local rc=0
   grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*//' || rc=$?
