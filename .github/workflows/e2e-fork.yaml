@@ -661,12 +661,21 @@ jobs:
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
 
   # Flip the pending "E2E Tests" commit status posted by `resolve` to its
-  # terminal state. Always runs (so a failed publish/e2e turns the status red
-  # rather than leaving it stuck pending). success only when the e2e job passed.
+  # terminal state. Runs on failure too, so a failed publish or e2e turns the
+  # status red rather than leaving it stuck pending; success only when the e2e
+  # job passed.
+  #
+  # `!cancelled()` rather than `always()`, matching e2e-report on the same-repo
+  # lane. A cancelled privileged run no longer owns the status for its head SHA
+  # — something superseded it, and that something is now responsible — so
+  # stamping `failure` from here paints a red on a suite that never finished,
+  # on a SHA whose real verdict is still hours away. Staying silent is
+  # fail-closed: the `pending` this run already posted survives until the
+  # superseding run concludes.
   report:
     name: Report fork E2E status
     needs: [resolve, publish, e2e]
-    if: ${{ always() && needs.resolve.outputs.should_run == 'true' }}
+    if: ${{ !cancelled() && needs.resolve.outputs.should_run == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

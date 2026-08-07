@@ -172,6 +172,29 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 1 ]
 }
 
+@test "neither terminal reporter publishes from a cancelled run" {
+  # `always()` includes cancellation; `!cancelled()` does not. A cancelled run
+  # has been superseded, so the run that replaced it owns the head SHA, and a
+  # verdict posted from the dying one lands on a suite that never finished with
+  # nothing obliged to correct it. Both lanes had this wrong at different times,
+  # in the same shape, which is why it is pinned rather than described.
+  block="$(job_block e2e-report "$PULL_REQUESTS" | code_lines)"
+  [ -n "$block" ]
+  count="$(printf '%s\n' "$block" | grep -c '!cancelled()' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$block" | grep -c 'if: .*always()' || true)"
+  [ "${count:-0}" -eq 0 ]
+
+  # The fork reporter's guard only; `always()` is legitimate on cleanup steps in
+  # other jobs, which is why this is scoped to `report` and anchored on `if:`.
+  block="$(job_block report "$FORK" | code_lines)"
+  [ -n "$block" ]
+  count="$(printf '%s\n' "$block" | grep -c '^    if: .*!cancelled()' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$block" | grep -c '^    if: .*always()' || true)"
+  [ "${count:-0}" -eq 0 ]
+}
+
 @test "both lanes answer docs-only with both sides of a rename" {
   # The two lanes decide docs-only from different sources — a git diff in
   # `plan`, the PR file list in `resolve` — and they must agree. `git diff

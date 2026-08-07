@@ -996,12 +996,18 @@ jobs:
   e2e-report:
     name: "Report E2E status"
     needs: ["plan", "e2e"]
-    # !cancelled() rather than always(): `gh pr create --label` applies the label
-    # a moment after opening, so the resulting `labeled` event cancels the
-    # `opened` run through cancel-in-progress. Under always() that dying run
-    # still posted failure (PLAN_RESULT=cancelled), and the `labeled` run that
-    # replaced it is skipped by the guard below — so nothing ever flipped the
-    # status back and the PR stayed red. A cancelled run must report nothing.
+    # !cancelled() rather than always(). A cancelled run no longer owns the
+    # status for its head SHA, because something superseded it and that
+    # something is now responsible. Posting from here would stamp a red on a
+    # suite that never finished, and the run that replaced it may be one that
+    # deliberately posts nothing, leaving nothing to flip it back. A cancelled
+    # run must report nothing.
+    #
+    # Cancellation still reaches this job from a push, from a `full-e2e` label
+    # run superseding the head run, and from a manual cancel. It no longer
+    # reaches it from a label the workflow discards: those run in their own
+    # concurrency group (see the key at the top of this file) precisely so they
+    # cannot cancel a live run.
     if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e') }}
     runs-on: ubuntu-latest
     permissions:
