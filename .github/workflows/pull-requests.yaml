@@ -54,6 +54,9 @@ jobs:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e'
     permissions:
       contents: read
+      # For the opening `E2E Tests` status below; e2e-report writes the terminal
+      # one with the same scope.
+      statuses: write
     outputs:
       code: ${{ steps.p.outputs.code }}
       trigger_map: ${{ steps.p.outputs.trigger_map }}
@@ -61,6 +64,39 @@ jobs:
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
     steps:
+      # Claim the required context for THIS run before anything can be merged on
+      # the strength of the last one. Commit statuses are latest-wins per (sha,
+      # context) and nothing expires them, so a head SHA that already went green
+      # keeps reading green while a newly started run works — re-run all jobs, a
+      # full-e2e label, a reopen — and the PR stays mergeable through a suite
+      # that may be about to fail. While the gate was a job, GitHub created a
+      # fresh non-success check run each time and that window did not exist.
+      # Overwriting with `pending` here restores it: the run that owns the
+      # status says so at the start and concludes it in e2e-report.
+      #
+      # Same-repo only. A fork's `pull_request` token is read-only, so this call
+      # would 403 and fail `plan` on every fork PR — and that read-only token is
+      # exactly what makes the whole commit-status design safe (§10). Fork PRs
+      # get their pending from e2e-fork.yaml's `resolve` instead, which is
+      # privileged.
+      - name: Open the "E2E Tests" status for this run
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const { HEAD_SHA, RUN_URL } = process.env;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: HEAD_SHA,
+              state: 'pending',
+              context: 'E2E Tests',
+              description: 'e2e in progress — this run has not reported yet',
+              target_url: RUN_URL,
+            });
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0

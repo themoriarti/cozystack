@@ -39,6 +39,15 @@ PULL_REQUESTS="$REPO_ROOT/.github/workflows/pull-requests.yaml"
 # Either way the tests fail closed: each one asserts its extraction is
 # non-empty before comparing, so a swallowed grep error surfaces as empty
 # input rather than as a pass.
+# Lines of one job's block, so an assertion can be scoped to the job it is
+# about instead of matching an identical line in a different one.
+job_block() {
+  awk -v job="  $1:" '
+    $0 == job { inside = 1; next }
+    /^  [a-zA-Z0-9_-]+:$/ { inside = 0 }
+    inside' "$2"
+}
+
 code_lines() {
   local rc=0
   grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*//' || rc=$?
@@ -111,6 +120,36 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 1 ]
 
   count="$(code_lines < "$PULL_REQUESTS" | grep -c '^  cancel-in-progress: true$' || true)"
+  [ "${count:-0}" -eq 1 ]
+}
+
+@test "both lanes open the status before they conclude it" {
+  # A commit status has no expiry: whatever was last written for (sha, context)
+  # stands until something overwrites it. So a run starting against a head SHA
+  # that already went green must claim the context up front, or the PR stays
+  # mergeable on the previous run's verdict for the whole of this one. Each
+  # lane therefore writes `E2E Tests` from two places — an opener and a
+  # terminal report — and dropping either half is invisible until someone
+  # merges during a re-run.
+  for f in "$PULL_REQUESTS" "$FORK"; do
+    writers="$(code_lines < "$f" | grep -c "context: 'E2E Tests'" || true)"
+    [ "${writers:-0}" -ge 2 ]
+  done
+
+  # Scoped to the `plan` job, not the file. The bare fork guard appears on
+  # several steps in other jobs, so a whole-file "at least one" would still
+  # pass with the opener's guard deleted — it would pin the other jobs' guards
+  # and call that coverage.
+  plan_block="$(job_block plan "$PULL_REQUESTS" | code_lines)"
+  [ -n "$plan_block" ]
+
+  # The opener must be pending, or it publishes a verdict it has not reached.
+  count="$(printf '%s\n' "$plan_block" | grep -c "state: 'pending'" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # …and same-repo only: a fork's pull_request token cannot write a status, so
+  # an unguarded call would 403 and fail this job on every fork PR.
+  count="$(printf '%s\n' "$plan_block" | grep -c 'head\.repo\.fork' || true)"
   [ "${count:-0}" -eq 1 ]
 }
 
