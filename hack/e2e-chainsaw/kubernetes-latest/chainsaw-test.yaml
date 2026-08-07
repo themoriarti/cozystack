@@ -19,9 +19,18 @@ spec:
     try:
     - script:
         # ~25m Kamaji bringup + worker join + LB/NFS/ouroboros assertions.
-        # The failure path can spend ~5m10s in bounded guest Talos capture and
-        # another 6m30s in its in-process tenant snapshot. Keep the outer op
-        # above those inner budgets with useful scheduling/API-call slack.
+        # The failure path can spend ~5m10s in bounded guest Talos capture,
+        # 35s per virt-launcher Pod reading the guest serial console, one 35s
+        # list read, one 35s read of the wedge check that runs before any
+        # other diagnostic, and when any console read comes back silent two
+        # more 35s reads for the Pod state that says whether the container
+        # started (30s each plus the 5s kill grace, so ~3m30s at the pool's
+        # minReplicas of 2 once a silent read pulls in the Pod-state pair,
+        # and ~5m50s at worst -- that walk is capped at 6
+        # Pods and the Pod-state reads are taken once, so neither follows
+        # maxReplicas), and another 6m30s in its in-process tenant snapshot.
+        # Keep the outer op above those inner budgets with useful
+        # scheduling/API-call slack.
         timeout: 50m
         # Co-locate the tenant crust-gather snapshot (captured by
         # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as

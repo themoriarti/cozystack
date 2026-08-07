@@ -553,6 +553,326 @@ cozy_capture_tenant_talos_node() {
     "${output_dir}/kubelet.log" logs kubelet --tail=500 || true
 }
 
+# Name the console experiment's own failure before the noise starts. Enabling
+# logSerialConsole punches through the platform's cluster-wide disable, and if
+# kubevirt/kubevirt#15989 still bites, guest-console-log wedges virt-launcher
+# in Init: the workers never boot, no Node registers, and the suite reports
+# "fewer than 2 tenant nodes Ready within 18m" -- byte-identical to the failure
+# this instrumentation was added to study. A triager reading that line files it
+# as the known flake and the experiment's answer is lost at the bottom of
+# POD-STATE.txt. A diagnostic whose own worst case is disguised as the bug it
+# investigates is worth less than none, so it says so itself, and says it
+# first.
+#
+# The bit it reads is `ready` on the init container. This sidecar is built with
+# no probes at all, and kubelet's UpdatePodStatus sets `ready = !exists` for a
+# container with no readiness worker once it is running -- liveness is not an
+# input to readiness anywhere. So the bit is exactly "the container is
+# running", and false means not running: never-started, waiting between
+# restarts, or already-terminated. Running-but-not-ready is not a shape this
+# container can hold, which is why the taxonomy below does not claim it.
+# Those are not one finding: the hang starts the container and then fails it,
+# so with restartPolicy Always it settles into CrashLoopBackOff and passes
+# through Error, while a superseded virt-launcher from a VM restart exits
+# cleanly and terminates Completed. ContainerState is a union, so a waiting
+# reason alone leaves the terminated case blank and cannot tell the two apart.
+# Both reasons are carried so each shape arrives labelled.
+#
+# Even so this line points rather than concludes, and it says so out loud: the
+# bit cannot separate every shape, the describe that follows can, and a
+# headline that asserts more than the bit carries is the same mislabel this
+# function exists to prevent, merely pointing the other way.
+cozy_report_guest_console_wedge() {
+  local rows read_rc=0
+  local read_err
+
+  if ! read_err=$(mktemp); then
+    # Same rule as the read-failure branch below: saying nothing here would
+    # read as "the console container is fine" when nothing was checked.
+    echo "=== could not allocate a scratch file to read virt-launcher Pod state; whether guest-console-log started is unknown, not fine ==="
+    return 0
+  fi
+  rows=$(timeout -k 5 30 kubectl -n tenant-test get pods \
+    -l kubevirt.io=virt-launcher \
+    -o jsonpath='{range .items[*]}{range .status.initContainerStatuses[?(@.name=="guest-console-log")]}{.ready}{" "}{.state.waiting.reason}{.state.terminated.reason}{" "}{end}{.metadata.name}{"\n"}{end}' \
+    --request-timeout=30s 2>"${read_err}") || read_rc=$?
+  if [ "${read_rc}" -ne 0 ]; then
+    # Silence here would be the same mislabel inverted: the reader would take
+    # the absent headline as "the console container is fine" when nothing was
+    # actually checked.
+    echo "=== could not read virt-launcher Pod state (exit ${read_rc}); whether guest-console-log started is unknown, not fine ==="
+    cat "${read_err}" || true
+    rm -f "${read_err}"
+    return 0
+  fi
+  rm -f "${read_err}"
+
+  case "${rows}" in
+    *"false "*) ;;
+    *) return 0 ;;
+  esac
+
+  echo "=== guest-console-log is not running on the workers below; if these are current Pods this is the console experiment failing rather than the node-join failure it instruments (kubevirt/kubevirt#15989) ==="
+  echo "=== a reason of CrashLoopBackOff or Error below is the wedge shape (kubevirt/kubevirt#15989); Completed is a superseded Pod and not this bug; any other reason, or none, is not covered by either and the describe that follows settles it ==="
+  echo "=== if it is the wedge: the cluster-wide disableSerialConsoleLog in packages/system/kubevirt exists for this, and dropping logSerialConsole from the e2e node group returns the suite to its prior behaviour ==="
+  printf '%s\n' "${rows}" | grep '^false ' || true
+}
+
+# Check that KubeVirt actually attached the guest console container, on the
+# path where the workers did boot. The capture below runs only when node-join
+# fails, so without this the suite would first learn that the node group's
+# logSerialConsole never took effect in the run that needed the console, when
+# it can no longer be recovered. The platform disables console logging
+# cluster-wide (see packages/system/kubevirt), so what this asks is whether
+# the per-VM override beat that on the KubeVirt version actually shipping.
+#
+# The read's own status is kept separate from the answer it returns, and the
+# two get different exit codes, because they are different claims. Piping
+# kubectl into grep would collapse them: a read that failed produces no output,
+# grep finds nothing, and an API blip would be reported as "the override did
+# not take effect" -- a cause that was never established, sending the next
+# reader at KubeVirt config instead of at the apiserver. A selector that
+# matched no Pod at all is the same trap one step further on, and is kept
+# apart from a Pod that matched and carries nothing -- the second is the
+# finding, the first is not a statement about any Pod.
+#
+# What it establishes is that SOME virt-launcher Pod in the namespace carries
+# the container, not that every one does. That is the direction worth erring
+# in for a check whose only job is to catch an inert setting: it can miss, but
+# it cannot fail a run over a Pod that is not this test's. The match runs over
+# the whole name=containers line, so a Pod named after the container would
+# satisfy it -- these names come from the Machine name, so that cannot happen
+# here, but a reader changing the format should know the glob spans both.
+#
+#   0  a Pod carries the container
+#   1  the read did not answer, or matched no Pod; not evidence either way
+#   2  Pods matched and none carries the container
+cozy_assert_guest_console_attached() {
+  local init_names read_rc=0
+  local attached total
+
+  # The Pod name is in the output for a reason that is not cosmetic: without
+  # it, a Pod whose initContainers list is absent emits a bare newline, command
+  # substitution strips it, and "Pods matched, none carries the container" is
+  # byte-identical to "no Pod matched". Those two must not collapse -- the
+  # first is the finding this whole check exists for, and on these workers it
+  # is also the only shape it can take, since guest-console-log is the only
+  # init container a DataVolume-booted virt-launcher Pod ever has.
+  init_names=$(timeout -k 5 30 kubectl -n tenant-test get pods \
+    -l kubevirt.io=virt-launcher \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.spec.initContainers[*].name}{" "}{.spec.containers[*].name}{"\n"}{end}' \
+    --request-timeout=30s) || read_rc=$?
+  if [ "${read_rc}" -ne 0 ]; then
+    echo "could not read tenant virt-launcher Pods to verify the guest console container (exit ${read_rc})" >&2
+    echo "this says nothing about logSerialConsole either way; continuing" >&2
+    return 1
+  fi
+
+  if [ -z "${init_names}" ]; then
+    echo "no tenant virt-launcher Pod matched; nothing to verify about the guest console container" >&2
+    echo "this says nothing about logSerialConsole either way; continuing" >&2
+    return 1
+  fi
+
+  case "${init_names}" in
+    *guest-console-log*)
+      # The positive outcome goes on the record too. This run doubles as the
+      # revalidation of a platform-wide workaround, and a check that returns
+      # 0 in silence leaves "the override worked" to be inferred from the
+      # absence of a complaint -- the inference this collector refuses to
+      # make everywhere else. Counted rather than asserted for every Pod: the
+      # check is deliberately "some Pod carries it", so the ratio is the
+      # honest way to say what was seen.
+      attached=$(printf '%s\n' "${init_names}" | grep -c 'guest-console-log' || true)
+      total=$(printf '%s\n' "${init_names}" | grep -c '=' || true)
+      echo "» guest-console-log attached on ${attached} of ${total} virt-launcher Pods"
+      return 0
+      ;;
+  esac
+
+  echo "tenant worker virt-launcher Pods carry no guest-console-log container" >&2
+  echo "the node group asked for logSerialConsole, so either the cluster-wide" >&2
+  echo "disableSerialConsoleLog won the override or the field never reached the VM" >&2
+  # Bounded like the read above, and for the same reason: these run on a path
+  # that ends in exit 1, and a hang here would take the step's whole deadline
+  # with it -- losing the tenant snapshot that the exit is supposed to reach.
+  timeout -k 5 30 kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher \
+    -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.initContainers[*].name}{"\n"}{end}' \
+    --request-timeout=30s || true
+  timeout -k 5 30 kubectl -n tenant-test get virtualmachineinstances.kubevirt.io \
+    -o jsonpath='{range .items[*]}{.metadata.name}{": logSerialConsole="}{.spec.domain.devices.logSerialConsole}{"\n"}{end}' \
+    --request-timeout=30s || true
+  return 2
+}
+
+# Capture each tenant worker's guest serial console from the management
+# cluster. When a node group sets logSerialConsole, KubeVirt streams the
+# console into a guest-console-log container beside virt-launcher, and reading
+# it needs nothing from inside the guest: no talosctl, no client certificate,
+# no helper Pod, no reachable apid. That is the whole reason it exists. The
+# talosctl capture below can only describe a worker whose apid already answers,
+# so a worker that stalls earlier -- the case where no Node registers and no
+# certificate request is ever made -- is invisible to it by construction, and
+# the console is the only remaining surface.
+#
+# Reads start at the beginning of the stream rather than tailing it, because a
+# guest that repaints its console would push the boot output out of any tail
+# window while --limit-bytes truncates from the far end instead. That covers
+# only what kubectl returns: whatever the kubelet has already rotated out of
+# the container log (containerLogMaxSize, 10Mi x 5 by default) is gone before
+# the capture runs, and no read option recovers it.
+#
+# An absent guest-console-log container is the finding, not a gap: it says
+# console logging did not take effect on this run, which is a different fact
+# from a guest that printed nothing. kubectl's refusal is kept beside the
+# capture rather than inside it so the two stay distinguishable, and the
+# capture file says which of them happened.
+#
+# The Pod list is namespace-wide rather than scoped to one release. The two
+# virt-launcher captures immediately above the call site already select that
+# way, and suites run one at a time. Below the cap a Pod that does not belong
+# to this test costs one extra file named after itself and nothing else; at
+# the cap it can displace one of this suite's own, since kubectl returns the
+# list name-sorted. COLLECTION-TRUNCATED.txt is what keeps that visible.
+cozy_capture_tenant_serial_console() {
+  local report_dir="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}/tenant-serial-console"
+  local pods pod rc
+  local list_rc=0
+  local seen=0
+  local silent=0
+  local pod_err
+  local max_pods=6
+  local err_log="${report_dir}/setup-error.log"
+  local warn_log="${report_dir}/READ-WARNINGS.txt"
+
+  mkdir -p "${report_dir}"
+  # stderr goes to its own file rather than being folded into the captured
+  # stdout: a warning kubectl prints on an otherwise successful call would
+  # otherwise be read back as a Pod name. Which file it goes to is decided by
+  # the exit status, not by the fact that something was written: an apiserver
+  # Warning header or a deprecation notice arrives on stderr with a zero exit,
+  # so a warning beside a healthy read belongs in READ-WARNINGS.txt as
+  # elsewhere in this tree, while the stderr of a call that actually failed IS
+  # the diagnosis and belongs in setup-error.log. The list is wrapped in
+  # timeout for the same reason every read below it is: --request-timeout
+  # bounds the HTTP request, not a client retrying against a wedged
+  # apiserver, and a hang here would cost the whole
+  # section rather than one Pod.
+  pods=$(timeout -k 5 30 kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+    --request-timeout=30s 2>"${warn_log}") || list_rc=$?
+  if [ "${list_rc}" -ne 0 ]; then
+    echo "failed to list tenant virt-launcher Pods for serial console capture" >&2
+    mv "${warn_log}" "${err_log}" 2>/dev/null || true
+    printf '%s\n' \
+      "failed to list tenant virt-launcher Pods for serial console capture (exit ${list_rc})" \
+      >>"${err_log}"
+    return 1
+  fi
+  [ -s "${warn_log}" ] || rm -f "${warn_log}"
+  if [ -z "${pods}" ]; then
+    echo "no virt-launcher Pod found for serial console capture" >&2
+    printf '%s\n' 'no virt-launcher Pod found in namespace tenant-test' \
+      >"${err_log}"
+    return 1
+  fi
+
+  # Cap the walk. Each read costs up to 35s (30s plus the kill grace) and the
+  # pool can reach maxReplicas, so an uncapped loop is an unbounded term inside
+  # a failure path that already spends ~12m on other collectors under one
+  # chainsaw op timeout — and the bundle this exists to produce is what gets
+  # truncated when that op is killed. A cap that fired is recorded with both
+  # counts rather than leaving the shortfall implicit, since a short listing
+  # otherwise reads as a small pool rather than a truncated walk.
+  for pod in ${pods}; do
+    seen=$((seen + 1))
+    if [ "${seen}" -gt "${max_pods}" ]; then
+      echo "--- guest serial console capture stopped at ${max_pods} Pods ---"
+      printf 'capture stopped after %s Pods; %s matched in total\n' \
+        "${max_pods}" "$(printf '%s\n' ${pods} | wc -l | tr -d ' ')" \
+        >"${report_dir}/COLLECTION-TRUNCATED.txt"
+      break
+    fi
+    echo "--- capturing guest serial console: ${pod} ---"
+    rc=0
+    # stderr goes beside the capture, not into it. Folded in, kubectl's own
+    # "container guest-console-log is not valid for pod ..." would make the
+    # file non-empty and the console would look like it had said something.
+    # That error is the headline case here -- it is what a container wedged in
+    # Init looks like -- so it has to stay separable from console bytes. Which
+    # name it lands under is decided by the exit status, the same way the list
+    # read above decides it: kubectl writes warnings on stderr with a zero
+    # status too, and a warning beside a healthy capture is not an error.
+    pod_err="${report_dir}/${pod}.read-error.log"
+    timeout -k 5 30 kubectl -n tenant-test logs "${pod}" \
+      -c guest-console-log --limit-bytes=1048576 \
+      >"${report_dir}/${pod}.log" 2>"${pod_err}" || rc=$?
+    if [ ! -s "${pod_err}" ]; then
+      rm -f "${pod_err}"
+      pod_err=
+    elif [ "${rc}" -eq 0 ]; then
+      mv "${pod_err}" "${report_dir}/${pod}.READ-WARNINGS.txt" 2>/dev/null || true
+      pod_err=
+    fi
+    # Tested before the exit-code line is appended, or nothing is ever empty.
+    # Three outcomes, three labels, because only one of them is a statement
+    # about what the guest did.
+    if [ ! -s "${report_dir}/${pod}.log" ] && [ "${rc}" -ne 0 ]; then
+      silent=$((silent + 1))
+      # timeout kills the child without a word, so a read can fail having
+      # written nothing to either stream. Naming a file that was never created
+      # sends the reader looking for evidence that does not exist.
+      if [ -n "${pod_err}" ]; then
+        printf '%s\n' \
+          'the read returned no console at all; see read-error.log and POD-STATE.txt' \
+          >>"${report_dir}/${pod}.log"
+      else
+        printf '%s\n' \
+          'the read failed silently and returned no console at all; see POD-STATE.txt' \
+          >>"${report_dir}/${pod}.log"
+      fi
+    elif [ ! -s "${report_dir}/${pod}.log" ]; then
+      silent=$((silent + 1))
+      printf '%s\n' \
+        'the read succeeded and returned nothing; see POD-STATE.txt for whether the container started' \
+        >>"${report_dir}/${pod}.log"
+    elif [ "${rc}" -ne 0 ]; then
+      silent=$((silent + 1))
+      if [ -n "${pod_err}" ]; then
+        printf '%s\n' \
+          'console output is truncated; see read-error.log and POD-STATE.txt' \
+          >>"${report_dir}/${pod}.log"
+      else
+        printf '%s\n' \
+          'console output is truncated; see POD-STATE.txt for the Pod state' \
+          >>"${report_dir}/${pod}.log"
+      fi
+    fi
+    printf '\n[capture exit code: %s]\n' "${rc}" >>"${report_dir}/${pod}.log"
+  done
+
+  # An empty console log has two causes that are indistinguishable in the log
+  # itself: the guest printed nothing, or the container never started and there
+  # was no stream to read. The second is what kubevirt/kubevirt#15989 produces,
+  # and it is the reading that would otherwise be filed as a quiet guest --
+  # silence reported as a result is the failure this collector exists to
+  # prevent, so it is not allowed to produce one. The Pod's own state and its
+  # events are what separate the two, and they are read once for the whole
+  # selector rather than per Pod: several silent workers are one finding, and
+  # paying per Pod would put back the unbounded term the cap removed.
+  if [ "${silent}" -gt 0 ]; then
+    {
+      printf '=== describe pods -l kubevirt.io=virt-launcher ===\n'
+      timeout -k 5 30 kubectl -n tenant-test describe pods \
+        -l kubevirt.io=virt-launcher --request-timeout=30s 2>&1 || true
+      printf '\n=== Pod events in tenant-test (not filtered to virt-launcher) ===\n'
+      timeout -k 5 30 kubectl -n tenant-test get events \
+        --field-selector involvedObject.kind=Pod \
+        --sort-by=.lastTimestamp --request-timeout=30s 2>&1 || true
+    } >"${report_dir}/POD-STATE.txt"
+  fi
+}
+
 # Collect the guest-side evidence requested by issue #3513. This runs only after
 # the 18-minute Ready deadline has already failed. VMIs without a reported IP
 # are recorded before any Certificate or Pod is created; when at least one IP is
@@ -728,6 +1048,12 @@ ${ouroboros_addon}
       diskSize: 20Gi
       gpus: []
       instanceType: u1.medium
+      # The failure this suite keeps hitting is a worker that stalls in the
+      # guest before Talos apid answers, which leaves nothing to read on the
+      # management side and nothing for talosctl to connect to. Turning this on
+      # attaches KubeVirt's guest-console-log container, the only artifact that
+      # covers that window.
+      logSerialConsole: true
       maxReplicas: 10
       minReplicas: 2
       resources: {}
@@ -872,6 +1198,7 @@ EOF
     # designed without this artifact. Every capture is guarded with `|| true`
     # so a capture failure never masks the real `exit 1`.
     echo "=== node-join failed: fewer than 2 tenant nodes Ready within 18m — diagnostics follow ==="
+    cozy_report_guest_console_wedge || true
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes || true
     kubectl -n tenant-test get hr || true
 
@@ -885,6 +1212,22 @@ EOF
     kubectl -n tenant-test describe virtualmachineinstances.kubevirt.io || true
     kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher -o wide || true
     kubectl -n tenant-test describe pods -l kubevirt.io=virt-launcher || true
+
+    # (b1) Guest serial console, read from the management cluster. First of the
+    # in-guest captures because it is the only one that survives a worker which
+    # never reached apid — the dominant shape of this failure, where no Node
+    # registers and no certificate request is ever made. (b) below needs that
+    # same apid to answer, so it cannot describe this class at all.
+    # Two shapes of empty result are worth telling apart from a silent guest.
+    # A virt-launcher Pod still Pending has no containers at all yet, which is
+    # the ordinary shape of a worker that never booted. A Pod wedged in Init on
+    # guest-console-log is the opposite reading: the console container is what
+    # stopped it booting, and then neither a console nor an apid exists to
+    # explain anything else. The container being absent from a Running Pod is
+    # the rarest of the three, since the per-VM field outranks the cluster-wide
+    # disable by design and the green path asserts it attached.
+    echo "=== (b1) tenant worker guest serial console (management cluster, ns tenant-test) ==="
+    cozy_capture_tenant_serial_console || true
 
     # (b) In-guest Talos kernel and kubelet logs. The tenant chart intentionally
     # has no admin talosconfig, so mint a one-hour os:reader client from its
@@ -1481,6 +1824,22 @@ EOF
   if helmrelease_has_remediation_cycle "${history_statuses}"; then
     echo "Parent HelmRelease entered remediation cycle." >&2
     kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
+    exit 1
+  fi
+
+  # Last, after everything the suite exists to prove. This checks a debugging
+  # aid, not the product: a worker boots and serves either way, so letting it
+  # run first would let a KubeVirt-side change to a diagnostic preempt the
+  # assertions that actually cover the tenant cluster. It still runs on the
+  # passing path rather than beside the collector, because the collector only
+  # runs when node-join fails and would learn the setting was inert in the one
+  # run where the console can no longer be recovered. Exit 2 alone fails the
+  # suite; see cozy_assert_guest_console_attached for why its three outcomes
+  # are not interchangeable.
+  echo "» verifying the tenant worker guest console container attached"
+  attach_rc=0
+  cozy_assert_guest_console_attached || attach_rc=$?
+  if [ "${attach_rc}" -eq 2 ]; then
     exit 1
   fi
 
