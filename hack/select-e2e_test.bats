@@ -341,6 +341,34 @@ assert_full_suite() {
 # Last, not before the assertion, so that `set -e` leaves the scratch directory
 # behind on failure for inspection (docs/agents/e2e-testing.md §3).
 
+@test "editing a disabled chainsaw suite selects nothing" {
+    # A .disabled suite runs nowhere, so its edits are the one file class that
+    # provably cannot regress a test — and before this rule they bought the
+    # most expensive outcome the selector has. The suffix was ignored when
+    # deriving the suite name, the derived name matched no existing suite, the
+    # final intersection came back empty, and the empty-selection safety net
+    # escalated to the full run.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/e2e-chainsaw/backup/chainsaw-test.yaml.disabled" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+    rm -rf "$tmp"
+}
+
+@test "a disabled suite alongside a live one does not mask the selection" {
+    # The inert rule must drop the disabled path only, not the whole diff: the
+    # cheap way to make the test above pass is a rule that returns early, and
+    # that would silently unselect real work committed in the same change.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf '%s\n' hack/e2e-chainsaw/backup/chainsaw-test.yaml.disabled \
+        packages/apps/postgres/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres" ]
+    rm -rf "$tmp"
+}
+
 @test "a broken yq is named rather than passed off as an empty graph" {
     # Both indexes are one yq each, read as `$(build_owners_index | sort -u)`,
     # so the pipeline reports sort's status and set -e never sees yq's. A

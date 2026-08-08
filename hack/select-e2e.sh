@@ -8,7 +8,8 @@
 # Output:
 #   - empty         no E2E impact, decided by one of the rules that select
 #                   nothing: step 1 for docs/, dashboards/ and *.md, step 2 for
-#                   an examples/backups/<app>/ with no suite, and
+#                   a *.disabled Chainsaw suite and for an
+#                   examples/backups/<app>/ with no suite, and
 #                   inert_config_pattern for repo meta and agent config
 #   - <suite names> selected per the PackageSource dependency graph
 #   - full list     any path that affects all tests, OR an unrecognised
@@ -34,11 +35,11 @@
 # widen the fall-through.
 #
 # "Empty" is not a synonym for inert_config_pattern. Several rules select
-# nothing: step 1 for docs/, dashboards/ and *.md, step 2 for an
-# examples/backups/<app>/ whose app has no suite, and the pattern itself. The
-# property the lanes depend on is weaker than "matched the inert list" and it is
-# the one to preserve: an empty selection is a decision some rule reached, never
-# a path nothing looked at.
+# nothing: step 1 for docs/, dashboards/ and *.md, step 2 for a *.disabled
+# Chainsaw suite and for an examples/backups/<app>/ whose app has no suite, and
+# the pattern itself. The property the lanes depend on is weaker than "matched
+# the inert list" and it is the one to preserve: an empty selection is a
+# decision some rule reached, never a path nothing looked at.
 #
 # One caveat worth knowing before trusting that: inert_config_pattern makes
 # .github/ inert as a whole directory, and the e2e workflows are exempted by
@@ -233,6 +234,17 @@ while IFS= read -r file || [ -n "$file" ]; do
   case "$file" in
     hack/e2e-chainsaw/_lib/*|hack/e2e-chainsaw/.chainsaw.yaml)
       trigger_full=1
+      continue ;;
+    hack/e2e-chainsaw/*/*.disabled)
+      # A suite parked as chainsaw-test.yaml.disabled is registered nowhere and
+      # executed by nothing, so an edit to it cannot regress a test. Matched
+      # before the per-suite rule below, which reads the suite name off the
+      # directory and ignores the suffix: the name it derives matches no
+      # existing suite, the intersection at the bottom empties, and the
+      # safety net for a genuinely unclassified selection escalates to the
+      # full run — the most expensive outcome, bought by the one file class
+      # that provably cannot affect anything. Inert is the classification;
+      # the safety net keeps its job for paths no rule has looked at.
       continue ;;
     hack/e2e-chainsaw/*/*)
       app=$(echo "$file" | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/.*,\1,p')
