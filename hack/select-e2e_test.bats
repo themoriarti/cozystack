@@ -11,6 +11,40 @@
 # Run with: hack/cozytest.sh hack/select-e2e_test.bats
 # -----------------------------------------------------------------------------
 
+# Assert that a selection is the WHOLE suite list, not merely a long one.
+#
+# These asserts used to read `[ "$(echo "$output" | wc -w)" -gt 5 ]`, which is
+# satisfied by any selection of six or more suites. The regression worth
+# catching on every escalation path is partial escalation — a selector bug that
+# picks most suites but not all — and a threshold cannot see it: with 21 suites
+# in the tree, dropping fifteen of them still passes. Equality can.
+#
+# The expected set is derived the way the script's full-suite branch derives it
+# rather than pinned as a literal, so adding or disabling a Chainsaw suite does
+# not need an edit in fourteen places here.
+#
+# A helper rather than an inline one-liner because cozytest.sh runs each @test
+# under `set -x`: a bare failing `[ ... ]` prints the two values already
+# expanded, but not which side is which, and reading a 21-item diff off a trace
+# line is exactly the moment a test stops being worth having.
+full_suite_list() {
+    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml \
+      | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' | sort | paste -sd ' ' -
+}
+
+assert_selection() {
+    if [ "$2" != "$3" ]; then
+        echo "$1" >&2
+        echo "  want: $3" >&2
+        echo "  got:  $2" >&2
+        exit 1
+    fi
+}
+
+assert_full_suite() {
+    assert_selection "expected the full Chainsaw suite" "$1" "$(full_suite_list)"
+}
+
 @test "single app diff selects only that suite" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
@@ -57,14 +91,31 @@
     fi
 }
 
-@test "networking change triggers full suite" {
+@test "a CNI change selects every suite the graph can reach" {
+    # Named for what it measures rather than for the full suite it used to claim.
+    # `packages/system/cilium` is owned by cozystack.networking and resolves
+    # through the dependency graph, not through full_suite_pattern, so the
+    # selection is "every suite reachable from networking" — which is 19 of the
+    # 21 that exist, not all of them.
+    #
+    # The two it cannot reach are kuberture and securitygroup. select-e2e.sh maps
+    # a source to suites only for *-application names, plus external-dns by
+    # name; cozystack.kuberture and cozystack.securitygroup-controller are
+    # neither, so the walk reaches them and the filter drops them. Both declare
+    # cozystack.networking as a dependency, so this is the selector under-
+    # selecting, not the graph being right — a CNI change that breaks either
+    # controller runs neither of their suites. Tracked in #3665. Subtracted here
+    # rather than papered over: closing that gap turns this test red, which is
+    # the correct moment to notice — the two names below are a measurement of
+    # today's selector, not a typo. The previous `wc -w -gt 5` assert passed on
+    # 19 and said nothing.
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/cilium/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    # Full suite means more than 5 suites
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    reachable=$(full_suite_list | tr ' ' '\n' | grep -vxE 'kuberture|securitygroup' | paste -sd ' ' -)
+    assert_selection "expected every graph-reachable suite" "$output" "$reachable"
 }
 
 @test "library change triggers full suite" {
@@ -73,7 +124,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/library/cozy-lib/templates/_helpers.tpl" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
 }
 
 @test "docs-only diff selects nothing" {
@@ -114,7 +165,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-chainsaw/_lib/run-kubernetes.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
 }
 
 @test "chainsaw config change triggers full suite" {
@@ -123,7 +174,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-chainsaw/.chainsaw.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
 }
 
 @test "install bats triggers full suite" {
@@ -132,7 +183,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-install-cozystack.bats" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
 }
 
 @test "per-suite edit selects only that suite, never escalates" {
@@ -150,7 +201,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo ".github/workflows/pull-requests.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
 }
 
 @test "backup example harness edit selects its app suite" {
@@ -183,7 +234,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/common-envs.mk" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
     rm -rf "$tmp"
 }
 
@@ -192,7 +243,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo ".github/workflows/e2e-fork.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
     rm -rf "$tmp"
 }
 
@@ -201,7 +252,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "pkg/cozystack/registry.go" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
     rm -rf "$tmp"
 }
 
@@ -210,7 +261,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "go.mod" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
     rm -rf "$tmp"
 }
 
@@ -219,7 +270,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/lib/image-refs.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
     rm -rf "$tmp"
 }
 
@@ -228,7 +279,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "brand-new-top-level/thing.conf" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>/dev/null)
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
     rm -rf "$tmp"
 }
 
@@ -251,7 +302,7 @@
     [ -z "$output" ]
     echo ".github/workflows/e2e-tag.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
     rm -rf "$tmp"
 }
 
@@ -307,6 +358,6 @@
     # silent-green this classification exists to remove.
     printf 'docs/x.md\n%s' brand-new/thing.conf > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    assert_full_suite "$output"
     rm -rf "$tmp"
 }
