@@ -47,6 +47,9 @@ type ConfigSpec struct {
 	// Kubelet resource reservations for this pool.
 	// +kubebuilder:default:={}
 	Kubelet Kubelet `json:"kubelet,omitempty"`
+	// Stream each worker VM's guest serial console into a `guest-console-log` container beside virt-launcher, readable with `kubectl logs`. The only view of a worker that stalls during boot before Talos apid answers, when neither a Node nor a certificate request exists to diagnose from. Two costs the field name does not show. Changing the value rolls the pool, because it is part of the worker VM template whose name is a hash of its content -- including the stuck VM whose console was wanted, so it buys visibility into the next boot rather than the current one. And it overrides the platform's cluster-wide `disableSerialConsoleLog`, set because that container has been seen holding virt-launcher in `PodInitializing` (kubevirt/kubevirt#15989), which would take the pool down rather than explain it -- so check that virt-launcher Pods reach Running after enabling it.
+	// +kubebuilder:default:=false
+	LogSerialConsole bool `json:"logSerialConsole"`
 	// Maximum number of unhealthy nodes tolerated in this pool before remediation is paused. The MachineHealthCheck admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is a percentage. Drop to "0%" once the pool is stable.
 	// +kubebuilder:default:="50%"
 	MaxUnhealthy string `json:"maxUnhealthy"`
