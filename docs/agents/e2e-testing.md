@@ -1,6 +1,6 @@
 # E2E Testing Conventions
 
-Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-chainsaw/`, the bootstrap/OpenAPI BATS (`hack/e2e-*.bats`), `hack/*.sh` test helpers, the E2E CI workflow (`.github/workflows/pull-requests.yaml`), or `packages/core/testing/`.
+Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-chainsaw/`, the bootstrap/OpenAPI BATS (`hack/e2e-*.bats`), `hack/*.sh` test helpers, either E2E CI workflow (`.github/workflows/pull-requests.yaml` for same-repo pull requests, `.github/workflows/e2e-fork.yaml` for forks), or `packages/core/testing/`. §10 covers how the two split the work and which invariants hold them together.
 
 The app suite is **Kyverno Chainsaw** (`hack/e2e-chainsaw/`, one directory per app, each with a `chainsaw-test.yaml`). Cluster bootstrap (`hack/e2e-install-cozystack.bats`, `hack/e2e-prepare-cluster.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS.
 
@@ -67,7 +67,7 @@ A parent HelmRelease that hit its wait timeout, uninstalled, and reinstalled is 
 
 `hack/select-e2e.sh` walks the `packages/core/platform/sources/*.yaml` dependency graph and runs only the Chainsaw suites affected by a diff. A suite is a directory under `hack/e2e-chainsaw/` containing a `chainsaw-test.yaml`.
 
-- Conservative escalation: edits to `packages/library/`, `packages/core/`, `api/`, `cmd/`, `internal/`, top-level `hack/*.sh|*.bats` helpers, the shared `hack/e2e-chainsaw/_lib/`, the chainsaw config `hack/e2e-chainsaw/.chainsaw.yaml`, the `Makefile`, or the E2E workflows escalate to the **full suite**. A per-suite edit (any file under `hack/e2e-chainsaw/<app>/`) selects **only** that suite.
+- Conservative escalation: edits to `packages/library/`, `packages/core/`, `api/`, `cmd/`, `internal/`, top-level `hack/*.sh|*.bats` helpers, the shared `hack/e2e-chainsaw/_lib/`, the chainsaw config `hack/e2e-chainsaw/.chainsaw.yaml`, the `Makefile`, or `.github/workflows/pull-requests.yaml` escalate to the **full suite**. A per-suite edit (any file under `hack/e2e-chainsaw/<app>/`) selects **only** that suite. Note the exception, since "the E2E workflows" would be the natural reading: the selector's list names `pull-requests.yaml` and not `e2e-fork.yaml`, so a change touching only the fork workflow selects nothing and the Chainsaw step is skipped, while the platform install and the OpenAPI tests still run. That is tolerable rather than designed, and it is tolerable for a specific reason: a `workflow_run` always executes the default-branch copy of `e2e-fork.yaml`, so running the suite against a change to it would not exercise that change anyway. It is the same fail-open shape as #3392.
 - The `full-e2e` PR label forces the whole suite.
 - The selection is passed to `make test-chainsaw CHAINSAW_SUITES="<names>"`, which runs `chainsaw test <names>` from `hack/e2e-chainsaw/` (empty = the whole suite).
 - The coverage gap TIA opens on PRs is closed at release-cut time: the "Prepare release" commit bakes image digests into `packages/core/` (and other packages), which TIA escalates to the **full** suite — so the release PR exercises the whole suite against the commit the tag will point at.
