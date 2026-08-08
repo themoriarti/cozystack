@@ -170,3 +170,143 @@
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources") || true
     [ -z "$output" ]
 }
+
+# --- #3392: every path is classified; unclassified escalates -----------------
+#
+# The bug these cover: an unrecognised path used to select nothing, both lanes
+# read an empty selection as "skip Chainsaw", and the required "E2E Tests"
+# status was then posted green with no suite run. Each test below pins one side
+# of the classification — escalate, or skip by an explicit rule.
+
+@test "hack/*.mk triggers full suite (build flags of every image)" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/common-envs.mk" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    rm -rf "$tmp"
+}
+
+@test "the fork e2e workflow triggers full suite" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo ".github/workflows/e2e-fork.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    rm -rf "$tmp"
+}
+
+@test "pkg/ triggers full suite (shipped Go code)" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "pkg/cozystack/registry.go" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    rm -rf "$tmp"
+}
+
+@test "go.mod triggers full suite" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "go.mod" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    rm -rf "$tmp"
+}
+
+@test "hack/lib helper triggers full suite" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/lib/image-refs.sh" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    rm -rf "$tmp"
+}
+
+@test "an unclassified path escalates instead of selecting nothing" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "brand-new-top-level/thing.conf" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    rm -rf "$tmp"
+}
+
+@test "inert repo meta selects nothing" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf '%s\n' .gitignore LICENSE .pre-commit-config.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+    rm -rf "$tmp"
+}
+
+@test "a non-e2e workflow selects nothing, an e2e one still escalates" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    # .github/ is inert as a directory, but the escalation for the workflows
+    # that run the suite is checked first and must win.
+    echo ".github/workflows/tags.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+    echo ".github/workflows/e2e-tag.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    rm -rf "$tmp"
+}
+
+@test "a README inside an escalating tree stays inert" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    # packages/core/ escalates, but *.md is matched before that so a doc edit
+    # under it does not burn a full run.
+    echo "packages/core/installer/README.md" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+    rm -rf "$tmp"
+}
+
+@test "an inert path alongside a real one does not mask the selection" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf '%s\n' .gitignore packages/apps/postgres/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres" ]
+    rm -rf "$tmp"
+}
+
+# The classification above is only total if every line reaches the loop that
+# applies it. POSIX read assigns the last line and returns non-zero when the
+# input has no trailing newline, so a plain `while read` drops it, and the
+# fall-through that escalates an unrecognised path lives inside the body that
+# drop skips. `git diff --name-only` always terminates its output, so the bug is
+# invisible to a caller that pipes it; a caller assembling the list itself sees
+# it immediately. Both cases below are red without `|| [ -n "$file" ]`.
+#
+# Cleanup here, as in every test added with this change, is the last statement
+# of the body rather than a `trap ... EXIT`: that trap replaces the one the bats
+# binary installs for its own bookkeeping, and a test failing under it can print
+# no TAP line at all, which is the opposite of what a regression pin is for.
+# Last, not before the assertion, so that `set -e` leaves the scratch directory
+# behind on failure for inspection (docs/agents/e2e-testing.md §3).
+
+@test "an unterminated last line is still classified" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf '%s' packages/apps/postgres/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres" ]
+    rm -rf "$tmp"
+}
+
+@test "an unterminated unclassified last line still escalates" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    # The unclassified path is the one the drop would eat, so without the guard
+    # the escalation never fires and the selection comes back empty — the exact
+    # silent-green this classification exists to remove.
+    printf 'docs/x.md\n%s' brand-new/thing.conf > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    rm -rf "$tmp"
+}

@@ -274,24 +274,27 @@ jobs:
             // from `git diff` on the fork-controlled merge ref would hand a
             // fork a second way to make TIA select nothing, on top of the one
             // it already has — the selector runs from the fork tree, so this
-            // hardens the input and not the decision. Note select-e2e.sh escalates
-            // to the full suite for an unrecognised path INSIDE packages/, but
-            // silently selects nothing for a path it does not recognise at all
-            // (e.g. hack/*.mk) — a pre-existing fail-open shared with the
-            // in-tree lane, tracked in #3392.
+            // hardens the input and not the decision. select-e2e.sh now
+            // classifies every path it is given: shared build inputs and the
+            // e2e harness escalate to the full suite, paths that cannot affect
+            // what e2e exercises are named inert and select nothing, and a path
+            // matching neither escalates rather than returning empty. So an
+            // empty selection reaching this lane means some rule decided the
+            // change cannot affect a suite, not that the selector never
+            // recognised the path, which is what used to make it a fail-open
+            // (#3392).
             // Both sides of a rename go to TIA too: the old path is a removal
             // the selector must see (a moved packages/<app>/… still affects
             // that app's suite). Extra paths can only widen the selection.
-            // Trailing newline is load-bearing, not cosmetic. select-e2e.sh
-            // reads this with `while IFS= read -r file`, and POSIX read returns
-            // non-zero at EOF without a newline, so the loop body never runs for
-            // an unterminated last line and that path is silently dropped. For a
-            // one-file PR that empties the selection outright: the Chainsaw step
-            // is skipped, the job succeeds, and the gate goes green with nothing
-            // tested. The in-tree lane never hit it because `git diff
-            // --name-only` terminates its output; this is the first caller that
-            // builds the list itself. The log would not have shown it either —
-            // `sed` prints an unterminated last line just like a terminated one.
+            // Trailing newline: belt to the selector's braces. It used to be
+            // load-bearing, because `while IFS= read -r file` drops an
+            // unterminated last line and that silently emptied the selection
+            // for a one-file PR. select-e2e.sh now guards its own loop with
+            // `|| [ -n "$file" ]`, so the terminator no longer decides
+            // anything. It stays because emitting a text file that ends in a
+            // newline is the contract every other reader will assume, and
+            // because the guard and this line are in different files that can
+            // be changed by different people.
             const changed = files
               .flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename])
               .join('\n') + '\n';
@@ -602,9 +605,16 @@ jobs:
       # (base64 through the job output), NOT a git diff on the fork-controlled
       # merge ref. The script below is the fork's own, so this hardens what the
       # selector reads and not what it decides — see the job header.
-      # select-e2e.sh escalates to the full suite for an unrecognised path
-      # inside packages/; a path it does not recognise at all selects nothing
-      # and the run below is skipped (#3392 — same in the in-tree lane).
+      # select-e2e.sh classifies every changed path explicitly: shared build
+      # inputs and the e2e harness escalate to the full suite, several rules
+      # select nothing (docs and dashboards, a backups example with no suite,
+      # the inert repo-meta pattern), and anything matching none of them
+      # escalates rather than returning empty. So an empty selection here means
+      # some rule decided the change cannot affect a suite, not "TIA had no
+      # idea" (#3392). The exception to that, worth knowing before trusting it:
+      # a workflow added under .github/workflows/ reads as inert until it is
+      # added to the escalation list by name, because .github/ is inert as a
+      # directory and the e2e workflows are exempted from it individually.
       # Skipped (→ full suite below) on the full-e2e label.
       - name: Select E2E tests
         id: select
@@ -623,8 +633,9 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
       # Single `chainsaw test` invocation, no per-app retry loop (e2e-testing.md
-      # §1) — Chainsaw polls each assertion to its own timeout. Full suite when
-      # the full-e2e label skipped selection or the selection is empty.
+      # §1) — Chainsaw polls each assertion to its own timeout. Full suite only
+      # when the full-e2e label skipped selection: if `select` ran and came back
+      # empty it set skip=true and this step never starts.
       - name: Run E2E tests
         id: e2e_tests
         if: ${{ steps.select.outputs.skip != 'true' }}
@@ -632,7 +643,7 @@ jobs:
           SELECTED_APPS: ${{ steps.select.outputs.apps }}
           FULL_E2E: ${{ needs.resolve.outputs.full_e2e }}
         run: |
-          if [ "$FULL_E2E" = "true" ] || [ -z "$SELECTED_APPS" ]; then
+          if [ "$FULL_E2E" = "true" ]; then
             suites=""        # empty => test-chainsaw runs the whole suite
             echo "Running full chainsaw suite"
           else
