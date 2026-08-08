@@ -3,9 +3,13 @@
 #
 # DIAGNOSTIC ONLY. This script collects extra evidence on an already-failed
 # test; it never mutates the cluster and never changes the test's pass/fail
-# outcome. cozytest.sh invokes it from its on-failure hook, AFTER the
-# crust-gather snapshot and only when a test has already failed, writing into
-# the same snapshot dir so the output lands in the uploaded cozyreport artifact.
+# outcome. Two callers invoke it, each from its own on-failure path and each
+# AFTER the crust-gather snapshot: the cozytest.sh EXIT trap and the Chainsaw
+# global catch in hack/e2e-chainsaw/.chainsaw.yaml. Both write into the same
+# snapshot dir so the output lands in the uploaded cozyreport artifact, and both
+# wrap this script in a wall-clock backstop -- but not the same one (600s and
+# 300s respectively), so a change sized against one caller can still overrun the
+# other. The MAX_LBS note below carries that arithmetic.
 #
 # Why this exists: a recurrent install failure is a CNI host->local-pod
 # data-plane transient -- kubelet on a node reaches a *local* pod's
@@ -62,7 +66,8 @@
 #   datapath (the suspected failing path) is never characterised. This section
 #   closes that gap. It is gated by a LIVE reachability probe so it only does the
 #   heavy capture for an LB that is actually broken; reachable LBs are enumerated
-#   and explicitly recorded as "reachable, skipped".
+#   and explicitly recorded as "reachable, skipped", and an LB no probe could be
+#   run against is recorded as unprobed rather than as either of those.
 #     - Enumerate every Service type=LoadBalancer that has a status ingress IP.
 #       For each, derive: the EndpointSlice backend (endpoint IP + node +
 #       targetPort), the Service nodePort + externalTrafficPolicy, and the
@@ -89,7 +94,7 @@
 #     In-guest capture INSIDE the worker VMI (tenant `cilium-dbg bpf lb list` /
 #     `tcpdump eth0`) is the one hop this cannot reach from the host; it is left
 #     as a documented stretch at the call site (it needs a tenant
-#     kubeconfig/virtctl this EXIT-trap diagnostic does not have). The host-side
+#     kubeconfig/virtctl that neither caller of this diagnostic has). The host-side
 #     ANNOUNCER/ENDPOINT split is the deliverable and already localises the
 #     failing hop to host-cilium vs kube-ovn delivery.
 #
@@ -97,7 +102,7 @@
 # no retries, no behavior change, no traps. Every live capture is time-boxed,
 # and no command can fail or stall the job: most are `|| true`, and the few
 # whose status is read take it into a variable and use it only to say why a
-# read produced nothing. A wall-clock backstop wraps the whole run at the call
+# read produced nothing. A wall-clock backstop wraps the whole run at each call
 # site. It no-ops cleanly when there are no affected pods.
 #
 # Why a read produced nothing is written to capture-notes.txt beside the
@@ -120,8 +125,24 @@ set -u
 # (one Service per line, as emitted by the kubectl jsonpath in main). Emits only
 # the rows that are type=LoadBalancer AND carry a status ingress IP -- i.e. the
 # Services that actually have an external datapath to characterise.
+#
+# NF == 7 first, because a truncated list is exactly what a bounded or
+# interrupted read leaves behind and a fragment passes a value-only test: an IP
+# cut mid-octet still looks like an IP, and the row it sits in would be probed
+# and written up as a Service that has no such address. The jsonpath emits a
+# fixed seven fields per record, so anything shorter is a cut rather than a
+# Service. Dropping it loses nothing a reader needs -- the read's own note
+# already says the list did not finish.
+#
+# What a field count cannot catch: a cut inside the LAST field still delivers
+# every separator, so `...|30080|Clus` counts seven and passes, and nothing
+# in-band separates a truncated final value from a short one. Here the last
+# column is display-only. In the two filters below it is a decision column
+# (`phase`, `ready`), where a truncated value matches neither state being
+# excluded and the row is kept -- over-capturing rather than dropping evidence,
+# and the read's own cut-off note is what tells the reader the list ended early.
 lb_filter_services() {
-  awk -F'|' '$3 == "LoadBalancer" && $4 != "" { print }'
+  awk -F'|' 'NF == 7 && $3 == "LoadBalancer" && $4 != "" { print }'
 }
 
 # lb_first_ready_endpoint: stdin = `ip|node|targetNs|targetName|ready` rows (one
@@ -129,8 +150,14 @@ lb_filter_services() {
 # first endpoint that has an address and is not explicitly NotReady, then stops.
 # A blank `ready` (slice without conditions) counts as ready; only "false" is
 # excluded. This is the backend the LB IP is supposed to reach.
+#
+# NF == 5 for the reason the two row filters carry their own counts, and it
+# matters more here: this one stops at the first row it accepts, so a fragment
+# at the head of the list is not one bad row among many -- it is the backend,
+# and its half-parsed node is the node every endpoint-side capture below aims
+# at. Five fields per endpoint is what the jsonpath emits.
 lb_first_ready_endpoint() {
-  awk -F'|' '$1 != "" && $5 != "false" { print $1 "|" $2 "|" $3 "|" $4; exit }'
+  awk -F'|' 'NF == 5 && $1 != "" && $5 != "false" { print $1 "|" $2 "|" $3 "|" $4; exit }'
 }
 
 # lb_announcer_node <lbip>: stdin = MetalLB speaker logs, each line prefixed with
@@ -182,18 +209,18 @@ lb_announcer_node() {
 #     genuinely failed (the LB IP is unreachable -- the symptom we want
 #     characterised). A failure alongside an unrun probe still counts: the
 #     failures are evidence, and the unrun one adds no reason to doubt them;
-#   - "skip" when any probe succeeded (LB reachable) OR no probe ran at all (no
-#     HTTP/TCP client in the host netns -> cannot conclude unreachable, so only
-#     the cheap metadata is kept, never the heavy capture);
-#   - "unknown" when every outcome is unknown, i.e. nothing was ever attempted
-#     because the lookups behind the probe did not answer. Collapsing that into
-#     either of the other two would put a verdict about the address into the
-#     artifact without a single probe behind it.
+#   - "skip" when any probe succeeded, i.e. the LB is reachable and only the
+#     cheap metadata is worth keeping;
+#   - "unknown" when nothing was ever attempted -- no outcome at all (no
+#     HTTP/TCP client in the host netns, or an exec that could not run), or
+#     every outcome unknown because the lookups behind the probe did not
+#     answer. Collapsing either into skip would put a verdict about the address
+#     into the artifact without a single probe behind it.
 lb_capture_decision() {
   awk '
     { if ($0 == "") next; n++; if ($0 == "ok") ok++; if ($0 == "unknown") unk++ }
     END {
-      if (n == 0) { print "skip"; exit }
+      if (n == 0) { print "unknown"; exit }
       # Only a wholly unknown set is unknown. One unrun probe beside real
       # failures must not erase them: the failures are the evidence this
       # capture exists to characterise, and merge-base behaviour for that mix
@@ -225,8 +252,14 @@ lb_budget_ok() {
 # cilium endpointManager leak this collector diagnoses can strand a pod before
 # an IP is assigned, and the node-global Cilium/OVN state plus pod events remain
 # useful in that state. IP-specific commands are gated later at their call sites.
+#
+# NF == 6 for the reason lb_filter_services carries NF == 7: a list cut
+# mid-record leaves a fragment whose remaining columns still read as values, and
+# a cut landing inside the nodeName column produces a half-parsed node this
+# capture would then open a node-<name>.txt for. Six fields per record is what
+# the jsonpath emits.
 pod_filter_affected() {
-  awk -F'|' '$4 != "" && $5 != "True" && $6 != "Succeeded" && $6 != "Failed"'
+  awk -F'|' 'NF == 6 && $4 != "" && $5 != "True" && $6 != "Succeeded" && $6 != "Failed"'
 }
 
 # How a cutoff should be described, mirroring prevlog_cutoff_desc in the sibling
@@ -269,9 +302,9 @@ dp_read_outcome() {
 
 # Sourcing guard: hack/capture-dataplane.bats sets E2E_CAPTURE_DATAPLANE_LIB and
 # sources this file purely to reach the helpers above; return before touching $1
-# or running any capture so the unit test never needs a cluster. The script's
-# only executing caller (the cozytest.sh EXIT trap) never sets this, so the
-# guard is a no-op there.
+# or running any capture so the unit test never needs a cluster. Neither
+# executing caller sets it -- not the cozytest.sh EXIT trap, not the Chainsaw
+# global catch -- so the guard is a no-op for both.
 if [ -n "${E2E_CAPTURE_DATAPLANE_LIB:-}" ]; then
   return 0 2>/dev/null
 fi
@@ -319,10 +352,9 @@ DP_READ_GRACE=2
 
 # Resolved once. Empty when `timeout` is absent: the reads then run unbounded
 # rather than every call exiting 127 with its output swallowed, which would
-# report that kubectl failed when kubectl never ran. The seven reads that carry
-# a note say which of the two happened; the two EndpointSlice reads inside
-# capture_lb_datapath still send stderr to /dev/null and report nothing either
-# way.
+# report that kubectl failed when kubectl never ran. Every read that carries a
+# note says which of the two happened, the two EndpointSlice reads inside
+# capture_lb_datapath included.
 if command -v timeout >/dev/null 2>&1; then
   DP_BOUND="timeout -k $DP_READ_GRACE $DP_READ_TIMEOUT"
   DP_LIST_BOUND="timeout -k $DP_READ_GRACE $DP_LIST_TIMEOUT"
@@ -750,8 +782,10 @@ fi
 # LB IP from <node>'s host netns (via the hostNetwork kube-ovn cni-server, so the
 # probe traverses the same host->cross-node->backend datapath the flake breaks).
 # Echoes "ok" / "fail" per the result, "unknown" when the cni-server lookup did
-# not answer so no probe could be attempted, or nothing when the image ships
-# no probe client (the decision helper treats no-attempt as skip). Prefers a pure
+# not answer so no probe could be attempted, or nothing when the lookup answered
+# that the node has no cni-server pod, when the image ships no probe client, or
+# when the exec itself could not run (the decision helper reads an empty set as
+# unknown too, and the caller tells the two shapes apart). Prefers a pure
 # TCP connect (nc -z) so a non-HTTP backend is not misread as unreachable; the
 # curl/wget fallbacks send HTTP and so fail-toward-capture on a non-HTTP port,
 # the safe direction (capture is cheap; a missed broken LB is not). Doubles as
@@ -759,10 +793,17 @@ fi
 host_http_probe() {
   _hp_node=$1; _hp_ip=$2; _hp_port=$3
   _hp_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_hp_node"); _hp_rc=$?
-  # A lookup that never answered is not a node without a cni-server. Emitting
-  # nothing here is indistinguishable from a probe that ran and said nothing,
-  # and the caller reads zero outcomes as "reachable" -- a verdict about an
-  # address this script never reached. The token says so instead.
+  # A lookup that never answered is not a node without a cni-server, and the
+  # two have to leave different traces. This emits an explicit unknown; the
+  # "no such pod" answer below emits nothing, as do a missing probe client and
+  # a failed exec. The caller reads exactly that difference: an outcome set
+  # that is present but wholly unknown names the lookup, an empty one names the
+  # three ways a probe can fail after the lookup answered.
+  #
+  # The decision helper reaches the same verdict from either shape -- an
+  # all-unknown set and an empty set both come back unknown -- so for
+  # capture-or-skip this token changes nothing. It exists for the caller's
+  # reason line, which is the only place the distinction reaches a reader.
   if [ "$_hp_rc" -ne 0 ]; then
     echo unknown
     return 0
@@ -896,6 +937,15 @@ capture_lb_datapath() {
     log "listing metallb speakers $(dp_read_outcome "$_speakers_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); any speaker it did not name is missing from the announcer lookup"
   fi
   if [ -n "$_speakers" ] && [ -n "$_speakerlog" ]; then
+    # No field-count check here, unlike the three record filters above, and the
+    # absence is the answer rather than an oversight. These records carry two
+    # fields. A cut in the first leaves no separator at all, so the emptiness
+    # test below already rejects it. A cut in the second delivers every
+    # separator, so a count sees a whole record: `speaker-1|nod` and
+    # `speaker-1|nodeA` are the same shape, and nothing in-band tells a
+    # truncated node name from a short one. The test below is therefore as far
+    # as any check here can reach -- adding NF == 2 would reject no input it
+    # accepts, while reading as a closed gap.
     printf '%s\n' "$_speakers" | while IFS='|' read -r _sp _spnode; do
       [ -n "$_sp" ] && [ -n "$_spnode" ] || continue
       timeout 15 kubectl logs -n "$METALLB_NS" "$_sp" -c speaker --tail=2000 2>/dev/null \
@@ -914,20 +964,59 @@ capture_lb_datapath() {
       _lbport="${_port:-0}"
 
       # EndpointSlice backend for this Service (first ready, addressed endpoint).
+      # The status is kept beside the value, as the per-node pod lookups do:
+      # these two reads are interpreted by emptiness alone, and without the
+      # status a read that never answered writes the same `<none>` into the
+      # artifact as a Service that genuinely has no endpoint. The reader who has
+      # the uploaded report and not the run cannot then tell the two apart.
+      #
+      # Neither note asserts a consequence a partial read can falsify. A bound
+      # firing mid-stream leaves output on stdout and 124 in $?, so a read that
+      # failed can still have named the backend printed below, and a note
+      # claiming the value went in as unknown would contradict the block two
+      # lines above it.
+      #
+      # The two say it differently because the reads fail differently. The row
+      # read names what is MISSING: a record it never finished is dropped by the
+      # filter, so it is genuinely absent from the block. The scalar read cannot
+      # borrow that wording -- a number cut mid-token still prints, and `80` cut
+      # from `8080` is indistinguishable from a real 80 -- so its note names
+      # where the printed value came from instead. The service and pod lists are
+      # worded like the first; pod_on_node names no consequence at all.
       # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
       _eps=$($DP_BOUND kubectl get endpointslices -n "$_ns" \
         -l "kubernetes.io/service-name=$_name" \
         -o jsonpath='{range .items[*]}{range .endpoints[*]}{.addresses[0]}{"|"}{.nodeName}{"|"}{.targetRef.namespace}{"|"}{.targetRef.name}{"|"}{.conditions.ready}{"\n"}{end}{end}' \
-        2>/dev/null)
+        2>"${DP_ERR:-/dev/null}")
+      _eps_rc=$?
+      if [ "$_eps_rc" -ne 0 ]; then
+        log "listing the endpointslices of $_ns/$_name $(dp_read_outcome "$_eps_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); any endpoint it did not name is missing from the backend line below"
+      fi
       _backend=$(printf '%s\n' "$_eps" | lb_first_ready_endpoint)
       _epip=$(printf '%s' "$_backend" | cut -d'|' -f1)
       _epnode=$(printf '%s' "$_backend" | cut -d'|' -f2)
       _eptns=$(printf '%s' "$_backend" | cut -d'|' -f3)
       _eptname=$(printf '%s' "$_backend" | cut -d'|' -f4)
+      # items[*]/ports[*], not items[0]/ports[0], for the reason pod_on_node
+      # spells out: client-go's evalArray has no allowMissingKeys escape, so
+      # indexing [0] into an empty list is a hard error and kubectl exits 1. A
+      # Service without endpointslices is an ordinary answer here, and now that
+      # the status is reported it would otherwise arrive as a failed read. The
+      # wildcard yields nothing and exits 0; several ports collapse to the first,
+      # the same way the pod lookups take the first name.
       # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
       _eptport=$($DP_BOUND kubectl get endpointslices -n "$_ns" \
         -l "kubernetes.io/service-name=$_name" \
-        -o jsonpath='{.items[0].ports[0].port}' 2>/dev/null)
+        -o jsonpath='{.items[*].ports[*].port}' 2>"${DP_ERR:-/dev/null}")
+      _eptport_rc=$?
+      _eptport=${_eptport%% *}
+      if [ "$_eptport_rc" -ne 0 ]; then
+        log "reading the target port of $_ns/$_name $(dp_read_outcome "$_eptport_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); the port below is what arrived before it stopped, which may be nothing at all or a value cut short"
+      fi
+      # Absent versus never-read, once per value, in the vocabulary the per-node
+      # captures already use.
+      _ep_absent=$([ "$_eps_rc" -eq 0 ] && echo '<none>' || echo '<unknown>')
+      _eptport_absent=$([ "$_eptport_rc" -eq 0 ] && echo '<none>' || echo '<unknown>')
 
       # Announcer node = node of the most recent serviceAnnounced for the IP.
       _annode=$(lb_announcer_node "$_lbip" < "${_speakerlog:-/dev/null}")
@@ -936,31 +1025,70 @@ capture_lb_datapath() {
       {
         echo "################################################################"
         echo "# LB $_ns/$_name  ip=$_lbip port=$_lbport nodePort=${_np:-<none>} etp=${_etp:-<default>}"
-        echo "# backend: ip=${_epip:-<none>} node=${_epnode:-<none>} pod=${_eptns:-?}/${_eptname:-?} targetPort=${_eptport:-<none>}"
+        echo "# backend: ip=${_epip:-$_ep_absent} node=${_epnode:-$_ep_absent} pod=${_eptns:-$_ep_absent}/${_eptname:-$_ep_absent} targetPort=${_eptport:-$_eptport_absent}"
         echo "# announcer node: ${_annode:-<unknown>}"
         echo "################################################################"
       } > "$_of" 2>&1 || true
 
       # Gate: probe the LB IP from the announcer node's host netns (fall back to
       # the endpoint node if the announcer is unknown). Reachable -> record and
-      # skip the heavy capture; unreachable -> characterise both hops.
+      # skip the heavy capture; unreachable -> characterise both hops; nothing
+      # probed -> say that, and say which of the ways it happened.
+      #
+      # Every path that runs zero probes ends on the unknown outcome, carrying
+      # the reason that path can actually support. Five of them used to arrive
+      # at the "reachable, skipped" line: no node to probe from, a Service with
+      # no port, a probe node the lookup says runs no kube-ovn-cni pod, a host
+      # netns with no TCP/HTTP client, and an exec that could not run at all. A
+      # sixth, the lookup itself not answering, already reported unknown and
+      # still does. None of the five observed the address. Inferring reachability from an
+      # unattempted probe is what this section must never write down -- an image
+      # without nc/curl/wget alone would stamp every LB in the cluster reachable
+      # and skip the entire heavy capture, which reads as a healthy datapath.
       _probenode="${_annode:-$_epnode}"
-      _decision=skip
-      if [ -n "$_probenode" ] && [ "$_lbport" != "0" ]; then
-        _decision=$( { host_http_probe "$_probenode" "$_lbip" "$_lbport"
+      _decision=unknown
+      if [ -z "$_probenode" ]; then
+        _why="nowhere to probe from -- neither an announcer nor an endpoint node is known"
+      elif [ "$_lbport" = "0" ]; then
+        _why="the Service names no port to probe"
+      else
+        # Held in a variable rather than piped straight in, because the SHAPE of
+        # the outcome set is the only place the two routes to an unknown verdict
+        # stay apart, and the reason line has to name a cause that was actually
+        # observed. host_http_probe emits an explicit unknown only when the
+        # cni-server lookup did not answer; everything else that stops a probe
+        # emits nothing.
+        _outcomes=$( { host_http_probe "$_probenode" "$_lbip" "$_lbport"
                        host_http_probe "$_probenode" "$_lbip" "$_lbport"
-                       host_http_probe "$_probenode" "$_lbip" "$_lbport"; } | lb_capture_decision )
+                       host_http_probe "$_probenode" "$_lbip" "$_lbport"; } )
+        _decision=$(printf '%s\n' "$_outcomes" | lb_capture_decision)
+        if [ -z "$_outcomes" ]; then
+          # Three ways in, and this script genuinely cannot tell them apart: the
+          # lookup answered that the node runs no kube-ovn-cni pod, its host
+          # netns ships no nc/curl/wget, or the exec could not run at all (no
+          # timeout on its PATH, exec denied, the pod gone mid-probe). The
+          # exec's status is swallowed by design -- this collector never fails a
+          # job -- so they are reported as the set they are rather than guessed
+          # apart. What is NOT said here is that the lookup went unanswered: it
+          # answered, and pod_on_node keeps that distinction for its callers.
+          _why="no probe outcome from $_probenode -- no kube-ovn-cni pod there, or no TCP/HTTP client in its host netns, or the exec into it could not run"
+        else
+          # Outcomes exist and the verdict is still unknown, which the decision
+          # helper only returns when every one of them is unknown -- and that
+          # token has exactly one source.
+          _why="no probe could be attempted from $_probenode -- the cni-server lookup did not answer"
+        fi
       fi
 
       if [ "$_decision" = "unknown" ]; then
-        echo "probe: whether the LB is reachable from ${_probenode:-<none>} is unknown -- the cni-server lookup did not answer, so no probe ran (no heavy capture)" >> "$_of" 2>&1 || true
-        log "LB $_ns/$_name ($_lbip) not probed -- the cni-server lookup did not answer"
+        echo "probe: whether the LB is reachable is unknown -- $_why (no heavy capture)" >> "$_of" 2>&1 || true
+        log "LB $_ns/$_name ($_lbip) not probed -- $_why"
         continue
       fi
 
       if [ "$_decision" != "capture" ]; then
-        echo "probe: LB reachable or not probeable from ${_probenode:-<none>} -- reachable, skipped (no heavy capture)" >> "$_of" 2>&1 || true
-        log "LB $_ns/$_name ($_lbip) reachable or not probeable -- skipped"
+        echo "probe: at least one probe from $_probenode succeeded -- reachable, skipped (no heavy capture)" >> "$_of" 2>&1 || true
+        log "LB $_ns/$_name ($_lbip) reachable -- skipped"
         continue
       fi
 
@@ -993,12 +1121,34 @@ capture_lb_datapath() {
       # Live tcpdump on both hops WHILE the probe is replayed: announcer geneve
       # tunnel egress + endpoint backend tap ingress. Shows whether the packet
       # crosses announcer->endpoint and reaches the backend's host-side iface.
-      _an_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "${_annode:-}")
-      _en_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "${_epnode:-}")
+      # Guarded like the announcer capture above, and for a reason the empty
+      # string hides: pod_on_node turns its third argument into
+      # `--field-selector spec.nodeName=<node>`, so an empty node asks for pods
+      # whose nodeName is EMPTY -- the unscheduled ones. An unknown announcer
+      # would then hand the first pending kube-ovn-cni pod to a tcpdump stamped
+      # ANNOUNCER, pointing the reader away from the actual problem at the one
+      # moment this leg matters: the announcer is unknown exactly when MetalLB
+      # is misbehaving.
+      _an_cni=""
+      if [ -n "$_annode" ]; then
+        _an_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_annode")
+      else
+        echo "(announcer node unknown -- announcer-side tcpdump skipped)" >> "$_of" 2>&1 || true
+      fi
+      # Same guard on the endpoint side, and it is not the rarer case: a Service
+      # with no ready endpoint is the ordinary shape of an LB outage, and both
+      # lookups here -- the cni-server pod and the backend's OVS interface --
+      # reach pod_on_node with the node in hand.
+      _en_cni=""
       _en_iface="$GENEVE_IFACE"
-      if [ -n "$_eptname" ] && [ -n "$_eptns" ]; then
-        _cand=$(ovs_iface_for "${_epnode:-}" "$_eptname.$_eptns")
-        [ -n "$_cand" ] && _en_iface="$_cand"
+      if [ -n "$_epnode" ]; then
+        _en_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_epnode")
+        if [ -n "$_eptname" ] && [ -n "$_eptns" ]; then
+          _cand=$(ovs_iface_for "$_epnode" "$_eptname.$_eptns")
+          [ -n "$_cand" ] && _en_iface="$_cand"
+        fi
+      else
+        echo "(endpoint node unknown -- endpoint-side tcpdump skipped)" >> "$_of" 2>&1 || true
       fi
 
       _an_pcap="$OUT/lb-$_ns-$_name.tcpdump-announcer.txt"
@@ -1041,8 +1191,8 @@ capture_lb_datapath() {
       #       tenant-side miss from a host-side delivery miss);
       #     - `tcpdump -ni eth0 port <tenant-nodePort>` -- did the packet even
       #       arrive on the VMI's NIC?
-      #   Deferred because it needs a tenant kubeconfig/virtctl that this EXIT-
-      #   trap diagnostic does not have; the host-side ANNOUNCER/ENDPOINT split
+      #   Deferred because it needs a tenant kubeconfig/virtctl that neither
+      #   caller of this diagnostic has; the host-side ANNOUNCER/ENDPOINT split
       #   already localises the failing hop to host-cilium vs kube-ovn delivery.
     done
     log "LoadBalancer-datapath capture complete"

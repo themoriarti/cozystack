@@ -7,12 +7,14 @@
 # unreachable while its backend stays Ready (the NotReady-pod path never sees
 # this case). Only the pure logic is unit-testable here:
 #
-#   - lb_filter_services      -- keep only LoadBalancer rows with an ingress IP;
+#   - lb_filter_services      -- keep only whole LoadBalancer rows that carry an
+#                               ingress IP;
 #   - lb_first_ready_endpoint -- pick the first addressed, non-NotReady endpoint;
 #   - lb_announcer_node       -- the speaker node of the most recent announce;
 #   - lb_capture_decision     -- capture when probes failed, skip when one
-#                               succeeded or none ran, unknown when none could run.
-#   - pod_filter_affected     -- retain scheduled NotReady pods even without IPs.
+#                               succeeded, unknown when none ran or none could.
+#   - pod_filter_affected     -- retain scheduled NotReady pods even without IPs,
+#                               and only from whole rows.
 #
 # The tests come in two shapes, and neither needs a cluster.
 #
@@ -113,6 +115,45 @@ EOF
   if printf '%s\n' "$out" | grep -q 'pending'; then echo "FAIL: lb_filter_services must drop the pending (no external IP) row"; false; fi
 }
 
+@test "lb_filter_services drops a Service row cut off mid-record" {
+  # A bounded or interrupted list stops mid-record, and the fragment it leaves
+  # behind still satisfies a filter that only looks at values: what remains of
+  # `192.0.2.53` here is `192.0.2.5`, an address the cluster never had, and the
+  # row carrying it would be probed and written up as a Service. The jsonpath
+  # emits a fixed seven fields per Service, so a shorter row is a fragment by
+  # construction rather than by guess.
+  rows="$(printf '%s\n' \
+    'tenant|app|LoadBalancer|192.0.2.50|80|31000|Cluster' \
+    'tenant|db|LoadBalancer|192.0.2.5')"
+
+  out="$(printf '%s\n' "$rows" | lb_filter_services)"
+
+  [ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ]
+  # `! cmd` is vacuous under cozytest's `set -e`, hence the if/false form used
+  # by the sibling filter test above.
+  if printf '%s\n' "$out" | grep -q 'tenant|db'; then
+    echo "FAIL: lb_filter_services must drop the row cut off mid-record"
+    false
+  fi
+}
+
+@test "pod_filter_affected drops a pod row cut off mid-record" {
+  # The same cut over the six-field pod jsonpath. The fragment ends inside the
+  # nodeName column, so the half-parsed `nod` reads as a scheduled pod on a node
+  # of that name, and the capture opens a node-nod.txt for it.
+  rows="$(printf '%s\n' \
+    'tenant|wedged|192.0.2.80|node-b|False|Running' \
+    'tenant|cut||nod')"
+
+  out="$(printf '%s\n' "$rows" | pod_filter_affected)"
+
+  [ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ]
+  if printf '%s\n' "$out" | grep -q 'tenant|cut'; then
+    echo "FAIL: pod_filter_affected must drop the row cut off mid-record"
+    false
+  fi
+}
+
 @test "lb_first_ready_endpoint picks the first addressed endpoint that is not NotReady" {
   eps="$(printf '%s\n' \
     '||tenant|virt-launcher-x|true' \
@@ -131,6 +172,20 @@ EOF
   out="$(printf '%s\n' "$eps" | lb_first_ready_endpoint)"
 
   [ "$out" = "192.0.2.70|worker-9|tenant|app-0" ]
+}
+
+@test "lb_first_ready_endpoint drops an endpoint row cut off mid-record" {
+  # The third record filter over a bounded list, and the same cut: the fragment
+  # has to come first, because this one stops at the first row it accepts. A
+  # half-parsed node name would otherwise be the node every endpoint-side
+  # capture in the LB section is aimed at.
+  eps="$(printf '%s\n' \
+    '192.0.2.60|worker-' \
+    '192.0.2.61|worker-2|tenant|app-1|true')"
+
+  out="$(printf '%s\n' "$eps" | lb_first_ready_endpoint)"
+
+  [ "$out" = "192.0.2.61|worker-2|tenant|app-1" ]
 }
 
 @test "lb_announcer_node returns the speaker node of the most recent announce" {
@@ -222,8 +277,12 @@ EOF
   [ "$(printf 'ok\n' | lb_capture_decision)" = "skip" ]
 }
 
-@test "lb_capture_decision returns skip when no probe ran at all" {
-  [ "$(printf '' | lb_capture_decision)" = "skip" ]
+@test "lb_capture_decision returns unknown when no probe ran at all" {
+  # Zero outcomes means nothing was ever attempted -- no probe client in the
+  # host netns, or an exec that could not run. Folding that into skip put a
+  # reachability verdict about the address into the artifact with not one probe
+  # behind it, which on a minimal image is every LB in the cluster.
+  [ "$(printf '' | lb_capture_decision)" = "unknown" ]
 }
 
 @test "lb_budget_ok yes below the cap and no once it is reached" {
@@ -567,6 +626,52 @@ STUB
   rm -rf "$d"
 }
 
+@test "a partially answered endpointslice read is not called an unread one" {
+  # The same shape as the service list above, at the two EndpointSlice reads: a
+  # bound firing mid-stream leaves rows on stdout and 124 in $?. The backend is
+  # then parsed from what did arrive and printed by name, so a note asserting
+  # what the artifact will say -- rather than what is missing from it -- lands
+  # two lines from a block that contradicts it. The sibling notes in this file
+  # avoid that by naming the omission, and pod_on_node names no consequence at
+  # all because it serves callers that do different things with the answer.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    # Complete rows AND a bound's status: the read answered in part.
+    endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 124 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # The rows that did arrive are used, so the artifact names a backend ...
+  grep -q 'ip=10.0.0.1' "$d/out/lb-tenant-web.txt"
+  # ... and the cut is on the record beside it.
+  grep -q 'was cut off' "$d/out/capture-notes.txt"
+  # Neither note may claim the value went in as unknown while the block above
+  # names it. Scoped to each note's own line: 'unknown' appears legitimately
+  # elsewhere in this file, including on the announcer line of this very block.
+  if grep 'endpointslices of tenant/web' "$d/out/capture-notes.txt" | grep -q 'unknown'; then
+    echo "the note calls the backend unknown while the capture names it:"
+    cat "$d/out/lb-tenant-web.txt"
+    grep 'endpointslices of tenant/web' "$d/out/capture-notes.txt"
+    exit 1
+  fi
+  if grep 'target port of tenant/web' "$d/out/capture-notes.txt" | grep -q 'unknown'; then
+    echo "the note calls the target port unknown while the capture names one:"
+    cat "$d/out/lb-tenant-web.txt"
+    grep 'target port of tenant/web' "$d/out/capture-notes.txt"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
 @test "a note does not claim a step was skipped when the step runs" {
   # A lookup can fail after naming what it was asked for. Both of these notes
   # used to state the consequence unconditionally, so the log said the OVN dump
@@ -838,6 +943,380 @@ STUB
     exit 1
   fi
   grep -q 'is unknown' "$d/out/lb-tenant-web.txt"
+  # And this is the branch that MAY name the lookup, because here it genuinely
+  # did not answer. Pinning it positively is what keeps the two negative pins
+  # in the empty-outcome tests below from going vacuous: the phrase has to stay
+  # reachable somewhere for its absence elsewhere to mean anything.
+  grep -q 'the cni-server lookup did not answer' "$d/out/lb-tenant-web.txt"
+  rm -rf "$d"
+}
+
+@test "an unread endpointslice is written as unknown rather than as none" {
+  # The two EndpointSlice reads discarded stderr and were interpreted by
+  # emptiness alone, so a refused read produced the same `<none>` a Service with
+  # no endpoints does. A reader working from the artifact gets the assertion and
+  # never sees that nothing was read.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    endpointslices) echo 'Error from server (Forbidden): endpointslices is forbidden' >&2; exit 1 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  [ -f "$d/out/lb-tenant-web.txt" ]
+  grep -q 'ip=<unknown>' "$d/out/lb-tenant-web.txt"
+  grep -q 'targetPort=<unknown>' "$d/out/lb-tenant-web.txt"
+  if grep -q 'ip=<none>' "$d/out/lb-tenant-web.txt"; then
+    echo "a read that never answered was recorded as an absent endpoint:"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  # And the reason ships beside the capture, not only in the job log.
+  grep -q 'endpointslices' "$d/out/capture-notes.txt"
+  rm -rf "$d"
+}
+
+@test "a Service with no endpointslices at all is not called an unread one" {
+  # The other direction, and a landmine the status threading arms: client-go's
+  # evalArray has no allowMissingKeys escape, so a jsonpath indexing [0] into an
+  # empty list is a hard error and kubectl exits 1, while [*] yields nothing and
+  # exits 0. With the status now reported, an ordinary Service without endpoints
+  # would start reporting as a failed read unless the read asks with [*].
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  esac
+done
+# The endpointslice reads fall through to here: an empty list, answered.
+case "$*" in
+  *'items[0]'*) echo 'error: array index out of bounds: index 0, length 0' >&2; exit 1 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  [ -f "$d/out/lb-tenant-web.txt" ]
+  grep -q 'targetPort=<none>' "$d/out/lb-tenant-web.txt"
+  if grep -q 'targetPort=<unknown>' "$d/out/lb-tenant-web.txt"; then
+    echo "an empty endpointslice list was recorded as a read that never answered:"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  if grep -q 'endpointslices' "$d/out/capture-notes.txt"; then
+    echo "an empty endpointslice list was noted as a failed read:"
+    cat "$d/out/capture-notes.txt"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "an unknown announcer does not point the tcpdump at a pending pod" {
+  # pod_on_node builds `--field-selector spec.nodeName=$3`, so an empty node
+  # asks for pods whose nodeName is EMPTY -- the unscheduled ones. The announcer
+  # is unknown exactly when MetalLB is misbehaving, which is when this leg
+  # matters, and an unguarded lookup then hands the first pending kube-ovn-cni
+  # pod to a tcpdump labelled ANNOUNCER. The sibling uses of the announcer node
+  # in this same block are all guarded; this one was not.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *--field-selector*) echo "$*" >>"$STUB_CALLS" ;;
+esac
+case "$*" in
+  # Answers every per-node cni lookup, INCLUDING one made with an empty node --
+  # which is what an apiserver holding a pending pod returns for that selector.
+  # A stub that answered nothing there would hide the bug behind an empty result.
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  # The LB must probe UNREACHABLE or the heavy capture that carries the tcpdumps
+  # never runs and the test asserts nothing.
+  *'nc -z'*) echo fail; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  STUB_CALLS="$d/calls" PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # Positive controls: the heavy capture ran, and it ran with no announcer --
+  # no speaker logs were produced, so lb_announcer_node reported nothing.
+  grep -q 'UNREACHABLE' "$d/log"
+  grep -q 'announcer node: <unknown>' "$d/out/lb-tenant-web.txt"
+  # The lookup itself must not go out with an empty node. Trailing space, so this
+  # does not also match the endpoint node's own `spec.nodeName=node-a` lookup.
+  if grep -q -- '--field-selector spec.nodeName= ' "$d/calls"; then
+    echo "the announcer lookup was issued with an empty node selector:"
+    grep -- 'spec.nodeName=' "$d/calls"
+    exit 1
+  fi
+  # And no ANNOUNCER tcpdump artifact may exist for a node nobody identified.
+  if [ -f "$d/out/lb-tenant-web.tcpdump-announcer.txt" ]; then
+    echo "an announcer tcpdump ran with no announcer node:"
+    cat "$d/out/lb-tenant-web.tcpdump-announcer.txt"
+    exit 1
+  fi
+  # The skip is stated rather than silent: absence of a block is not a reason.
+  grep -q 'announcer node unknown' "$d/out/lb-tenant-web.txt"
+  rm -rf "$d"
+}
+
+@test "an unknown endpoint node does not point the tcpdump at a pending pod" {
+  # The endpoint half of the same defect, on the same block: an LB whose
+  # announcer IS known but whose Service has no ready endpoint reaches the heavy
+  # capture with an empty endpoint node, and the two lookups on that side --
+  # the cni-server pod and the backend's OVS interface -- both go out with
+  # `spec.nodeName=`, which matches unscheduled pods. No ready endpoint is
+  # exactly the shape of an LB outage, so this is not a rare corner of the leg.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    # No ready endpoint: the Service is enumerated, its backend is not.
+    endpointslices) exit 0 ;;
+    # The announcer, so the probe has somewhere to run from and the capture is
+    # reached with only the ENDPOINT side unknown.
+    logs) echo '{"event":"serviceAnnounced","ips":["192.0.2.10"],"node":"node-a"}'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *'component=speaker'*) echo 'speaker-0|node-a'; exit 0 ;;
+esac
+case "$*" in
+  *--field-selector*) echo "$*" >>"$STUB_CALLS" ;;
+esac
+case "$*" in
+  # Answers every cni lookup, the one with an empty node included -- what an
+  # apiserver holding a pending pod returns for that selector.
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *'nc -z'*) echo fail; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  STUB_CALLS="$d/calls" PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # Positive controls: the heavy capture ran, the announcer side was identified
+  # and did run, so what follows is about the endpoint side alone.
+  grep -q 'UNREACHABLE' "$d/log"
+  [ -f "$d/out/lb-tenant-web.tcpdump-announcer.txt" ]
+  if grep -q -- '--field-selector spec.nodeName= ' "$d/calls"; then
+    echo "an endpoint-side lookup was issued with an empty node selector:"
+    grep -- 'spec.nodeName=' "$d/calls"
+    exit 1
+  fi
+  if [ -f "$d/out/lb-tenant-web.tcpdump-endpoint.txt" ]; then
+    echo "an endpoint tcpdump ran with no endpoint node:"
+    cat "$d/out/lb-tenant-web.tcpdump-endpoint.txt"
+    exit 1
+  fi
+  grep -q 'endpoint node unknown' "$d/out/lb-tenant-web.txt"
+  rm -rf "$d"
+}
+
+@test "an LB whose probe answers is still recorded as reachable" {
+  # Positive control for the three unprobed cases below and for the cut-off one
+  # further up: each of those asserts the ABSENCE of the reachable line, and a
+  # change that routed every LB to unknown would satisfy all four while
+  # destroying the distinction they exist to protect. A probe that answers must
+  # still produce the reachable line and must still skip the heavy capture.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *'nc -z'*) echo ok; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"
+  if [ -f "$d/out/lb-tenant-web.tcpdump-endpoint.txt" ]; then
+    echo "a reachable LB got the heavy capture anyway:"
+    ls -1 "$d/out"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "an LB with no probe client in the host netns is not recorded as reachable" {
+  # The headline unprobed input: the exec runs, finds no nc/curl/wget, prints
+  # nothing and exits 0. Zero outcomes used to read as "nothing failed", so a
+  # minimal e2e image stamped every LB reachable and skipped the whole heavy
+  # capture -- which reads as a healthy datapath.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  # The probe exec itself: no client in the image, so it emits nothing and
+  # succeeds. A stub that answered ok or fail here would never reach the branch.
+  *'nc -z'*) exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # Positive control: the LB was enumerated and the probe leg was reached.
+  grep -q 'probing 1 LoadBalancer service' "$d/log"
+  [ -f "$d/out/lb-tenant-web.txt" ]
+  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"; then
+    echo "an LB no probe could be run against was recorded as reachable:"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  # The reason has to survive contact with what actually happened: the lookup
+  # answered and named a pod, and the exec ran -- it found nothing to run. A
+  # line blaming the lookup would be a cause this script never observed, the
+  # same rule dp_read_outcome states for the reads.
+  grep -q 'no probe outcome from node-a' "$d/out/lb-tenant-web.txt"
+  if grep -q 'the cni-server lookup did not answer' "$d/out/lb-tenant-web.txt"; then
+    echo "the artifact blames a lookup that answered:"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "an LB whose probe node runs no cni-server is not blamed on the lookup" {
+  # The fifth zero-probe input, and the one missing from the enumeration until
+  # now: the lookup ANSWERS, and its answer is that the node has no
+  # kube-ovn-cni pod. host_http_probe returns without emitting an outcome, so
+  # this lands in the same empty-outcome branch as a missing probe client --
+  # but "the lookup did not answer" is false here in the most direct way.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  esac
+done
+case "$*" in
+  # Answers, and the answer is "no such pod": status 0, empty output.
+  *'app=kube-ovn-cni'*) exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  grep -q 'probing 1 LoadBalancer service' "$d/log"
+  [ -f "$d/out/lb-tenant-web.txt" ]
+  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"; then
+    echo "an LB with no cni-server to probe from was recorded as reachable:"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  grep -q 'no probe outcome from node-a' "$d/out/lb-tenant-web.txt"
+  if grep -q 'the cni-server lookup did not answer' "$d/out/lb-tenant-web.txt"; then
+    echo "the artifact blames a lookup that answered 'no such pod':"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "an LB with no node to probe from is not recorded as reachable" {
+  # Second unprobed input: neither the announcer nor the endpoint node resolved,
+  # so the probe block never ran. The decision defaulted to skip, and the
+  # artifact asserted reachability of an address the script never touched.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  esac
+done
+# Everything else answers empty: no endpointslices, so no endpoint node, and no
+# metallb speakers, so no announcer.
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  grep -q 'probing 1 LoadBalancer service' "$d/log"
+  [ -f "$d/out/lb-tenant-web.txt" ]
+  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"; then
+    echo "an LB with nowhere to probe from was recorded as reachable:"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  grep -q 'nowhere to probe from' "$d/out/lb-tenant-web.txt"
+  rm -rf "$d"
+}
+
+@test "an LB whose Service names no port is not recorded as reachable" {
+  # Third unprobed input: the port column is empty, the probe block is gated on
+  # a non-zero port, and the same default carried a reachability verdict out.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10||30080|Cluster'; exit 0 ;;
+    endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  grep -q 'probing 1 LoadBalancer service' "$d/log"
+  [ -f "$d/out/lb-tenant-web.txt" ]
+  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"; then
+    echo "an LB with no port to probe was recorded as reachable:"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  grep -q 'no port to probe' "$d/out/lb-tenant-web.txt"
   rm -rf "$d"
 }
 
@@ -852,4 +1331,43 @@ STUB
   [ "$(printf 'unknown\nunknown\nunknown\n' | lb_capture_decision)" = "unknown" ]
   # A success still wins: the address answered, whatever else could not be tried.
   [ "$(printf 'unknown\nok\n' | lb_capture_decision)" = "skip" ]
+}
+
+@test "the Chainsaw caller also reports a capture its backstop cut short" {
+  # This collector has two callers, and the honesty contract has to hold at both
+  # or the reader learns to distrust the one that keeps it. hack/cozytest.sh's
+  # side is covered behaviourally in cozytest-capture-gate.bats; this runs the
+  # Chainsaw catch itself, extracted from the config it lives in, so neither
+  # side can quietly stop reporting. The Chainsaw backstop is the shorter of the
+  # two -- 300s against 600s, because it shares an op envelope with the snapshot
+  # leg -- so it is the likelier of the pair to fire.
+  #
+  # The backstop is simulated with a `timeout` on PATH that exits 124, for the
+  # same reason the cozytest.sh-side test does it: the call site sees a non-zero
+  # status and whatever landed, whichever way the kill arrived.
+  # Named here rather than left to fail downstream: without it a missing yq
+  # surfaces as the extraction guard below going red, which reads as the catch
+  # op having been renamed. Same form the other yq-using suites use.
+  command -v yq >/dev/null || { echo "yq (mikefarah v4+) is required to read the Chainsaw catch script" >&2; exit 1; }
+  d=$(mktemp -d)
+  mkdir -p "$d/bin" "$d/hack/e2e-chainsaw/suite"
+  printf '#!/bin/sh\nexit 124\n' >"$d/bin/timeout"
+  printf '#!/bin/sh\nexit 0\n' >"$d/bin/crust-gather"
+  # The catch resolves this collector as ../../e2e-capture-dataplane.sh from the
+  # failing suite's own directory, and gates the leg on it being executable.
+  printf '#!/bin/sh\nexit 0\n' >"$d/hack/e2e-capture-dataplane.sh"
+  chmod +x "$d/bin/timeout" "$d/bin/crust-gather" "$d/hack/e2e-capture-dataplane.sh"
+  yq -r '.spec.error.catch[] | select(.description == "crust-gather host snapshot on failure") | .script.content' \
+    "$HACK_DIR/e2e-chainsaw/.chainsaw.yaml" >"$d/catch.sh"
+  # The extraction found the right op: a renamed description would otherwise
+  # leave an empty script that satisfies nothing and reports nothing.
+  grep -q 'e2e-capture-dataplane.sh' "$d/catch.sh"
+  ( cd "$d/hack/e2e-chainsaw/suite" \
+    && PATH="$d/bin:$PATH" COZY_REPORT_DIR="$d/report" TEST_NAME=fixture sh "$d/catch.sh" ) \
+    >"$d/out" 2>&1 || true
+  # Positive control: the leg was reached, so the line below is about what it
+  # said and not about the catch having stopped earlier.
+  grep -q 'capturing host->pod data-plane' "$d/out"
+  grep -q 'data-plane capture INCOMPLETE (exit 124)' "$d/out"
+  rm -rf "$d"
 }

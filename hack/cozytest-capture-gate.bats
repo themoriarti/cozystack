@@ -112,7 +112,65 @@ run_fixture() {
   # Positive control for the negative assertion in the last test: same fixture,
   # same stubs, e2e filename.
   grep -qF "$DATAPLANE_MARKER" "$dir/out"
+  # The capture ran to its own end here -- the stub kubectl answers instantly --
+  # so the incompleteness line the next test pins must NOT appear. Without this
+  # the same line would satisfy that test whether it tracked the leg's status or
+  # was printed unconditionally.
+  if grep -qF 'data-plane capture INCOMPLETE' "$dir/out"; then
+    echo "a capture that finished was reported as cut short:"
+    cat "$dir/out"
+    exit 1
+  fi
   assert_legs_armed "$dir/report" e2e-gate-fixture
+  rm -rf "$dir"
+}
+
+@test "a data-plane capture cut short by its backstop says so" {
+  # The collector names every read of its own that could not finish, which
+  # leaves the outer backstop here as the one way its leg can still die without
+  # a word -- and a truncated dataplane/ then reads exactly like a complete one
+  # that found little. The sibling previous-logs leg has reported this since it
+  # was added; this is the same discipline at the third leg.
+  #
+  # The backstop is simulated with a `timeout` on PATH that exits 124 rather
+  # than by making the collector overrun a real 600s bound. The call site
+  # cannot tell the difference: it sees a non-zero status from `timeout` and
+  # whatever had been written before the kill, which is the whole input to the
+  # behaviour under test.
+  dir=$(make_fixture_dir e2e-backstop-fixture.bats)
+  printf '#!/bin/sh\nexit 124\n' >"$dir/bin/timeout"
+  chmod +x "$dir/bin/timeout"
+  run_fixture "$dir" e2e-backstop-fixture.bats
+  # Positive control: the leg was armed and reached, so the assertion below is
+  # about what the leg said and not about the gate having skipped it.
+  grep -qF "$DATAPLANE_MARKER" "$dir/out"
+  grep -qF 'data-plane capture INCOMPLETE (exit 124)' "$dir/out"
+  rm -rf "$dir"
+}
+
+@test "a data-plane collector that is not there is not reported as a capture" {
+  # This leg is gated on kubectl alone, while the previous-logs leg beside it
+  # requires its collector to be executable and so does the Chainsaw caller.
+  # The asymmetry cost nothing while the status was discarded; now that a
+  # non-zero status prints "kept what landed in <dir>", a tree without the
+  # collector claims a partial capture in a directory nothing ever created.
+  dir=$(make_fixture_dir e2e-nocollector-fixture.bats)
+  # The runner resolves both collectors relative to its own path, so copying it
+  # somewhere without its siblings is what makes them absent -- nothing in the
+  # worktree is touched.
+  mkdir -p "$dir/hack"
+  cp "$RUNNER" "$dir/hack/cozytest.sh"
+  PATH="$dir/bin:$PATH" COZY_REPORT_DIR="$dir/report" \
+    "$dir/hack/cozytest.sh" "$dir/e2e-nocollector-fixture.bats" >"$dir/out" 2>&1 || true
+  # Positive controls: the fixture failed, so the handler ran, and the gate
+  # armed -- otherwise the absence below would be satisfied by nothing running.
+  grep -qF 'Test failed' "$dir/out"
+  [ -f "$dir/report/snapshots/e2e-nocollector-fixture/crust-gather.log" ]
+  if grep -qF 'data-plane capture INCOMPLETE' "$dir/out"; then
+    echo "a collector that was never there was reported as a capture cut short:"
+    cat "$dir/out"
+    exit 1
+  fi
   rm -rf "$dir"
 }
 
