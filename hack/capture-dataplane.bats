@@ -267,3 +267,152 @@ EOF
   [ "$captured" -eq 2 ]
   [ "$dropped" -eq 1 ]
 }
+
+# -----------------------------------------------------------------------------
+# Behavioural: the reads are bounded, and a bound that fires says so.
+#
+# These run the script rather than sourcing it, so they need the guard NOT set;
+# the runner is invoked as a subprocess, which leaves this file's sourced copy
+# untouched. A stub kubectl that never returns stands in for the case the bounds
+# exist for -- an apiserver that hangs rather than refuses. The bounds are read
+# from the environment so the test does not have to wait out the real ones.
+# -----------------------------------------------------------------------------
+
+# Scratch dir with a kubectl that hangs forever, mimicking an apiserver that
+# accepts the connection and never answers.
+dp_hanging_kubectl_dir() {
+  _d=$(mktemp -d)
+  mkdir -p "$_d/bin"
+  printf '#!/bin/sh\nsleep 300\n' >"$_d/bin/kubectl"
+  chmod +x "$_d/bin/kubectl"
+  printf '%s' "$_d"
+}
+
+@test "a hung cluster-wide pod list is cut off rather than eating the envelope" {
+  d=$(dp_hanging_kubectl_dir)
+  # Without a per-read bound the first list runs until the CALLER's backstop and
+  # the script writes nothing at all, so the outer timeout here stands in for
+  # that backstop: reaching it means the read was never bounded.
+  PATH="$d/bin:$PATH" COZY_DATAPLANE_LIST_TIMEOUT=2 COZY_DATAPLANE_READ_TIMEOUT=2 \
+    timeout 20 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  grep -q 'cut off' "$d/log"
+  rm -rf "$d"
+}
+
+@test "the script survives a hung apiserver and still reaches its own end" {
+  # This stub ANSWERS the cluster-wide pod list and hangs on everything after
+  # it, so the walk over affected pods actually runs. A stub that hangs on every
+  # call leaves that list empty, skips the whole branch, and exercises two of
+  # the nine bounded reads while looking like it covered all of them: an
+  # unbounded read added inside the branch would not turn it red.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+  esac
+done
+sleep 300
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" COZY_DATAPLANE_LIST_TIMEOUT=1 COZY_DATAPLANE_READ_TIMEOUT=1 \
+    timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # The closing line prints only if control reached it, which it cannot do while
+  # blocked on a read along the way.
+  grep -q 'skipping LB-datapath capture' "$d/log"
+  # And the per-pod branch was really walked, so the reads inside it are covered
+  # rather than assumed.
+  grep -q 'looking up the pod matching' "$d/log"
+  rm -rf "$d"
+}
+
+@test "a read that failed instantly is not reported as a timeout" {
+  # The bounds produce 124 or 137 and nothing else, so any other status is
+  # kubectl answering -- refused, denied, no such kind. Naming a timeout there
+  # puts a cause in the artifact that never happened, and because these reads
+  # send stderr to a sink rather than the log, that false cause would be the
+  # only thing a reader gets. This is the path the hung-apiserver tests above
+  # never reach.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  printf '#!/bin/sh\necho "The connection to the server was refused" >&2\nexit 1\n' >"$d/bin/kubectl"
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 20 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # Scoped to this script's own note lines: a bare grep over the whole log would
+  # go red on any future line that merely contains the word.
+  if grep '^\[capture-dataplane\]' "$d/log" | grep -q 'timeout'; then
+    echo "an instant failure was reported as a timeout:"
+    cat "$d/log"
+    exit 1
+  fi
+  # It must still say the read produced nothing, and say why, or the silence
+  # this suite exists to remove comes back.
+  grep -q 'kubectl exited 1' "$d/log"
+  rm -rf "$d"
+}
+
+@test "a kubectl error cannot forge a second verdict line in the log" {
+  # log() carries kubectl's stderr now, and under /bin/sh echo would expand a
+  # literal backslash-n in it into a real newline, printing a second
+  # "[capture-dataplane] ..." line that reads as this script's own finding. The
+  # jsonpath in these reads contains {"\n"} and kubectl quotes the expression
+  # back on a parse error, so this needs no malice to happen.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  printf '#!/bin/sh\nprintf %%s "unauthorized: x\\\\n[capture-dataplane] no scheduled NotReady pods -- nothing was wrong" >&2\nexit 1\n' >"$d/bin/kubectl"
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 20 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # Exactly one note about the pod list, and the forged sentence must not be
+  # sitting on a line of its own wearing this script's prefix.
+  forged=$(grep -c '^\[capture-dataplane\] no scheduled NotReady pods -- nothing was wrong' "$d/log" || true)
+  if [ "$forged" -ne 0 ]; then
+    echo "kubectl stderr forged a verdict line:"
+    cat "$d/log"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "a node with no matching pod is not reported as a failed read" {
+  # The per-node lookups ask for one pod by label on one node, and the ordinary
+  # answer is that there is none -- a node without a cilium-agent is the case
+  # this capture exists for. That answer must not arrive as a failed read now
+  # that a non-zero status carries a note.
+  #
+  # Reaching this path needs a kubectl that ANSWERS the cluster-wide list with
+  # one affected pod; the other tests never get here because their list fails
+  # first and leaves nothing to walk.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+  esac
+done
+# The behaviour under test: client-go's evalArray has no allowMissingKeys
+# escape, so indexing [0] into an empty list is a hard error and kubectl exits
+# 1, while [*] returns empty and exits 0. Without this arm the stub answers 0
+# to both forms and the test cannot see the difference it exists to pin.
+case "$*" in
+  *'items[0]'*) echo 'error: array index out of bounds: index 0, length 0' >&2; exit 1 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 30 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  if grep -q 'looking up the pod matching' "$d/log"; then
+    echo "an absent pod was reported as a failed read:"
+    grep 'looking up the pod matching' "$d/log"
+    exit 1
+  fi
+  if grep -q 'looking up an ovn-central replica' "$d/log"; then
+    echo "an absent ovn-central was reported as a failed read:"
+    grep 'looking up an ovn-central replica' "$d/log"
+    exit 1
+  fi
+  rm -rf "$d"
+}

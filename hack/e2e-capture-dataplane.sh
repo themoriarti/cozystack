@@ -246,10 +246,83 @@ GENEVE_IFACE="${COZY_GENEVE_IFACE:-genev_sys_6081}"
 # global catch, which shares an op envelope with the snapshot leg).
 MAX_LBS="${COZY_DATAPLANE_MAX_LBS:-6}"
 
+# Per-read wall-clock bounds for the plain `kubectl get` reads below. Named once
+# so a message reporting a cutoff cannot quote a number the read never used, and
+# overridable so a test does not have to wait out the real ones. The list bound
+# is larger because that call asks about every namespace at once, where the
+# others ask about one object.
+#
+# These bound a single READ, not the script: the sum of every bound here is far
+# past any caller's envelope, and deliberately so, because the caps above bound
+# work while the outer `timeout -k` bounds wall clock (see the note above). What
+# a per-read bound buys is forward progress -- one hung apiserver call can no
+# longer consume the whole envelope before anything is written.
+DP_READ_TIMEOUT="${COZY_DATAPLANE_READ_TIMEOUT:-20}"
+DP_LIST_TIMEOUT="${COZY_DATAPLANE_LIST_TIMEOUT:-28}"
+DP_READ_GRACE=2
+
+# Resolved once. Empty when `timeout` is absent: the reads then run unbounded
+# rather than every call exiting 127 with its output swallowed, which would
+# report that kubectl failed when kubectl never ran. The six reads that carry a
+# note say which of the two happened; the three inside capture_lb_datapath still
+# send stderr to /dev/null and report nothing either way.
+if command -v timeout >/dev/null 2>&1; then
+  DP_BOUND="timeout -k $DP_READ_GRACE $DP_READ_TIMEOUT"
+  DP_LIST_BOUND="timeout -k $DP_READ_GRACE $DP_LIST_TIMEOUT"
+else
+  DP_BOUND=""
+  DP_LIST_BOUND=""
+fi
+
 command -v kubectl >/dev/null 2>&1 || exit 0
 mkdir -p "$OUT" 2>/dev/null || exit 0
 
-log() { echo "[capture-dataplane] $*"; }
+# printf, not echo: under /bin/sh (dash on the CI image) echo expands backslash
+# escapes, and this logger now carries kubectl's own stderr. A message holding a
+# literal \n could then break the note in two and print a second
+# "[capture-dataplane] ..." line that reads as this script's own verdict. No
+# malice needed -- the jsonpath in these reads contains {"\n"}, and kubectl
+# quotes the expression back when it fails to parse it. The tr in
+# dp_read_outcome flattens the message on the way in; echo would undo that here,
+# on the way out.
+log() { printf '%s\n' "[capture-dataplane] $*"; }
+
+# How a cutoff should be described, mirroring prevlog_cutoff_desc in the sibling
+# script: 137 cannot tell its own kill grace apart from something else killing
+# the read, and an empty bound means the read was never bounded here at all.
+dp_cutoff_desc() {
+  if [ -z "$3" ]; then
+    printf '%s' "a signal from outside this script, which ran this read unbounded"
+  elif [ "${1:-}" = "137" ]; then
+    printf '%s' "a SIGKILL -- the kill grace of its own ${2}s timeout, or something else killing the read, which 137 does not tell apart"
+  else
+    printf '%s' "its own ${2}s timeout"
+  fi
+}
+
+# Where a read's stderr goes so a failure can be reported with kubectl's own
+# words instead of a guess. Empty if mktemp fails; the notes then omit the
+# message rather than inventing one.
+DP_ERR=$(mktemp "${TMPDIR:-/tmp}/dataplane-read.XXXXXX" 2>/dev/null) || DP_ERR=""
+
+# dp_read_outcome <rc> <seconds> <bound> [errfile] -> phrase describing why a
+# read produced nothing.
+#
+# 124 and 137 are the only statuses a bound produces, so they are the only ones
+# allowed to name the timeout. Everything else is kubectl answering -- a refused
+# connection, an RBAC denial, a kind the cluster does not serve -- and calling
+# that a cutoff would put a cause in the artifact that was never observed. The
+# sibling capture gates every one of its notes the same way, and this script's
+# notes claim to follow it.
+dp_read_outcome() {
+  if [ "${1:-}" = "124" ] || [ "${1:-}" = "137" ]; then
+    printf '%s' "was cut off by $(dp_cutoff_desc "$1" "$2" "$3")"
+  elif [ -n "${4:-}" ] && [ -s "${4:-}" ]; then
+    printf 'failed: kubectl exited %s: %s' "$1" "$(tr '\n' ' ' <"$4" | cut -c1-300)"
+  else
+    printf 'failed: kubectl exited %s' "$1"
+  fi
+}
 
 # Affected = scheduled (has nodeName), Ready!=True, and not already terminal.
 # A podIP is intentionally optional: a CNI endpoint leak can strand the pod
@@ -258,9 +331,15 @@ log() { echo "[capture-dataplane] $*"; }
 # Failed pods (completed Jobs, hook pods) are Ready!=True too but are not either
 # symptom, so they are excluded to keep the MAX_PODS budget on actual wedges.
 # jsonpath keeps this dependency-free (no jq / go-template reassignment).
-affected=$(kubectl get pods -A \
+# shellcheck disable=SC2086  # empty DP_LIST_BOUND must vanish, not become ""
+_pods_raw=$($DP_LIST_BOUND kubectl get pods -A \
   -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.status.podIP}{"|"}{.spec.nodeName}{"|"}{.status.conditions[?(@.type=="Ready")].status}{"|"}{.status.phase}{"\n"}{end}' \
-  2>/dev/null | pod_filter_affected)
+  2>"${DP_ERR:-/dev/null}")
+_pods_rc=$?
+if [ "$_pods_rc" -ne 0 ]; then
+  log "listing pods $(dp_read_outcome "$_pods_rc" "$DP_LIST_TIMEOUT" "$DP_LIST_BOUND" "$DP_ERR"); whatever it did not name is missing from the capture below, which is not the same as nothing being affected"
+fi
+affected=$(printf '%s' "$_pods_raw" | pod_filter_affected)
 
 # Set even when the pod path is empty; the per-pod capture references it, while
 # the independent LoadBalancer path below does not.
@@ -268,8 +347,24 @@ central=""
 
 # pod_on_node <ns> <label> <node> -> first matching pod name (empty if none).
 pod_on_node() {
-  kubectl get pod -n "$1" -l "$2" --field-selector "spec.nodeName=$3" \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
+  # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
+  # items[*], not items[0]: client-go's evalArray has no allowMissingKeys escape
+  # (evalField does), so indexing [0] into an empty list is a hard error and
+  # kubectl exits 1. "No such pod on this node" is the ordinary answer here --
+  # a node without a cilium-agent is exactly what this capture is called for --
+  # and with a note attached to a non-zero status that answer would be reported
+  # as a failed read. [*] yields nothing and exits 0, so a non-zero status again
+  # means something actually went wrong.
+  _pon=$($DP_BOUND kubectl get pod -n "$1" -l "$2" --field-selector "spec.nodeName=$3" \
+    -o jsonpath='{.items[*].metadata.name}' 2>"${DP_ERR:-/dev/null}")
+  _pon_rc=$?
+  # The note goes to stderr because this function's stdout is captured by its
+  # callers, so a log line on stdout would be read as part of the pod name.
+  if [ "$_pon_rc" -ne 0 ]; then
+    log "looking up the pod matching $2 on node $3 $(dp_read_outcome "$_pon_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); its node-global capture is skipped as if no such pod existed" >&2
+  fi
+  # [*] can name several pods; the callers want one.
+  printf '%s' "${_pon%% *}"
 }
 
 # Per-node captures are node-global (every pod on a node shares one cilium-agent
@@ -384,8 +479,16 @@ else
   # rather than per pod. ovn-central is a Deployment (not per-node); any replica
   # answers. --no-leader-only lets a read land on a raft follower instead of
   # erroring.
-  central=$(kubectl get pod -n "$KUBEOVN_NS" -l app=ovn-central \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
+  # items[*] for the same reason as pod_on_node: an absent ovn-central is a
+  # cluster without kube-ovn, not a read that failed.
+  central=$($DP_BOUND kubectl get pod -n "$KUBEOVN_NS" -l app=ovn-central \
+    -o jsonpath='{.items[*].metadata.name}' 2>"${DP_ERR:-/dev/null}")
+  _central_rc=$?
+  central=${central%% *}
+  if [ "$_central_rc" -ne 0 ]; then
+    log "looking up an ovn-central replica $(dp_read_outcome "$_central_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); the cluster-global OVN dumps below are skipped"
+  fi
   if [ -n "$central" ]; then
     {
       echo "=== ovn-sbctl lflow-list (cluster-global, pod=$central) ==="
@@ -422,10 +525,14 @@ else
 
       echo
       echo "=== pod Ready conditions + recent probe events ==="
-      kubectl get pod -n "$ns" "$pod" \
-        -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' 2>&1 || true
-      kubectl get events -n "$ns" --field-selector "involvedObject.name=$pod" \
-        -o jsonpath='{range .items[*]}{.lastTimestamp}{" "}{.reason}{": "}{.message}{"\n"}{end}' 2>&1 || true
+      # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
+      $DP_BOUND kubectl get pod -n "$ns" "$pod" \
+        -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' 2>&1 \
+        || echo "(reading this pod's Ready conditions $(dp_read_outcome "$?" "$DP_READ_TIMEOUT" "$DP_BOUND"))"
+      # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
+      $DP_BOUND kubectl get events -n "$ns" --field-selector "involvedObject.name=$pod" \
+        -o jsonpath='{range .items[*]}{.lastTimestamp}{" "}{.reason}{": "}{.message}{"\n"}{end}' 2>&1 \
+        || echo "(reading this pod's events $(dp_read_outcome "$?" "$DP_READ_TIMEOUT" "$DP_BOUND"))"
 
       if [ -z "$podip" ]; then
         echo
@@ -593,7 +700,8 @@ capture_lb_node() {
 # per-LB body in `|| true`-guarded, time-boxed captures so it is always best-
 # effort and self-limiting (MAX_LBS cap + per-command timeouts).
 capture_lb_datapath() {
-  _raw=$(timeout 20 kubectl get svc -A \
+  # shellcheck disable=SC2086  # empty DP_LIST_BOUND must vanish, not become ""
+  _raw=$($DP_LIST_BOUND kubectl get svc -A \
     -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.spec.type}{"|"}{.status.loadBalancer.ingress[0].ip}{"|"}{.spec.ports[0].port}{"|"}{.spec.ports[0].nodePort}{"|"}{.spec.externalTrafficPolicy}{"\n"}{end}' \
     2>/dev/null)
   _lbs=$(printf '%s\n' "$_raw" | lb_filter_services)
@@ -611,8 +719,13 @@ capture_lb_datapath() {
   # reports <unknown> and the probe falls back to the endpoint node.
   _speakerlog="$OUT/lb-speaker-logs.txt"
   : > "$_speakerlog" 2>/dev/null || _speakerlog=""
-  _speakers=$(kubectl get pod -n "$METALLB_NS" -l "$SPEAKER_SELECTOR" \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.spec.nodeName}{"\n"}{end}' 2>/dev/null)
+  # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
+  _speakers=$($DP_BOUND kubectl get pod -n "$METALLB_NS" -l "$SPEAKER_SELECTOR" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.spec.nodeName}{"\n"}{end}' 2>"${DP_ERR:-/dev/null}")
+  _speakers_rc=$?
+  if [ "$_speakers_rc" -ne 0 ]; then
+    log "listing metallb speakers $(dp_read_outcome "$_speakers_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); the announcing node is left unresolved"
+  fi
   if [ -n "$_speakers" ] && [ -n "$_speakerlog" ]; then
     printf '%s\n' "$_speakers" | while IFS='|' read -r _sp _spnode; do
       [ -n "$_sp" ] && [ -n "$_spnode" ] || continue
@@ -632,7 +745,8 @@ capture_lb_datapath() {
       _lbport="${_port:-0}"
 
       # EndpointSlice backend for this Service (first ready, addressed endpoint).
-      _eps=$(timeout 20 kubectl get endpointslices -n "$_ns" \
+      # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
+      _eps=$($DP_BOUND kubectl get endpointslices -n "$_ns" \
         -l "kubernetes.io/service-name=$_name" \
         -o jsonpath='{range .items[*]}{range .endpoints[*]}{.addresses[0]}{"|"}{.nodeName}{"|"}{.targetRef.namespace}{"|"}{.targetRef.name}{"|"}{.conditions.ready}{"\n"}{end}{end}' \
         2>/dev/null)
@@ -641,7 +755,8 @@ capture_lb_datapath() {
       _epnode=$(printf '%s' "$_backend" | cut -d'|' -f2)
       _eptns=$(printf '%s' "$_backend" | cut -d'|' -f3)
       _eptname=$(printf '%s' "$_backend" | cut -d'|' -f4)
-      _eptport=$(timeout 20 kubectl get endpointslices -n "$_ns" \
+      # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
+      _eptport=$($DP_BOUND kubectl get endpointslices -n "$_ns" \
         -l "kubernetes.io/service-name=$_name" \
         -o jsonpath='{.items[0].ports[0].port}' 2>/dev/null)
 
@@ -760,5 +875,13 @@ capture_lb_datapath() {
 }
 
 capture_lb_datapath
+
+# The stderr sink is scratch, not evidence: everything worth keeping from it is
+# already quoted into a note above. Removed here rather than from an EXIT trap,
+# which this repo's suites ban. This is the only exit reachable once the sink
+# exists -- the two earlier ones run before it is created -- so the file leaks
+# only when the call-site backstop kills the script mid-run, into the runner's
+# TMPDIR.
+[ -n "$DP_ERR" ] && rm -f "$DP_ERR"
 
 exit 0
