@@ -351,10 +351,9 @@ DP_READ_GRACE=2
 
 # Resolved once. Empty when `timeout` is absent: the reads then run unbounded
 # rather than every call exiting 127 with its output swallowed, which would
-# report that kubectl failed when kubectl never ran. The seven reads that carry
-# a note say which of the two happened; the two EndpointSlice reads inside
-# capture_lb_datapath still send stderr to /dev/null and report nothing either
-# way.
+# report that kubectl failed when kubectl never ran. Every read that carries a
+# note says which of the two happened, the two EndpointSlice reads inside
+# capture_lb_datapath included.
 if command -v timeout >/dev/null 2>&1; then
   DP_BOUND="timeout -k $DP_READ_GRACE $DP_READ_TIMEOUT"
   DP_LIST_BOUND="timeout -k $DP_READ_GRACE $DP_LIST_TIMEOUT"
@@ -955,20 +954,59 @@ capture_lb_datapath() {
       _lbport="${_port:-0}"
 
       # EndpointSlice backend for this Service (first ready, addressed endpoint).
+      # The status is kept beside the value, as the per-node pod lookups do:
+      # these two reads are interpreted by emptiness alone, and without the
+      # status a read that never answered writes the same `<none>` into the
+      # artifact as a Service that genuinely has no endpoint. The reader who has
+      # the uploaded report and not the run cannot then tell the two apart.
+      #
+      # Neither note asserts a consequence a partial read can falsify. A bound
+      # firing mid-stream leaves output on stdout and 124 in $?, so a read that
+      # failed can still have named the backend printed below, and a note
+      # claiming the value went in as unknown would contradict the block two
+      # lines above it.
+      #
+      # The two say it differently because the reads fail differently. The row
+      # read names what is MISSING: a record it never finished is dropped by the
+      # filter, so it is genuinely absent from the block. The scalar read cannot
+      # borrow that wording -- a number cut mid-token still prints, and `80` cut
+      # from `8080` is indistinguishable from a real 80 -- so its note names
+      # where the printed value came from instead. The service and pod lists are
+      # worded like the first; pod_on_node names no consequence at all.
       # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
       _eps=$($DP_BOUND kubectl get endpointslices -n "$_ns" \
         -l "kubernetes.io/service-name=$_name" \
         -o jsonpath='{range .items[*]}{range .endpoints[*]}{.addresses[0]}{"|"}{.nodeName}{"|"}{.targetRef.namespace}{"|"}{.targetRef.name}{"|"}{.conditions.ready}{"\n"}{end}{end}' \
-        2>/dev/null)
+        2>"${DP_ERR:-/dev/null}")
+      _eps_rc=$?
+      if [ "$_eps_rc" -ne 0 ]; then
+        log "listing the endpointslices of $_ns/$_name $(dp_read_outcome "$_eps_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); any endpoint it did not name is missing from the backend line below"
+      fi
       _backend=$(printf '%s\n' "$_eps" | lb_first_ready_endpoint)
       _epip=$(printf '%s' "$_backend" | cut -d'|' -f1)
       _epnode=$(printf '%s' "$_backend" | cut -d'|' -f2)
       _eptns=$(printf '%s' "$_backend" | cut -d'|' -f3)
       _eptname=$(printf '%s' "$_backend" | cut -d'|' -f4)
+      # items[*]/ports[*], not items[0]/ports[0], for the reason pod_on_node
+      # spells out: client-go's evalArray has no allowMissingKeys escape, so
+      # indexing [0] into an empty list is a hard error and kubectl exits 1. A
+      # Service without endpointslices is an ordinary answer here, and now that
+      # the status is reported it would otherwise arrive as a failed read. The
+      # wildcard yields nothing and exits 0; several ports collapse to the first,
+      # the same way the pod lookups take the first name.
       # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
       _eptport=$($DP_BOUND kubectl get endpointslices -n "$_ns" \
         -l "kubernetes.io/service-name=$_name" \
-        -o jsonpath='{.items[0].ports[0].port}' 2>/dev/null)
+        -o jsonpath='{.items[*].ports[*].port}' 2>"${DP_ERR:-/dev/null}")
+      _eptport_rc=$?
+      _eptport=${_eptport%% *}
+      if [ "$_eptport_rc" -ne 0 ]; then
+        log "reading the target port of $_ns/$_name $(dp_read_outcome "$_eptport_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); the port below is what arrived before it stopped, which may be nothing at all or a value cut short"
+      fi
+      # Absent versus never-read, once per value, in the vocabulary the per-node
+      # captures already use.
+      _ep_absent=$([ "$_eps_rc" -eq 0 ] && echo '<none>' || echo '<unknown>')
+      _eptport_absent=$([ "$_eptport_rc" -eq 0 ] && echo '<none>' || echo '<unknown>')
 
       # Announcer node = node of the most recent serviceAnnounced for the IP.
       _annode=$(lb_announcer_node "$_lbip" < "${_speakerlog:-/dev/null}")
@@ -977,7 +1015,7 @@ capture_lb_datapath() {
       {
         echo "################################################################"
         echo "# LB $_ns/$_name  ip=$_lbip port=$_lbport nodePort=${_np:-<none>} etp=${_etp:-<default>}"
-        echo "# backend: ip=${_epip:-<none>} node=${_epnode:-<none>} pod=${_eptns:-?}/${_eptname:-?} targetPort=${_eptport:-<none>}"
+        echo "# backend: ip=${_epip:-$_ep_absent} node=${_epnode:-$_ep_absent} pod=${_eptns:-$_ep_absent}/${_eptname:-$_ep_absent} targetPort=${_eptport:-$_eptport_absent}"
         echo "# announcer node: ${_annode:-<unknown>}"
         echo "################################################################"
       } > "$_of" 2>&1 || true

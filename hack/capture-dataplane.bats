@@ -621,6 +621,52 @@ STUB
   rm -rf "$d"
 }
 
+@test "a partially answered endpointslice read is not called an unread one" {
+  # The same shape as the service list above, at the two EndpointSlice reads: a
+  # bound firing mid-stream leaves rows on stdout and 124 in $?. The backend is
+  # then parsed from what did arrive and printed by name, so a note asserting
+  # what the artifact will say -- rather than what is missing from it -- lands
+  # two lines from a block that contradicts it. The sibling notes in this file
+  # avoid that by naming the omission, and pod_on_node names no consequence at
+  # all because it serves callers that do different things with the answer.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    # Complete rows AND a bound's status: the read answered in part.
+    endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 124 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # The rows that did arrive are used, so the artifact names a backend ...
+  grep -q 'ip=10.0.0.1' "$d/out/lb-tenant-web.txt"
+  # ... and the cut is on the record beside it.
+  grep -q 'was cut off' "$d/out/capture-notes.txt"
+  # Neither note may claim the value went in as unknown while the block above
+  # names it. Scoped to each note's own line: 'unknown' appears legitimately
+  # elsewhere in this file, including on the announcer line of this very block.
+  if grep 'endpointslices of tenant/web' "$d/out/capture-notes.txt" | grep -q 'unknown'; then
+    echo "the note calls the backend unknown while the capture names it:"
+    cat "$d/out/lb-tenant-web.txt"
+    grep 'endpointslices of tenant/web' "$d/out/capture-notes.txt"
+    exit 1
+  fi
+  if grep 'target port of tenant/web' "$d/out/capture-notes.txt" | grep -q 'unknown'; then
+    echo "the note calls the target port unknown while the capture names one:"
+    cat "$d/out/lb-tenant-web.txt"
+    grep 'target port of tenant/web' "$d/out/capture-notes.txt"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
 @test "a note does not claim a step was skipped when the step runs" {
   # A lookup can fail after naming what it was asked for. Both of these notes
   # used to state the consequence unconditionally, so the log said the OVN dump
@@ -892,6 +938,78 @@ STUB
     exit 1
   fi
   grep -q 'is unknown' "$d/out/lb-tenant-web.txt"
+  rm -rf "$d"
+}
+
+@test "an unread endpointslice is written as unknown rather than as none" {
+  # The two EndpointSlice reads discarded stderr and were interpreted by
+  # emptiness alone, so a refused read produced the same `<none>` a Service with
+  # no endpoints does. A reader working from the artifact gets the assertion and
+  # never sees that nothing was read.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    endpointslices) echo 'Error from server (Forbidden): endpointslices is forbidden' >&2; exit 1 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  [ -f "$d/out/lb-tenant-web.txt" ]
+  grep -q 'ip=<unknown>' "$d/out/lb-tenant-web.txt"
+  grep -q 'targetPort=<unknown>' "$d/out/lb-tenant-web.txt"
+  if grep -q 'ip=<none>' "$d/out/lb-tenant-web.txt"; then
+    echo "a read that never answered was recorded as an absent endpoint:"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  # And the reason ships beside the capture, not only in the job log.
+  grep -q 'endpointslices' "$d/out/capture-notes.txt"
+  rm -rf "$d"
+}
+
+@test "a Service with no endpointslices at all is not called an unread one" {
+  # The other direction, and a landmine the status threading arms: client-go's
+  # evalArray has no allowMissingKeys escape, so a jsonpath indexing [0] into an
+  # empty list is a hard error and kubectl exits 1, while [*] yields nothing and
+  # exits 0. With the status now reported, an ordinary Service without endpoints
+  # would start reporting as a failed read unless the read asks with [*].
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  esac
+done
+# The endpointslice reads fall through to here: an empty list, answered.
+case "$*" in
+  *'items[0]'*) echo 'error: array index out of bounds: index 0, length 0' >&2; exit 1 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  [ -f "$d/out/lb-tenant-web.txt" ]
+  grep -q 'targetPort=<none>' "$d/out/lb-tenant-web.txt"
+  if grep -q 'targetPort=<unknown>' "$d/out/lb-tenant-web.txt"; then
+    echo "an empty endpointslice list was recorded as a read that never answered:"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  if grep -q 'endpointslices' "$d/out/capture-notes.txt"; then
+    echo "an empty endpointslice list was noted as a failed read:"
+    cat "$d/out/capture-notes.txt"
+    exit 1
+  fi
   rm -rf "$d"
 }
 
