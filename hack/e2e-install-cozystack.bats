@@ -43,8 +43,9 @@
   # hard curl retry loop and serves it locally; tenant CRs then point
   # spec.talos.imageFactoryURL at its Service. Deployed here (before the long
   # install) so the seed download overlaps the install churn — readiness is gated
-  # at point-of-use in hack/e2e-apps/run-kubernetes.sh, which falls back to the
-  # public factory if the mirror never becomes Available, so this can only help.
+  # at point-of-use in hack/e2e-chainsaw/_lib/talos-image-cache.sh, called from
+  # run-kubernetes.sh, which falls back to the public factory if the mirror never
+  # becomes Available, so this can only help.
   # Best-effort: never fail the suite on the band-aid. Remove once tenant workers
   # no longer bulk-pull the OS image from the public internet in CI.
   local sid ver
