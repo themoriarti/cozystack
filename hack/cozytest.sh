@@ -102,14 +102,16 @@ COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
 # immediately it is a second; against one that hangs -- an unreachable address, a
 # context left pointing at a torn-down cluster -- it was measured at ~28s for the
 # previous-logs leg, which self-bounds its pod list and so never reaches the 300s
-# ceiling set below it, plus the full 600s for the data-plane leg, whose first
-# pod list carries no bound of its own. Ten minutes of dead waiting inside a job
-# budget, for a failure that should cost seconds.
+# ceiling set below it. The data-plane leg bounds its own reads as well, 28s for
+# a list and 20s for a single read, so it returns in tens of seconds rather than
+# holding its 600s ceiling. Dead waiting inside a job budget either way, for a
+# failure that should cost seconds.
 #
 # Where crust-gather is installed as well the bill stops being empty and starts
 # being wrong: that leg does not need a reachable cluster to be pointless, it
-# needs an ambient KUBECONFIG, and it will spend up to 360s snapshotting whatever
-# cluster the current context happens to name.
+# needs an ambient KUBECONFIG, and it can hold the trap for 390s -- its 360s
+# deadline plus the -k 30 kill grace -- snapshotting whatever cluster the
+# current context happens to name.
 #
 # The discriminator is the e2e- prefix, on the suite's own name or on the
 # directory holding it. At the top level the prefix is what the project already
