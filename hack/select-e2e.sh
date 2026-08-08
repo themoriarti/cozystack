@@ -58,6 +58,20 @@ SOURCES_DIR="${2:-packages/core/platform/sources}"
 #   - the workflows that RUN the suite — enumerated rather than matched by
 #     prefix, so an unrelated workflow does not burn a full run. Keep this list
 #     in step with `rg -l test-chainsaw .github/workflows/`.
+#
+#     What that costs, stated rather than left to be rediscovered: only
+#     pull-requests.yaml is executed from the PR's own head. e2e-fork runs on
+#     workflow_run, which always takes the default-branch copy; e2e-tag runs on
+#     workflow_call from a tag push; nightly runs on a schedule. So for those
+#     three the suite cannot exercise the edit under review, and escalating buys
+#     generic regression coverage rather than coverage of the change. Measured
+#     over the last six months of main: 26 commits touch one of the three with
+#     no other escalating path, and each now pays a full Chainsaw run it would
+#     previously have skipped. They stay on the list so the rule remains one
+#     idea ("workflows that run the suite") rather than two, and because the
+#     alternative leaves them inert, which reads as an oversight rather than a
+#     decision. Reopen the trade if the full suite's flake rate makes the
+#     generic coverage cost more than it returns.
 full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|tools/|hack/lib/|hack/[^/]+\.sh$|hack/[^/]+\.bats$|hack/[^/]+\.mk$|hack/buildkitd\.toml$|hack/e2e-[^/]+\.ya?ml$|go\.(mod|sum)$|Makefile$|\.github/workflows/(pull-requests|e2e-fork|e2e-tag|nightly)\.yaml$)'
 
 # Paths with no bearing on what e2e exercises. Checked AFTER full_suite_pattern,
