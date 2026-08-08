@@ -945,6 +945,7 @@
       "required": [
         "imageFactoryURL",
         "installerRepository",
+        "registryMirrors",
         "schematicID",
         "version"
       ],
@@ -958,6 +959,12 @@
           "description": "OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `\u003cinstallerRepository\u003e/\u003cschematicID\u003e:\u003cversion\u003e`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.",
           "type": "string",
           "default": "factory.talos.dev/installer"
+        },
+        "registryMirrors": {
+          "description": "Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap. See cozystack/cozystack#3513.",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
         },
         "schematicID": {
           "description": "Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.",

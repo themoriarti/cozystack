@@ -491,17 +491,3 @@ talos_image_cache_diagnose() {
       -l app.kubernetes.io/name=talos-image-cache -c serve --tail=50 --prefix
   } >&2
 }
-
-# talos_image_factory_spec_block: emit a two-line YAML block
-#   talos:
-#     imageFactoryURL: <url>
-# indented for insertion directly under a tenant Kubernetes CR `spec:`, or
-# nothing when the chart default should apply. Ends with a trailing newline when
-# non-empty so it can prefix the next `spec` key in a heredoc.
-talos_image_factory_spec_block() {
-  local url
-  url=$(resolve_talos_image_factory_url)
-  if [ -n "$url" ]; then
-    printf '  talos:\n    imageFactoryURL: %s\n' "$url"
-  fi
-}

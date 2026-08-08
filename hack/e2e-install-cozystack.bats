@@ -67,6 +67,17 @@
   else
     echo "WARNING: talos-image-cache Deployment NOT created — tenant workers will use public factory.talos.dev"
   fi
+  # ghcr.io pull-through mirror for the worker kubelet image (cozystack/cozystack#3513).
+  # No placeholders to substitute. Its CiliumClusterwideNetworkPolicy is likewise
+  # deferred to point-of-use (hack/e2e-chainsaw/_lib/ghcr-mirror.sh) since Cilium's
+  # CRDs do not exist yet.
+  yq 'select(.kind != "CiliumClusterwideNetworkPolicy")' hack/e2e-ghcr-mirror.yaml \
+    | kubectl apply -f - || echo "WARNING: failed to apply ghcr-mirror (fallback to direct ghcr.io pulls)"
+  if kubectl -n kube-system get deploy ghcr-mirror >/dev/null 2>&1; then
+    echo "ghcr-mirror Deployment created (pull-through cache for ghcr.io)"
+  else
+    echo "WARNING: ghcr-mirror Deployment NOT created — tenant workers will pull ghcr.io directly"
+  fi
 }
 
 @test "Required installer chart exists" {

@@ -2,6 +2,24 @@
 # Sourced by the chainsaw kubernetes-latest/previous Tests after cd to repo root.
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
 . hack/e2e-chainsaw/_lib/talos-image-cache.sh
+. hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+
+# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block combining the
+# Talos OS image cache (imageFactoryURL) and the ghcr.io worker image-pull mirror
+# (registryMirrors), each included only when its in-sandbox mirror is up. Prints
+# nothing when both fall back to the public defaults, so the chart defaults apply.
+# Indented for insertion directly under `spec:` in the heredoc below.
+talos_spec_block() {
+  local url ghcr mirrors
+  url=$(resolve_talos_image_factory_url)
+  ghcr=$(resolve_ghcr_mirror_endpoint)
+  mirrors=$(ghcr_registry_mirrors_block "$ghcr")
+  [ -n "$url" ] || [ -n "$mirrors" ] || return 0
+  printf '  talos:\n'
+  [ -n "$url" ] && printf '    imageFactoryURL: %s\n' "$url"
+  [ -n "$mirrors" ] && printf '%s' "$mirrors"
+  return 0
+}
 
 # kubectl_wait_retry: wraps `kubectl wait` with retries against transient
 # management-cluster apiserver/etcd errors.
@@ -1480,11 +1498,13 @@ YAML
 )
   fi
 
-  # Point worker DataVolume imports at the in-sandbox Talos image cache when it
-  # is up (falls back to the public factory otherwise). Emitted right under spec:
-  # as `talos: { imageFactoryURL: ... }`, or an empty line when the default applies.
+  # Point worker DataVolume imports at the in-sandbox Talos OS image cache and
+  # worker image pulls at the in-sandbox ghcr.io mirror when each is up (falls back
+  # to the public defaults otherwise). Emitted right under spec: as
+  # `talos: { imageFactoryURL: ..., registryMirrors: {...} }`, or nothing when both
+  # defaults apply.
   local talos_block
-  talos_block=$(talos_image_factory_spec_block)
+  talos_block=$(talos_spec_block)
 
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
