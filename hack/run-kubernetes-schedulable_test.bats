@@ -175,6 +175,48 @@
     fi
 }
 
+@test "the scheduling gate diagnostics read through the bounded helper" {
+    lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    # This branch ends in the exit that triggers the tenant crust-gather
+    # snapshot, and it reads the node table through the tenant kubeconfig -- a
+    # tenant whose nodes are Ready but unschedulable is one whose apiserver may
+    # or may not answer. An unbounded read here holds the Chainsaw op to its
+    # ceiling and the snapshot after it is lost rather than truncated, which is
+    # a property of the source and not of any function this suite can call.
+    head=$(grep -n 'tenant scheduling gate failed' "$lib" | head -n 1 | cut -d: -f1)
+    if [ -z "$head" ]; then
+        echo "expected the scheduling gate to announce its own failure" >&2
+        exit 1
+    fi
+    tail_line=$(awk -v s="$head" 'NR > s && $0 ~ /^ *exit 1$/ { print NR; exit }' "$lib")
+    if [ -z "$tail_line" ]; then
+        echo "expected the scheduling gate diagnostics to end in exit 1" >&2
+        exit 1
+    fi
+    # Continuations are folded first: a bounded read wrapped across lines puts
+    # `kubectl` at the start of its second line, so scanning raw lines would
+    # report every bounded read as an unbounded one.
+    block=$(awk -v s="$head" -v e="$tail_line" 'NR > s && NR < e' "$lib" \
+        | awk '{ line = line $0
+                 if (line ~ /\\$/) { sub(/\\$/, " ", line); next }
+                 print line; line = "" }
+               END { if (line != "") print line }')
+    bare=$(printf '%s\n' "$block" | grep -nE '^[[:space:]]*kubectl ' || true)
+    if [ -n "$bare" ]; then
+        echo "these scheduling gate reads run with no wall-clock bound:" >&2
+        printf '%s\n' "$bare" >&2
+        exit 1
+    fi
+    # Not vacuous: the block still reads the two things it exists to read. Counted as
+    # invocations at the start of a line, not as mentions -- naming the helper in a
+    # comment must not move a count of calls.
+    bounded=$(printf '%s\n' "$block" | grep -cE '^[[:space:]]*cozy_diag_read ' || true)
+    if [ "$bounded" -ne 2 ]; then
+        echo "expected 2 bounded reads in the scheduling gate diagnostics, found $bounded" >&2
+        exit 1
+    fi
+}
+
 @test "the tenant backend workload image is pinned by digest" {
     lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
     # The tenant workers reach no registry mirror, so this image is fetched
