@@ -3,9 +3,13 @@
 #
 # DIAGNOSTIC ONLY. This script collects extra evidence on an already-failed
 # test; it never mutates the cluster and never changes the test's pass/fail
-# outcome. cozytest.sh invokes it from its on-failure hook, AFTER the
-# crust-gather snapshot and only when a test has already failed, writing into
-# the same snapshot dir so the output lands in the uploaded cozyreport artifact.
+# outcome. Two callers invoke it, each from its own on-failure path and each
+# AFTER the crust-gather snapshot: the cozytest.sh EXIT trap and the Chainsaw
+# global catch in hack/e2e-chainsaw/.chainsaw.yaml. Both write into the same
+# snapshot dir so the output lands in the uploaded cozyreport artifact, and both
+# wrap this script in a wall-clock backstop -- but not the same one (600s and
+# 300s respectively), so a change sized against one caller can still overrun the
+# other. The MAX_LBS note below carries that arithmetic.
 #
 # Why this exists: a recurrent install failure is a CNI host->local-pod
 # data-plane transient -- kubelet on a node reaches a *local* pod's
@@ -89,7 +93,7 @@
 #     In-guest capture INSIDE the worker VMI (tenant `cilium-dbg bpf lb list` /
 #     `tcpdump eth0`) is the one hop this cannot reach from the host; it is left
 #     as a documented stretch at the call site (it needs a tenant
-#     kubeconfig/virtctl this EXIT-trap diagnostic does not have). The host-side
+#     kubeconfig/virtctl that neither caller of this diagnostic has). The host-side
 #     ANNOUNCER/ENDPOINT split is the deliverable and already localises the
 #     failing hop to host-cilium vs kube-ovn delivery.
 #
@@ -97,7 +101,7 @@
 # no retries, no behavior change, no traps. Every live capture is time-boxed,
 # and no command can fail or stall the job: most are `|| true`, and the few
 # whose status is read take it into a variable and use it only to say why a
-# read produced nothing. A wall-clock backstop wraps the whole run at the call
+# read produced nothing. A wall-clock backstop wraps the whole run at each call
 # site. It no-ops cleanly when there are no affected pods.
 #
 # Why a read produced nothing is written to capture-notes.txt beside the
@@ -269,9 +273,9 @@ dp_read_outcome() {
 
 # Sourcing guard: hack/capture-dataplane.bats sets E2E_CAPTURE_DATAPLANE_LIB and
 # sources this file purely to reach the helpers above; return before touching $1
-# or running any capture so the unit test never needs a cluster. The script's
-# only executing caller (the cozytest.sh EXIT trap) never sets this, so the
-# guard is a no-op there.
+# or running any capture so the unit test never needs a cluster. Neither
+# executing caller sets it -- not the cozytest.sh EXIT trap, not the Chainsaw
+# global catch -- so the guard is a no-op for both.
 if [ -n "${E2E_CAPTURE_DATAPLANE_LIB:-}" ]; then
   return 0 2>/dev/null
 fi
@@ -1041,8 +1045,8 @@ capture_lb_datapath() {
       #       tenant-side miss from a host-side delivery miss);
       #     - `tcpdump -ni eth0 port <tenant-nodePort>` -- did the packet even
       #       arrive on the VMI's NIC?
-      #   Deferred because it needs a tenant kubeconfig/virtctl that this EXIT-
-      #   trap diagnostic does not have; the host-side ANNOUNCER/ENDPOINT split
+      #   Deferred because it needs a tenant kubeconfig/virtctl that neither
+      #   caller of this diagnostic has; the host-side ANNOUNCER/ENDPOINT split
       #   already localises the failing hop to host-cilium vs kube-ovn delivery.
     done
     log "LoadBalancer-datapath capture complete"
