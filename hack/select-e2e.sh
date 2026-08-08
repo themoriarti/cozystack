@@ -21,6 +21,13 @@
 # green gate with no suite run (#3392). When that escalation fires for a path
 # that genuinely cannot affect e2e, add it to inert_config_pattern — do not
 # widen the fall-through.
+#
+# One rule selects nothing without going through inert_config_pattern: an edit
+# under examples/backups/<app>/ where <app> has no Chainsaw suite, decided
+# inline at step 2. So "empty" does not always mean "matched the inert list";
+# it means some rule decided this change cannot affect a suite. That is the
+# property the lanes depend on, and it is the one to preserve: an empty
+# selection is always a decision, never a path nothing looked at.
 set -eu
 
 CHANGED="${1:?missing changed-files arg}"

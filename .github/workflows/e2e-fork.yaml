@@ -279,8 +279,10 @@ jobs:
             // e2e harness escalate to the full suite, paths that cannot affect
             // what e2e exercises are named inert and select nothing, and a path
             // matching neither escalates rather than returning empty. So an
-            // empty selection reaching this lane means "classified inert", not
-            // "unrecognised", which is what used to make it a fail-open (#3392).
+            // empty selection reaching this lane means some rule decided the
+            // change cannot affect a suite, not that the selector never
+            // recognised the path, which is what used to make it a fail-open
+            // (#3392).
             // Both sides of a rename go to TIA too: the old path is a removal
             // the selector must see (a moved packages/<app>/… still affects
             // that app's suite). Extra paths can only widen the selection.
