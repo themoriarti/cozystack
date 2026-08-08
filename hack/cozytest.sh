@@ -209,12 +209,27 @@ _cozy_on_exit() {
     # delegates host->local-pod routing to kube-ovn/ovn0) can be root-caused
     # from the uploaded artifact. crust-gather captures object state but not the
     # node's L3 forwarding state. This NEVER affects the test outcome: every
-    # capture is time-boxed and `|| true`, and the whole run is wrapped in a
-    # wall-clock backstop so it cannot stall the job. It no-ops when there are no
-    # affected pods or when kubectl/the tooling is absent.
-    if [ "$_cozy_cluster_captures" -eq 1 ] && command -v kubectl >/dev/null 2>&1; then
+    # capture inside is time-boxed and `|| true`, the whole run is wrapped in a
+    # wall-clock backstop so it cannot stall the job, and the backstop's own
+    # status is read only to print a line. It no-ops when there are no affected
+    # pods or when kubectl/the tooling is absent.
+    # The `-x` check matches the previous-logs leg above and the Chainsaw
+    # caller, and it stopped being cosmetic once the status below is printed: a
+    # tree without the collector would otherwise report "INCOMPLETE (exit 127);
+    # kept what landed" about a directory nothing ever created.
+    if [ "$_cozy_cluster_captures" -eq 1 ] && command -v kubectl >/dev/null 2>&1 && [ -x "$(dirname "$0")/e2e-capture-dataplane.sh" ]; then
       echo "» capturing host->pod data-plane for NotReady pods -> $_snap/dataplane"
-      timeout -k 30 600 "$(dirname "$0")/e2e-capture-dataplane.sh" "$_snap/dataplane" 2>&1 || true
+      _dp_rc=0
+      timeout -k 30 600 "$(dirname "$0")/e2e-capture-dataplane.sh" "$_snap/dataplane" 2>&1 || _dp_rc=$?
+      # Read, not propagated: the status still cannot change the job's outcome,
+      # it only gets a line. The collector names every read of its own that it
+      # could not finish, which leaves this backstop as the one remaining way
+      # for that leg to die silently -- and a truncated dataplane/ is otherwise
+      # indistinguishable from a complete one that found little. Same discipline
+      # as the previous-logs leg above, whose comment carries the arithmetic.
+      if [ "$_dp_rc" -ne 0 ]; then
+        echo "» data-plane capture INCOMPLETE (exit $_dp_rc); kept what landed in $_snap/dataplane"
+      fi
     fi
   fi
   if command -v cozy_cleanup >/dev/null 2>&1; then

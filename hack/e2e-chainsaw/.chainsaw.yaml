@@ -188,7 +188,18 @@ spec:
           # op, so it keeps the wider budget.
           if [ -x ../../e2e-capture-dataplane.sh ]; then
             echo "» capturing host->pod data-plane for NotReady pods -> ${snap}/dataplane"
-            timeout -k 30 300 ../../e2e-capture-dataplane.sh "${snap}/dataplane" 2>&1 || true
+            timeout -k 30 300 ../../e2e-capture-dataplane.sh "${snap}/dataplane" 2>&1
+            dp_rc=$?
+            # Read, not propagated: the `exit 0` below still stands. The
+            # collector names every read of its own it could not finish, so this
+            # backstop is the last way its leg can die without a word, and a
+            # truncated dataplane/ then reads exactly like a complete one that
+            # found little. The 300s here cuts sooner than the 600s the
+            # cozytest.sh call site allows, so this is the likelier of the two
+            # to fire, and the previous-logs leg above already reports its own.
+            if [ "${dp_rc}" -ne 0 ]; then
+              echo "» data-plane capture INCOMPLETE (exit ${dp_rc}); kept what landed in ${snap}/dataplane"
+            fi
           fi
           # A non-zero collector must not fail the catch and bury the test's own
           # error, which is the thing worth reading.

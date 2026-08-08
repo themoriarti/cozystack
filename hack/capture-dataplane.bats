@@ -1331,3 +1331,42 @@ STUB
   # A success still wins: the address answered, whatever else could not be tried.
   [ "$(printf 'unknown\nok\n' | lb_capture_decision)" = "skip" ]
 }
+
+@test "the Chainsaw caller also reports a capture its backstop cut short" {
+  # This collector has two callers, and the honesty contract has to hold at both
+  # or the reader learns to distrust the one that keeps it. hack/cozytest.sh's
+  # side is covered behaviourally in cozytest-capture-gate.bats; this runs the
+  # Chainsaw catch itself, extracted from the config it lives in, so neither
+  # side can quietly stop reporting. The Chainsaw backstop is the shorter of the
+  # two -- 300s against 600s, because it shares an op envelope with the snapshot
+  # leg -- so it is the likelier of the pair to fire.
+  #
+  # The backstop is simulated with a `timeout` on PATH that exits 124, for the
+  # same reason the cozytest.sh-side test does it: the call site sees a non-zero
+  # status and whatever landed, whichever way the kill arrived.
+  # Named here rather than left to fail downstream: without it a missing yq
+  # surfaces as the extraction guard below going red, which reads as the catch
+  # op having been renamed. Same form the other yq-using suites use.
+  command -v yq >/dev/null || { echo "yq (mikefarah v4+) is required to read the Chainsaw catch script" >&2; exit 1; }
+  d=$(mktemp -d)
+  mkdir -p "$d/bin" "$d/hack/e2e-chainsaw/suite"
+  printf '#!/bin/sh\nexit 124\n' >"$d/bin/timeout"
+  printf '#!/bin/sh\nexit 0\n' >"$d/bin/crust-gather"
+  # The catch resolves this collector as ../../e2e-capture-dataplane.sh from the
+  # failing suite's own directory, and gates the leg on it being executable.
+  printf '#!/bin/sh\nexit 0\n' >"$d/hack/e2e-capture-dataplane.sh"
+  chmod +x "$d/bin/timeout" "$d/bin/crust-gather" "$d/hack/e2e-capture-dataplane.sh"
+  yq -r '.spec.error.catch[] | select(.description == "crust-gather host snapshot on failure") | .script.content' \
+    "$HACK_DIR/e2e-chainsaw/.chainsaw.yaml" >"$d/catch.sh"
+  # The extraction found the right op: a renamed description would otherwise
+  # leave an empty script that satisfies nothing and reports nothing.
+  grep -q 'e2e-capture-dataplane.sh' "$d/catch.sh"
+  ( cd "$d/hack/e2e-chainsaw/suite" \
+    && PATH="$d/bin:$PATH" COZY_REPORT_DIR="$d/report" TEST_NAME=fixture sh "$d/catch.sh" ) \
+    >"$d/out" 2>&1 || true
+  # Positive control: the leg was reached, so the line below is about what it
+  # said and not about the catch having stopped earlier.
+  grep -q 'capturing host->pod data-plane' "$d/out"
+  grep -q 'data-plane capture INCOMPLETE (exit 124)' "$d/out"
+  rm -rf "$d"
+}
