@@ -274,3 +274,37 @@
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "postgres" ]
 }
+
+# The classification above is only total if every line reaches the loop that
+# applies it. POSIX read assigns the last line and returns non-zero when the
+# input has no trailing newline, so a plain `while read` drops it, and the
+# fall-through that escalates an unrecognised path lives inside the body that
+# drop skips. `git diff --name-only` always terminates its output, so the bug is
+# invisible to a caller that pipes it; a caller assembling the list itself sees
+# it immediately. Both cases below are red without `|| [ -n "$file" ]`.
+#
+# These two clean up inline rather than through `trap ... EXIT`: an EXIT trap
+# replaces the one the bats binary installs for its own bookkeeping, and a test
+# that fails under it can print no TAP line at all, which is the opposite of
+# what a regression pin is for.
+
+@test "an unterminated last line is still classified" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf '%s' packages/apps/postgres/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    rm -rf "$tmp"
+    [ "$output" = "postgres" ]
+}
+
+@test "an unterminated unclassified last line still escalates" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    # The unclassified path is the one the drop would eat, so without the guard
+    # the escalation never fires and the selection comes back empty — the exact
+    # silent-green this classification exists to remove.
+    printf 'docs/x.md\n%s' brand-new/thing.conf > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    rm -rf "$tmp"
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+}

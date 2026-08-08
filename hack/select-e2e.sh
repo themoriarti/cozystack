@@ -109,7 +109,15 @@ trigger_any=0
 selected_sources=""
 selected_apps=""
 
-while IFS= read -r file; do
+# `|| [ -n "$file" ]` is what makes the classification below total. POSIX read
+# assigns the last line and then returns non-zero when the input does not end in
+# a newline, so a plain `while read` silently drops it. That is the one way a
+# path can reach this loop and be classified by nothing at all: the fall-through
+# at the end, which exists so an unrecognised path escalates instead of
+# selecting nothing, sits inside the body the drop skips. Callers building the
+# list themselves rather than piping `git diff` are the ones that hit it, and
+# the guard belongs here rather than in each of them.
+while IFS= read -r file || [ -n "$file" ]; do
   [ -z "$file" ] && continue
 
   # 1. Skip: docs, dashboards, *.md. Checked before everything else because
