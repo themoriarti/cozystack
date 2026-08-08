@@ -341,6 +341,113 @@ assert_full_suite() {
 # Last, not before the assertion, so that `set -e` leaves the scratch directory
 # behind on failure for inspection (docs/agents/e2e-testing.md §3).
 
+@test "a broken yq is named rather than passed off as an empty graph" {
+    # Both indexes are one yq each, read as `$(build_owners_index | sort -u)`,
+    # so the pipeline reports sort's status and set -e never sees yq's. A
+    # missing binary or a malformed PackageSource then yields an empty index,
+    # every path falls through to escalation, and the run is a full suite that
+    # looks exactly like intended conservatism. Nothing distinguishes it from
+    # "no owners matched", so nobody is told the selector stopped working.
+    #
+    # The escalation is the right outcome and is asserted here too; what this
+    # pins is that it comes with a line naming yq.
+    #
+    # The exit status is asserted as ZERO on purpose, and it is the difference
+    # between this case and the two below it. What a broken yq costs is the
+    # dependency graph, and the full suite is a correct answer without one, so
+    # the script still answers. When the SUITE LIST is what broke there is no
+    # correct answer left to give and the script exits non-zero instead. Both
+    # halves are pinned so the header and docs cannot drift into claiming this
+    # one reddens the gate — it does not; it is conservative and quiet.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mkdir "$tmp/bin"
+    printf '#!/bin/sh\necho "yq: broken fixture" >&2\nexit 1\n' > "$tmp/bin/yq"
+    chmod +x "$tmp/bin/yq"
+    echo "packages/apps/postgres/values.yaml" > "$tmp/diff"
+    rc=0
+    output=$(PATH="$tmp/bin:$PATH" hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "a broken yq must still answer with the full suite, not exit $rc" >&2
+        cat "$tmp/err" >&2
+        exit 1
+    fi
+    # Matched on the script's own prefix, not on the word alone: the stub writes
+    # to stderr the way a real yq does, so a bare `grep yq` passes on the
+    # fixture's noise and pins nothing.
+    if ! grep -q 'select-e2e:.*yq' "$tmp/err"; then
+        echo "a yq failure must be reported by select-e2e itself; stderr was:" >&2
+        cat "$tmp/err" >&2
+        exit 1
+    fi
+    assert_full_suite "$output"
+    rm -rf "$tmp"
+}
+
+@test "a broken find is reported rather than yielding an empty suite list" {
+    # The suite list is built as `$(find ... | sed | sort)`, which reports
+    # sort's status and never find's — the same blindness as the yq indexes
+    # above, in a worse place: every escalation prints that list, so a silent
+    # failure here turns "run everything" into a run of nothing.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mkdir "$tmp/bin"
+    printf '#!/bin/sh\necho "find: broken fixture" >&2\nexit 1\n' > "$tmp/bin/find"
+    chmod +x "$tmp/bin/find"
+    echo "go.mod" > "$tmp/diff"
+    rc=0
+    output=$(PATH="$tmp/bin:$PATH" hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err") || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "a broken find must fail the run; it exited 0 with output: '$output'" >&2
+        exit 1
+    fi
+    if ! grep -q 'select-e2e:.*find' "$tmp/err"; then
+        echo "a find failure must be reported by select-e2e itself; stderr was:" >&2
+        cat "$tmp/err" >&2
+        exit 1
+    fi
+    rm -rf "$tmp"
+}
+
+@test "an empty suite list is fatal whatever the diff classifies as" {
+    # Checked once where the list is built, not at the escalation branches,
+    # because an empty list corrupts more than those. The escalations would
+    # print it, and a blank selection is what both lanes read as "skip
+    # Chainsaw" before posting the required status green — the outcome meaning
+    # "run everything" delivering a run of nothing. But the
+    # examples/backups/<app>/ rule escalates nothing and still consults the
+    # list as a membership test, so with the list empty a backup-harness edit
+    # that should run its suite reports nothing to run instead — and that one
+    # is indistinguishable from a legitimately empty selection.
+    #
+    # Run from a tree whose hack/e2e-chainsaw exists but holds no
+    # chainsaw-test.yaml, so find succeeds and matches nothing — the state a
+    # moved directory or a wrong working directory produces. All three diff
+    # classes are exercised: one that escalates, one that selects by
+    # membership, and one that legitimately selects nothing. The middle two
+    # exited 0 while the guard lived at the escalation branches.
+    tmp=$(mktemp -d)
+    script="$PWD/hack/select-e2e.sh"
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw"
+    for d in go.mod examples/backups/postgres/run-all.sh docs/x.md; do
+        echo "$d" > "$tmp/diff"
+        rc=0
+        output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources" 2>"$tmp/err") || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            echo "a broken suite enumeration must fail for '$d', not print '$output' and exit 0" >&2
+            cat "$tmp/err" >&2
+            exit 1
+        fi
+        if ! grep -q 'suite enumeration is broken' "$tmp/err"; then
+            echo "the refusal must say why for '$d'; stderr was:" >&2
+            cat "$tmp/err" >&2
+            exit 1
+        fi
+    done
+    rm -rf "$tmp"
+}
+
 @test "an unterminated last line is still classified" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"

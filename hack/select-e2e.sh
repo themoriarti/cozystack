@@ -14,10 +14,19 @@
 #   - full list     any path that affects all tests, OR an unrecognised
 #                   packages/* path, OR a per-app source whose graph has
 #                   no *-application descendants, OR a path matching NEITHER
-#                   the full-suite nor the inert list (conservative fallbacks)
+#                   the full-suite nor the inert list, OR a yq that failed to
+#                   build the dependency graph (conservative fallbacks)
+#   - nothing, and  the suite list itself is unavailable: find failed, or
+#     a non-zero    hack/e2e-chainsaw holds no chainsaw-test.yaml. Unlike the
+#     exit          yq case there is no fallback left to take — an empty list
+#                   silently corrupts both the escalations, which would print
+#                   it, and the backups rule, which membership-tests against
+#                   it — so the script refuses to answer at all, and since both
+#                   lanes run it under `bash -e` the step fails
 #
-# Every changed path must land in exactly one of those three classes by an
-# explicit rule. An unclassified path escalates to the full suite rather than
+# Every changed path must land in exactly one of the three selection classes by
+# an explicit rule; the fourth outcome is not a classification but a refusal to
+# produce one. An unclassified path escalates to the full suite rather than
 # selecting nothing: both e2e lanes read an empty selection as "skip Chainsaw"
 # and then post the required "E2E Tests" status green, so a silent default is a
 # green gate with no suite run (#3392). When that escalation fires for a path
@@ -93,8 +102,49 @@ inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testda
 
 # All known Chainsaw suites: every dir under hack/e2e-chainsaw/ holding a
 # chainsaw-test.yaml (this excludes _lib/ and the top-level config files).
-all_apps=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml 2>/dev/null \
+#
+# Captured before the sed/sort rather than piped straight into them: a pipeline
+# carries its LAST command's status, so `$(find ... | sed | sort)` would report
+# sort's success whatever find did — the same blindness handled for yq below,
+# and worse here, because this list is what every escalation prints. Errors go
+# to stderr rather than /dev/null for the same reason.
+if ! chainsaw_tests=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml); then
+  echo "select-e2e: find failed listing the Chainsaw suites under hack/e2e-chainsaw — nothing can be decided without that list" >&2
+  exit 1
+fi
+all_apps=$(printf '%s\n' "$chainsaw_tests" \
   | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' | sort)
+
+# An empty list here is a broken enumeration — a moved directory, a wrong
+# working directory — not a project without tests, and it silently corrupts
+# every answer the script can give:
+#
+#   - the three escalation branches print this list, so "run everything"
+#     becomes a blank line, which both lanes read as "skip Chainsaw" before
+#     posting the required "E2E Tests" status green;
+#   - the examples/backups/<app>/ rule takes no escalation and still consults
+#     it, as a membership test. With the list empty the test fails, the app is
+#     not selected, and an edit to a backup harness that should run its suite
+#     reports nothing to run instead.
+#
+# Neither is distinguishable in the output from a legitimately empty selection,
+# which is the failure #3392 exists to keep out. Checking once here rather than
+# at the escalation branches covers both, and covers the next consumer that
+# reads the list without escalating.
+#
+# Both lanes run this step under `bash -e`, so the non-zero exit fails the job
+# instead of falling through to the empty selection.
+if [ -z "$all_apps" ]; then
+  echo "select-e2e: found no chainsaw-test.yaml under hack/e2e-chainsaw — the suite enumeration is broken (wrong working directory?), refusing to decide anything from an empty suite list" >&2
+  exit 1
+fi
+
+# Single exit point for the three escalating branches, so the invariant above
+# has one consumer to reason about rather than three copies.
+escalate_to_full_suite() {
+  echo "$all_apps" | paste -sd ' ' -
+  exit 0
+}
 
 # PackageSource name -> Chainsaw suite name(s). Most *-application sources map
 # by stripping the suffix; explicit overrides for the few that don't.
@@ -132,8 +182,27 @@ build_reverse_deps() {
   yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "" and . != "cozystack.cozystack-engine") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
 }
 
-OWNERS=$(build_owners_index | sort -u)
-REVERSE=$(build_reverse_deps | sort -u)
+# Each index is one yq, and `OWNERS=$(build_owners_index | sort -u)` reports
+# sort's status, never yq's — so `set -eu` above cannot see a yq that failed.
+# The index then comes back empty, every path falls through to escalation, and
+# the run is a full suite indistinguishable in the output from "no owners
+# matched". Safe in direction, invisible in nature: selection has stopped
+# working and it reads as the conservatism it is supposed to be.
+#
+# So capture each half on its own, check its status, and say once, loudly, that
+# yq is the broken component before taking the same fallback the empty index
+# would have taken anyway.
+broken=''
+OWNERS=$(build_owners_index) || broken='the ownership index'
+REVERSE=$(build_reverse_deps) || broken="${broken:+$broken and }the reverse-dependency index"
+if [ -n "$broken" ]; then
+  echo "select-e2e: yq failed building $broken from $SOURCES_DIR/*.yaml — the dependency graph is unusable, running the full suite" >&2
+  escalate_to_full_suite
+fi
+# Sorted after the check rather than inside the pipeline above, for the reason
+# the pipeline was the bug.
+OWNERS=$(printf '%s\n' "$OWNERS" | sort -u)
+REVERSE=$(printf '%s\n' "$REVERSE" | sort -u)
 
 trigger_full=0
 trigger_any=0
@@ -218,8 +287,7 @@ while IFS= read -r file || [ -n "$file" ]; do
 done < "$CHANGED"
 
 if [ "$trigger_full" = 1 ]; then
-  echo "$all_apps" | paste -sd ' ' -
-  exit 0
+  escalate_to_full_suite
 fi
 
 if [ "$trigger_any" = 0 ]; then
@@ -264,8 +332,7 @@ done | paste -sd ' ' -)
 # silently skip E2E. Fall back to full suite so a path inside the graph is
 # never silently dropped.
 if [ -z "$final_apps" ]; then
-  echo "$all_apps" | paste -sd ' ' -
-  exit 0
+  escalate_to_full_suite
 fi
 
 echo "$final_apps"
