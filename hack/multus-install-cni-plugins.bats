@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 12 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Behavioural tests for the multus install-cni-plugins init container script:
 # extracted from the rendered DaemonSet and run. The helm-unittest cases in
 # packages/system/multus/tests/multus_test.yaml match its source TEXT instead.

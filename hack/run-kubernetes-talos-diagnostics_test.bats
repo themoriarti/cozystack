@@ -2,6 +2,15 @@
 # Regression coverage for tenant-worker Talos diagnostics in
 # hack/e2e-chainsaw/_lib/run-kubernetes.sh. cozytest.sh ends an @test block at
 # the first bare closing brace, so command mocks stay at top level.
+#
+# Scratch directories are removed at the end of the test body, never from a
+# `trap ... EXIT`. Such a trap replaces the one the bats binary installs for its
+# own bookkeeping, and a test that then fails prints no TAP line at all -- not
+# `not ok`, nothing -- so a reader grepping the output for failures sees a green
+# suite while the test silently did not finish. Both runners set -e, so on
+# failure the cleanup below is unreachable and the directory survives for
+# inspection, which is what a failed test wants anyway. See
+# docs/agents/e2e-testing.md and hack/bats-no-exit-trap.bats.
 
 kubectl_calls=/dev/null
 kubectl_manifest=/dev/null
@@ -107,7 +116,6 @@ assert_file_lacks_pattern() {
 @test "reader Certificate is short-lived and never embeds credential data" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   kubectl_calls="$tmp/kubectl.calls"
   kubectl_manifest="$tmp/certificate.yaml"
 
@@ -120,12 +128,12 @@ assert_file_lacks_pattern() {
   assert_file_contains 'name: kubernetes-test-latest-version-talos-ca' "$kubectl_manifest"
   assert_file_contains 'cozystack-e2e.io/tenant-talos-diagnostics: "test-latest-version"' "$kubectl_manifest"
   assert_file_lacks_pattern '^[[:space:]]*(tls[.]crt|tls[.]key|data):' "$kubectl_manifest"
+  rm -rf "$tmp"
 }
 
 @test "talosconfig uses the tenant CA and the issued reader key" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   kubectl_calls="$tmp/kubectl.calls"
   kubectl_manifest="$tmp/certificate.yaml"
   talosctl_calls="$tmp/talosctl.calls"
@@ -143,12 +151,12 @@ assert_file_lacks_pattern() {
     -rw-------*) ;;
     *) echo "talosconfig permissions are not 0600" >&2; return 1 ;;
   esac
+  rm -rf "$tmp"
 }
 
 @test "diagnostics Pod has no API token or Secret volume" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   kubectl_calls="$tmp/kubectl.calls"
   kubectl_manifest="$tmp/pod.yaml"
 
@@ -162,6 +170,7 @@ assert_file_lacks_pattern() {
   assert_file_contains 'image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47' "$kubectl_manifest"
   assert_file_contains "'docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47'" hack/e2e-install-cozystack.bats
   assert_file_lacks_pattern 'secret:|secretName:' "$kubectl_manifest"
+  rm -rf "$tmp"
 }
 
 @test "Kubernetes Chainsaw operations leave room for failure diagnostics" {
@@ -172,7 +181,6 @@ assert_file_lacks_pattern() {
 @test "orchestrator skips credentials and helper Pod when every VMI lacks an IP" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   kubectl_calls="$tmp/kubectl.calls"
   kubectl_manifest="$tmp/manifest.yaml"
   kubectl_vmi_json="$tmp/vmis.json"
@@ -191,12 +199,12 @@ assert_file_lacks_pattern() {
   assert_file_contains 'default VMI interface has no reported IP address' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-a/capture-error.log"
   assert_file_contains 'default VMI interface has no reported IP address' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-b/capture-error.log"
   assert_file_contains 'no tenant worker VMI has a reported IP for Talos diagnostics' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/setup-error.log"
+  rm -rf "$tmp"
 }
 
 @test "node capture uses the VMI IP for endpoint and node with bounded commands" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   kubectl_calls="$tmp/kubectl.calls"
   timeout_calls="$tmp/timeout.calls"
 
@@ -213,12 +221,12 @@ assert_file_lacks_pattern() {
   esac
   assert_file_contains '[capture exit code: 0]' "$tmp/node/dmesg.log"
   assert_file_contains '[capture exit code: 0]' "$tmp/node/kubelet.log"
+  rm -rf "$tmp"
 }
 
 @test "a timed-out worker remains recorded and does not block the next capture" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   kubectl_calls="$tmp/kubectl.calls"
   timeout_calls="$tmp/timeout.calls"
   timeout_rc=124
@@ -229,12 +237,13 @@ assert_file_lacks_pattern() {
   [ "$(wc -l < "$timeout_calls")" -eq 2 ]
   assert_file_contains '[capture exit code: 124]' "$tmp/node/dmesg.log"
   assert_file_contains '[capture exit code: 124]' "$tmp/node/kubelet.log"
+  rm -rf "$tmp"
 }
 
 @test "orchestrator continues from a timed-out worker to the next VMI" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
+  origin=$PWD
   kubectl_calls="$tmp/kubectl.calls"
   kubectl_manifest="$tmp/manifest.yaml"
   kubectl_vmi_json="$tmp/vmis.json"
@@ -256,16 +265,23 @@ assert_file_lacks_pattern() {
   assert_file_contains '[capture exit code: 124]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-a/kubelet.log"
   assert_file_contains '[capture exit code: 0]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-b/dmesg.log"
   assert_file_contains '[capture exit code: 0]' "$COZY_REPORT_DIR/snapshots/$COZY_SNAPSHOT_NAME/tenant-talos/worker-b/kubelet.log"
+  # Back out of the scratch directory before removing it: this test runs the
+  # orchestrator from inside it. Not because rm would fail -- BSD, busybox and
+  # GNU rm all remove a directory from inside it and return 0 -- but because
+  # the runner's own bookkeeping still runs in this subshell after the body
+  # returns, and it would be doing so on an unlinked cwd.
+  cd "$origin"
+  rm -rf "$tmp"
 }
 
 @test "cleanup deletes diagnostic Certificate before its Pod and Secret" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   kubectl_calls="$tmp/kubectl.calls"
 
   cozy_cleanup
 
   [ "$(sed -n '2p' "$kubectl_calls")" = '-n tenant-test delete certificates.cert-manager.io -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=true --timeout=30s' ]
   [ "$(sed -n '3p' "$kubectl_calls")" = '-n tenant-test delete pod,secret -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=false' ]
+  rm -rf "$tmp"
 }

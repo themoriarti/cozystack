@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 1 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # -----------------------------------------------------------------------------
 # Unit tests for the pure decision/parsing helpers in
 # hack/e2e-capture-dataplane.sh -- specifically the LoadBalancer-datapath
