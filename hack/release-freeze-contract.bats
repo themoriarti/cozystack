@@ -331,8 +331,6 @@ step_line() {
 @test "the guard's merged decision is correct on empty, closed-unmerged and closed-merged lists" {
   command -v node >/dev/null || { echo "node unavailable; skipping"; return 0; }
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
 
   cat > "$tmp/guard.js" <<'JS'
 function alreadyMerged(prs) {
@@ -370,4 +368,6 @@ closed-merged=true"
   [ -n "$block" ]
   printf '%s\n' "$block" | script_lines | grep -qF 'prs.some(p => p.merged_at !== null)' || {
     echo "backport.yaml's guard no longer uses prs.some(p => p.merged_at !== null)." >&2; exit 1; }
+
+  rm -rf "$tmp"
 }
