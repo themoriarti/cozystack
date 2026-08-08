@@ -347,6 +347,11 @@ central=""
 
 # pod_on_node <ns> <label> <node> -> first matching pod name (empty if none).
 pod_on_node() {
+  _pon_key="$1/$2/$3"
+  if _pon_hit=$(pod_memo_get "$_pon_key"); then
+    printf '%s' "$_pon_hit"
+    return 0
+  fi
   # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
   # items[*], not items[0]: client-go's evalArray has no allowMissingKeys escape
   # (evalField does), so indexing [0] into an empty list is a hard error and
@@ -364,6 +369,7 @@ pod_on_node() {
     log "looking up the pod matching $2 on node $3 $(dp_read_outcome "$_pon_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); its node-global capture is skipped as if no such pod existed" >&2
   fi
   # [*] can name several pods; the callers want one.
+  pod_memo_put "$_pon_key" "${_pon%% *}"
   printf '%s' "${_pon%% *}"
 }
 
@@ -373,6 +379,36 @@ pod_on_node() {
 _SEEN_NODES=" "
 node_seen() { case "$_SEEN_NODES" in *" $1 "*) return 0 ;; esac; return 1; }
 mark_node() { _SEEN_NODES="$_SEEN_NODES$1 "; }
+
+# Memo for pod_on_node. The same (namespace, label, node) is asked up to three
+# times per affected pod across the sections below, and each repeat now costs
+# its own timeout against an apiserver that hangs: the bounds turned a free
+# repetition into one that spends the caller's envelope on re-asking rather than
+# on more pods. An empty answer is memoised too, since "there is no
+# cilium-agent on this node" is exactly the lookup worth not repeating, and a
+# cut-off one is worth repeating even less.
+#
+# Unlike the node memo above, which is a space-delimited string matched with a
+# case glob, this one is a tab-separated file compared field by field, so the
+# key needs no quoting and the '=' inside a label selector is ordinary payload.
+# The invariant it does rest on is that none of namespace, label selector or
+# node name may contain a tab, which Kubernetes object names and label
+# selectors cannot.
+# Backed by a file rather than a variable on purpose: the walk over affected
+# pods runs on the right-hand side of a pipeline, which is a subshell, so a
+# variable memo would be discarded at the end of it and the same lookups would
+# be paid for again in the sections that follow. Empty when mktemp fails, which
+# only costs the memo.
+_POD_MEMO=$(mktemp "${TMPDIR:-/tmp}/dataplane-podmemo.XXXXXX" 2>/dev/null) || _POD_MEMO=""
+pod_memo_get() {
+  [ -n "$_POD_MEMO" ] || return 1
+  awk -F'\t' -v k="$1" '$1 == k { print $2; found = 1; exit } END { exit !found }' \
+    "$_POD_MEMO" 2>/dev/null
+}
+pod_memo_put() {
+  [ -n "$_POD_MEMO" ] || return 0
+  printf '%s\t%s\n' "$1" "$2" >>"$_POD_MEMO" 2>/dev/null || true
+}
 
 capture_node() {
   node=$1
@@ -469,7 +505,12 @@ capture_node() {
   } >> "$nf" 2>&1 || true
 }
 
-if [ -z "$affected" ]; then
+if [ -z "$affected" ] && [ "$_pods_rc" -ne 0 ]; then
+  # An empty list because the read never answered is not a cluster with nothing
+  # wrong. Without this the line below sits directly under the note saying the
+  # read failed and contradicts it.
+  log "the pod list did not answer, so no pod could be looked at -- checking LoadBalancers independently"
+elif [ -z "$affected" ]; then
   log "no scheduled NotReady pods -- skipping host->pod capture; checking LoadBalancers independently"
 else
   ncount=$(printf '%s\n' "$affected" | wc -l | tr -d ' ')
@@ -883,5 +924,6 @@ capture_lb_datapath
 # only when the call-site backstop kills the script mid-run, into the runner's
 # TMPDIR.
 [ -n "$DP_ERR" ] && rm -f "$DP_ERR"
+[ -n "$_POD_MEMO" ] && rm -f "$_POD_MEMO"
 
 exit 0

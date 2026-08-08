@@ -416,3 +416,51 @@ STUB
   fi
   rm -rf "$d"
 }
+
+@test "the same per-node pod lookup is asked once" {
+  # Each repeat costs its own bound against an apiserver that hangs, so a lookup
+  # asked three times per pod spends the caller's envelope on re-asking instead
+  # of on more pods. The stub records every per-node lookup it is given.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *--field-selector*) echo "$*" >>"$STUB_CALLS" ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  STUB_CALLS="$d/calls" PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >/dev/null 2>&1 || true
+  [ -s "$d/calls" ]
+  dups=$(sort "$d/calls" | uniq -d | wc -l | tr -d ' ')
+  if [ "$dups" -ne 0 ]; then
+    echo "the same lookup was issued more than once:"
+    sort "$d/calls" | uniq -c | sort -rn | head -5
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "an unanswered pod list is not reported as a cluster with nothing wrong" {
+  # The empty-list branch used to print the same line whether the list said
+  # "nothing is affected" or never answered, directly under the note saying the
+  # read had failed.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  printf '#!/bin/sh\nexit 1\n' >"$d/bin/kubectl"
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 20 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  if grep -q 'no scheduled NotReady pods' "$d/log"; then
+    echo "a failed list was reported as nothing being affected:"
+    cat "$d/log"
+    exit 1
+  fi
+  grep -q 'the pod list did not answer' "$d/log"
+  rm -rf "$d"
+}
