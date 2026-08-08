@@ -839,15 +839,16 @@ jobs:
       # out via the `full-e2e` label to run the full suite.
       #
       # `skip=true` means every changed path was matched by one of select-e2e.sh's
-      # rules that select nothing — docs and dashboards, a backups example with
-      # no suite, or the inert repo-meta pattern — so skipping Chainsaw and
-      # reporting green is the correct verdict. A path none of the rules
-      # recognise escalates to the full suite instead of returning empty, so
-      # `skip=true` can no longer mean "TIA had no idea" (#3392). What it still
-      # cannot rule out is a workflow nobody classified: .github/ is inert as a
-      # directory and the e2e workflows are exempted from it by name, so a
-      # workflow added under .github/workflows/ reads as inert until someone
-      # puts it on that list, and the fall-through never sees it.
+      # rules that select nothing — docs and dashboards, a disabled Chainsaw
+      # suite, a backups example with no suite, or the inert repo-meta pattern
+      # — so skipping Chainsaw and reporting green is the correct verdict. A
+      # path none of the rules recognise escalates to the full suite instead of
+      # returning empty, so `skip=true` can no longer mean "TIA had no idea"
+      # (#3392). What it still cannot rule out is a workflow nobody classified:
+      # .github/ is inert as a directory and the e2e workflows are exempted
+      # from it by name, so a workflow added under .github/workflows/ reads as
+      # inert until someone puts it on that list, and the fall-through never
+      # sees it.
       - name: Select E2E tests
         id: select
         if: ${{ !contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
