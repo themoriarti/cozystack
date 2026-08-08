@@ -93,6 +93,52 @@ TMP_SH=$(mktemp) || { echo "Failed to create temp file" >&2; exit 1; }
 # forward — so a test that creates tenant clusters (run-kubernetes.sh) captures
 # them from its OWN in-subshell EXIT trap, while the forward is still alive.
 COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
+# Which suites get the cluster captures below. They read cluster state, so they
+# belong to the e2e suites and to nothing else. `command -v kubectl` does not
+# tell the two apart: a unit runner has the binary and no cluster, so a red unit
+# test used to walk into the legs below on its way out.
+#
+# What that costs depends on how kubectl fails. Against an endpoint that refuses
+# immediately it is a second; against one that hangs -- an unreachable address, a
+# context left pointing at a torn-down cluster -- it was measured at ~28s for the
+# previous-logs leg, which self-bounds its pod list and so never reaches the 300s
+# ceiling set below it, plus the full 600s for the data-plane leg, whose first
+# pod list carries no bound of its own. Ten minutes of dead waiting inside a job
+# budget, for a failure that should cost seconds.
+#
+# Where crust-gather is installed as well the bill stops being empty and starts
+# being wrong: that leg does not need a reachable cluster to be pointless, it
+# needs an ambient KUBECONFIG, and it will spend up to 360s snapshotting whatever
+# cluster the current context happens to name.
+#
+# The discriminator is the e2e- prefix, on the suite's own name or on the
+# directory holding it. At the top level the prefix is what the project already
+# sorts on: the Makefile builds BATS_UNIT_FILES as
+# $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats)), so a top-level e2e-*
+# suite is precisely one `make unit-tests` refuses to run and
+# packages/core/testing/Makefile runs against a live cluster instead.
+#
+# That wildcard is not recursive, so it says nothing about subdirectories, and
+# hack/e2e-apps/ holds live-cluster suites whose own filenames carry no prefix.
+# Matching the directory too keeps them armed; matching only the basename would
+# take the captures away from suites that need them, which is the opposite of
+# the fix. Neither test is a claim that every future live-cluster suite will be
+# named this way -- it is the only signal the runner has, and a suite placed
+# outside both shapes gets no captures.
+#
+# Deliberately not a reachability probe. Gating on "can I talk to an apiserver"
+# would disarm the captures in the case they exist for: a failing e2e run is
+# often one whose apiserver is degraded, and a probe answering "no" there would
+# skip the snapshot precisely when it is the evidence.
+case "$(basename "$TEST_FILE")" in
+  e2e-*) _cozy_cluster_captures=1 ;;
+  *)
+    case "$(basename "$(dirname "$TEST_FILE")")" in
+      e2e-*) _cozy_cluster_captures=1 ;;
+      *)     _cozy_cluster_captures=0 ;;
+    esac
+    ;;
+esac
 _cozy_on_exit() {
   _rc=$?
   if [ "$_rc" -ne 0 ]; then
@@ -107,7 +153,7 @@ _cozy_on_exit() {
     # per pod by default, so each further restart of a still-looping pod drops
     # the instance we are here to read — and the snapshot leg alone can hold the
     # trap for 390s. The other two captures read state that keeps.
-    if command -v kubectl >/dev/null 2>&1 && [ -x "$(dirname "$0")/e2e-capture-previous-logs.sh" ]; then
+    if [ "$_cozy_cluster_captures" -eq 1 ] && command -v kubectl >/dev/null 2>&1 && [ -x "$(dirname "$0")/e2e-capture-previous-logs.sh" ]; then
       _prev_rc=0
       timeout -k 30 300 "$(dirname "$0")/e2e-capture-previous-logs.sh" \
         "$_snap/previous-logs" "${COZY_TEST_NAMESPACE:-tenant-test}" 2>&1 || _prev_rc=$?
@@ -124,7 +170,7 @@ _cozy_on_exit() {
         echo "» previous-instance capture INCOMPLETE (exit $_prev_rc); kept what landed in $_snap/previous-logs"
       fi
     fi
-    if command -v crust-gather >/dev/null 2>&1; then
+    if [ "$_cozy_cluster_captures" -eq 1 ] && command -v crust-gather >/dev/null 2>&1; then
       echo "» capturing crust-gather snapshot of failed $(basename "$TEST_FILE") -> $_snap"
       # Bound with a timeout: crust-gather collect has hung indefinitely on a
       # contended/degraded cluster (e.g. streaming logs from a crashlooping pod),
@@ -166,7 +212,7 @@ _cozy_on_exit() {
     # capture is time-boxed and `|| true`, and the whole run is wrapped in a
     # wall-clock backstop so it cannot stall the job. It no-ops when there are no
     # affected pods or when kubectl/the tooling is absent.
-    if command -v kubectl >/dev/null 2>&1; then
+    if [ "$_cozy_cluster_captures" -eq 1 ] && command -v kubectl >/dev/null 2>&1; then
       echo "» capturing host->pod data-plane for NotReady pods -> $_snap/dataplane"
       timeout -k 30 600 "$(dirname "$0")/e2e-capture-dataplane.sh" "$_snap/dataplane" 2>&1 || true
     fi
