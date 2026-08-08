@@ -195,17 +195,26 @@ jobs:
               github.rest.repos.listPullRequestsAssociatedWithCommit,
               { owner, repo, commit_sha: HEAD_SHA, per_page: 100 },
             );
-            // Exactly one, not the first one: a single branch may have several
-            // open PRs against different base branches, and every decision
-            // below is taken from whichever PR this picks — the merge-ref
-            // checkout, the docs-only verdict, the TIA file list — while the
-            // status is written to the head SHA all of them share. Taking the
-            // first would let a verdict computed for one PR satisfy another,
-            // including a docs-only green for a PR whose own base sees code.
-            // The HEAD^2 == head_sha assert downstream cannot catch it: that
-            // holds for every PR sitting on the commit. Fail closed, and name
-            // the count so the state is diagnosable from the status alone.
-            const open = assoc.filter(p => p.state === 'open');
+            // Exactly one PR AT this head, not the first association. A single
+            // branch may have several open PRs against different base branches,
+            // and every decision below is taken from whichever PR this picks:
+            // the merge-ref checkout, the docs-only verdict, the TIA file list,
+            // while the status is written to the head SHA all of them share.
+            // Taking the first would let a verdict computed for one PR satisfy
+            // another, including a docs-only green for a PR whose own base sees
+            // code. The HEAD^2 == head_sha assert downstream cannot catch that:
+            // it holds for every PR sitting on the commit.
+            //
+            // The head_sha filter is what keeps the guard as narrow as its
+            // reason. This endpoint returns PRs ASSOCIATED with the commit,
+            // which per the API docs means any open PR whose branch contains
+            // it, not only those pointing at it. Without the filter, stacking
+            // one branch on another and opening both PRs counts as two, and
+            // the lower PR fails closed on a state its author cannot clear by
+            // pushing. That is the same unfixable red this workflow refuses to
+            // inflict elsewhere. Two PRs genuinely at the same head still fail
+            // closed, which is the case the guard exists for.
+            const open = assoc.filter(p => p.state === 'open' && p.head && p.head.sha === HEAD_SHA);
             if (open.length !== 1) {
               await decide('failure', `expected exactly one open PR for ${HEAD_SHA}, found ${open.length}`);
               return;
