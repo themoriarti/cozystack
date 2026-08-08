@@ -94,10 +94,16 @@
 #     failing hop to host-cilium vs kube-ovn delivery.
 #
 # Robustness contract (matches docs/agents/e2e-testing.md): pure diagnostics,
-# no retries, no behavior change, no traps. Every live capture is time-boxed
-# and every command is `|| true`, so a missing tool, an absent pod, or a hung
-# exec can never fail or stall the job. A wall-clock backstop wraps the whole
-# run at the call site. It no-ops cleanly when there are no affected pods.
+# no retries, no behavior change, no traps. Every live capture is time-boxed,
+# and no command can fail or stall the job: most are `|| true`, and the few
+# whose status is read take it into a variable and use it only to say why a
+# read produced nothing. A wall-clock backstop wraps the whole run at the call
+# site. It no-ops cleanly when there are no affected pods.
+#
+# Why a read produced nothing is written to capture-notes.txt beside the
+# capture, not only to the job log: the reader who has the uploaded report and
+# not the run is the one who cannot otherwise tell a capture that found nothing
+# from one that never ran.
 set -u
 
 # --------------------------------------------------------------------------- #
@@ -169,18 +175,30 @@ lb_announcer_node() {
     }'
 }
 
-# lb_capture_decision: stdin = one probe outcome token per line ("ok" / "fail").
+# lb_capture_decision: stdin = one probe outcome token per line ("ok" / "fail" /
+# "unknown", the last meaning the probe could not be run at all).
 # Emits the gate decision for the heavy per-node capture:
-#   - "capture" only when at least one probe ran AND every probe failed (the LB
-#     IP is unreachable -- the symptom we want characterised);
+#   - "capture" when at least one probe ran, none succeeded, and at least one
+#     genuinely failed (the LB IP is unreachable -- the symptom we want
+#     characterised). A failure alongside an unrun probe still counts: the
+#     failures are evidence, and the unrun one adds no reason to doubt them;
 #   - "skip" when any probe succeeded (LB reachable) OR no probe ran at all (no
 #     HTTP/TCP client in the host netns -> cannot conclude unreachable, so only
-#     the cheap metadata is kept, never the heavy capture).
+#     the cheap metadata is kept, never the heavy capture);
+#   - "unknown" when every outcome is unknown, i.e. nothing was ever attempted
+#     because the lookups behind the probe did not answer. Collapsing that into
+#     either of the other two would put a verdict about the address into the
+#     artifact without a single probe behind it.
 lb_capture_decision() {
   awk '
-    { if ($0 == "") next; n++; if ($0 == "ok") ok++ }
+    { if ($0 == "") next; n++; if ($0 == "ok") ok++; if ($0 == "unknown") unk++ }
     END {
       if (n == 0) { print "skip"; exit }
+      # Only a wholly unknown set is unknown. One unrun probe beside real
+      # failures must not erase them: the failures are the evidence this
+      # capture exists to characterise, and merge-base behaviour for that mix
+      # was to capture.
+      if (unk > 0 && unk == n) { print "unknown"; exit }
       if (ok > 0) { print "skip"; exit }
       print "capture"
     }'
@@ -210,6 +228,44 @@ lb_budget_ok() {
 pod_filter_affected() {
   awk -F'|' '$4 != "" && $5 != "True" && $6 != "Succeeded" && $6 != "Failed"'
 }
+
+# How a cutoff should be described, mirroring prevlog_cutoff_desc in the sibling
+# script: 137 cannot tell its own kill grace apart from something else killing
+# the read, and an empty bound means the read was never bounded here at all.
+dp_cutoff_desc() {
+  if [ -z "$3" ]; then
+    printf '%s' "a signal from outside this script, which ran this read unbounded"
+  elif [ "${1:-}" = "137" ]; then
+    printf '%s' "a SIGKILL -- the kill grace of its own ${2}s timeout, or something else killing the read, which 137 does not tell apart"
+  else
+    printf '%s' "its own ${2}s timeout"
+  fi
+}
+
+
+# dp_read_outcome <rc> <seconds> <bound> [errfile] -> phrase describing why a
+# read produced nothing.
+#
+# 124 and 137 are the only statuses a bound produces, so they are the only ones
+# allowed to name the timeout. Everything else is kubectl answering -- a refused
+# connection, an RBAC denial, a kind the cluster does not serve -- and calling
+# that a cutoff would put a cause in the artifact that was never observed. The
+# sibling capture gates every one of its notes the same way, and this script's
+# notes claim to follow it.
+dp_read_outcome() {
+  if [ "${1:-}" = "124" ] || [ "${1:-}" = "137" ]; then
+    printf '%s' "was cut off by $(dp_cutoff_desc "$1" "$2" "$3")"
+  elif [ -n "${4:-}" ] && [ -s "${4:-}" ]; then
+    printf 'failed: kubectl exited %s: %s' "$1" "$(tr '\n\r' '  ' <"$4" | cut -c1-300 | sed 's/[[:space:]]*$//')"
+  else
+    printf 'failed: kubectl exited %s' "$1"
+  fi
+}
+
+# Kept above the sourcing guard with the other pure helpers, per the note at
+# the top of this section: their branches carry the difference between a
+# deadline, a kill and a read that had no ceiling, and the unit suite asserts
+# them directly rather than inferring them from a capture.
 
 # Sourcing guard: hack/capture-dataplane.bats sets E2E_CAPTURE_DATAPLANE_LIB and
 # sources this file purely to reach the helpers above; return before touching $1
@@ -263,9 +319,10 @@ DP_READ_GRACE=2
 
 # Resolved once. Empty when `timeout` is absent: the reads then run unbounded
 # rather than every call exiting 127 with its output swallowed, which would
-# report that kubectl failed when kubectl never ran. The six reads that carry a
-# note say which of the two happened; the three inside capture_lb_datapath still
-# send stderr to /dev/null and report nothing either way.
+# report that kubectl failed when kubectl never ran. The seven reads that carry
+# a note say which of the two happened; the two EndpointSlice reads inside
+# capture_lb_datapath still send stderr to /dev/null and report nothing either
+# way.
 if command -v timeout >/dev/null 2>&1; then
   DP_BOUND="timeout -k $DP_READ_GRACE $DP_READ_TIMEOUT"
   DP_LIST_BOUND="timeout -k $DP_READ_GRACE $DP_LIST_TIMEOUT"
@@ -276,6 +333,30 @@ fi
 
 command -v kubectl >/dev/null 2>&1 || exit 0
 mkdir -p "$OUT" 2>/dev/null || exit 0
+# Every note below explains why this capture is smaller than the cluster, so it
+# ships beside the capture rather than only in the job log: a reader who has the
+# uploaded report and not the run cannot otherwise tell a capture that found
+# nothing from one that never ran. The sibling collector and the report writer
+# both hold this contract, and docs/agents/e2e-testing.md states it for them.
+#
+# Appended, not truncated, with a separator: a caller may aim two runs at one
+# directory, and the earlier run's reasons are as load-bearing as the later
+# one's.
+NOTES="$OUT/capture-notes.txt"
+
+# Created here rather than beside the helpers above, and the position is the
+# point: everything before the sourcing guard runs in every unit test that
+# sources this file, so a temp file made up there is one leaked per test, and
+# the two early exits would leave one behind on every host without kubectl.
+# Below the guard and below those exits, the cleanup at the end is genuinely
+# the only path that can be reached once this exists.
+#
+# Empty if mktemp fails; the notes then omit kubectl's message rather than
+# inventing one.
+DP_ERR=$(mktemp "${TMPDIR:-/tmp}/dataplane-read.XXXXXX" 2>/dev/null) || DP_ERR=""
+if [ -s "$NOTES" ]; then
+  printf -- '--- new capture run ---\n' >> "$NOTES" 2>/dev/null || true
+fi
 
 # printf, not echo: under /bin/sh (dash on the CI image) echo expands backslash
 # escapes, and this logger now carries kubectl's own stderr. A message holding a
@@ -285,44 +366,11 @@ mkdir -p "$OUT" 2>/dev/null || exit 0
 # quotes the expression back when it fails to parse it. The tr in
 # dp_read_outcome flattens the message on the way in; echo would undo that here,
 # on the way out.
-log() { printf '%s\n' "[capture-dataplane] $*"; }
-
-# How a cutoff should be described, mirroring prevlog_cutoff_desc in the sibling
-# script: 137 cannot tell its own kill grace apart from something else killing
-# the read, and an empty bound means the read was never bounded here at all.
-dp_cutoff_desc() {
-  if [ -z "$3" ]; then
-    printf '%s' "a signal from outside this script, which ran this read unbounded"
-  elif [ "${1:-}" = "137" ]; then
-    printf '%s' "a SIGKILL -- the kill grace of its own ${2}s timeout, or something else killing the read, which 137 does not tell apart"
-  else
-    printf '%s' "its own ${2}s timeout"
-  fi
+log() {
+  printf '%s\n' "[capture-dataplane] $*"
+  printf '%s\n' "[capture-dataplane] $*" >> "$NOTES" 2>/dev/null || true
 }
 
-# Where a read's stderr goes so a failure can be reported with kubectl's own
-# words instead of a guess. Empty if mktemp fails; the notes then omit the
-# message rather than inventing one.
-DP_ERR=$(mktemp "${TMPDIR:-/tmp}/dataplane-read.XXXXXX" 2>/dev/null) || DP_ERR=""
-
-# dp_read_outcome <rc> <seconds> <bound> [errfile] -> phrase describing why a
-# read produced nothing.
-#
-# 124 and 137 are the only statuses a bound produces, so they are the only ones
-# allowed to name the timeout. Everything else is kubectl answering -- a refused
-# connection, an RBAC denial, a kind the cluster does not serve -- and calling
-# that a cutoff would put a cause in the artifact that was never observed. The
-# sibling capture gates every one of its notes the same way, and this script's
-# notes claim to follow it.
-dp_read_outcome() {
-  if [ "${1:-}" = "124" ] || [ "${1:-}" = "137" ]; then
-    printf '%s' "was cut off by $(dp_cutoff_desc "$1" "$2" "$3")"
-  elif [ -n "${4:-}" ] && [ -s "${4:-}" ]; then
-    printf 'failed: kubectl exited %s: %s' "$1" "$(tr '\n' ' ' <"$4" | cut -c1-300)"
-  else
-    printf 'failed: kubectl exited %s' "$1"
-  fi
-}
 
 # Affected = scheduled (has nodeName), Ready!=True, and not already terminal.
 # A podIP is intentionally optional: a CNI endpoint leak can strand the pod
@@ -349,8 +397,8 @@ central=""
 pod_on_node() {
   _pon_key="$1/$2/$3"
   if _pon_hit=$(pod_memo_get "$_pon_key"); then
-    printf '%s' "$_pon_hit"
-    return 0
+    printf '%s' "${_pon_hit%%	*}"
+    return "${_pon_hit#*	}"
   fi
   # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
   # items[*], not items[0]: client-go's evalArray has no allowMissingKeys escape
@@ -366,11 +414,22 @@ pod_on_node() {
   # The note goes to stderr because this function's stdout is captured by its
   # callers, so a log line on stdout would be read as part of the pod name.
   if [ "$_pon_rc" -ne 0 ]; then
-    log "looking up the pod matching $2 on node $3 $(dp_read_outcome "$_pon_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); its node-global capture is skipped as if no such pod existed" >&2
+    # No consequence named: this helper serves five call sites with three
+    # different ones -- a node-global capture skipped, an LB probe not run, an
+    # announcer left to the fallback -- so any clause here is wrong for someone.
+    # The status goes back with the value instead, and the two callers that
+    # write an absence into the artifact use it to say "unknown" rather than
+    # "none"; the ones that only skip have nothing to record.
+    log "looking up the pod matching $2 on node $3 $(dp_read_outcome "$_pon_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR")" >&2
   fi
-  # [*] can name several pods; the callers want one.
-  pod_memo_put "$_pon_key" "${_pon%% *}"
+  # [*] can name several pods; the callers want one. The status goes back to the
+  # caller as well: an empty answer means "no such pod" only when the read
+  # actually answered, and the callers write that difference into the artifact.
+  case "$_pon_rc" in
+    0 | 124 | 137) pod_memo_put "$_pon_key" "${_pon%% *}" "$([ "$_pon_rc" -ne 0 ] && echo 1 || echo 0)" ;;
+  esac
   printf '%s' "${_pon%% *}"
+  [ "$_pon_rc" -eq 0 ]
 }
 
 # Per-node captures are node-global (every pod on a node shares one cilium-agent
@@ -385,8 +444,14 @@ mark_node() { _SEEN_NODES="$_SEEN_NODES$1 "; }
 # its own timeout against an apiserver that hangs: the bounds turned a free
 # repetition into one that spends the caller's envelope on re-asking rather than
 # on more pods. An empty answer is memoised too, since "there is no
-# cilium-agent on this node" is exactly the lookup worth not repeating, and a
-# cut-off one is worth repeating even less.
+# cilium-agent on this node" is exactly the lookup worth not repeating.
+#
+# A read that failed is stored only when a bound cut it off. An instant failure
+# -- refused, denied -- costs nothing to ask again, and caching it would make
+# one transient permanent for the run: the LB section would take the hit, report
+# the component unknown, and skip the capture this file's header calls the first
+# fork of an LB diagnosis. A cutoff is the opposite, since asking again spends
+# another full bound, which is the budget this memo exists to protect.
 #
 # Unlike the node memo above, which is a space-delimited string matched with a
 # case glob, this one is a tab-separated file compared field by field, so the
@@ -400,14 +465,22 @@ mark_node() { _SEEN_NODES="$_SEEN_NODES$1 "; }
 # be paid for again in the sections that follow. Empty when mktemp fails, which
 # only costs the memo.
 _POD_MEMO=$(mktemp "${TMPDIR:-/tmp}/dataplane-podmemo.XXXXXX" 2>/dev/null) || _POD_MEMO=""
+# The stored row carries the read's status beside its value. A hit that dropped
+# it would hand a later caller an empty answer with no way to tell "there is no
+# such pod" from "the read never said", which is the distinction the callers
+# below are built on.
+#
+# The status leaves through stdout, packed with the value, because every caller
+# reads this through a command substitution and a variable set in there dies
+# with the subshell -- the same property that makes the memo itself a file.
 pod_memo_get() {
   [ -n "$_POD_MEMO" ] || return 1
-  awk -F'\t' -v k="$1" '$1 == k { print $2; found = 1; exit } END { exit !found }' \
+  awk -F'\t' -v k="$1" '$1 == k { printf "%s\t%s", $2, $3; found = 1; exit } END { exit !found }' \
     "$_POD_MEMO" 2>/dev/null
 }
 pod_memo_put() {
   [ -n "$_POD_MEMO" ] || return 0
-  printf '%s\t%s\n' "$1" "$2" >>"$_POD_MEMO" 2>/dev/null || true
+  printf '%s\t%s\t%s\n' "$1" "$2" "$3" >>"$_POD_MEMO" 2>/dev/null || true
 }
 
 capture_node() {
@@ -416,11 +489,13 @@ capture_node() {
   mark_node "$node"
   nf="$OUT/node-$node.txt"
 
-  agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$node")
-  ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$node")
+  agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$node"); _agent_ok=$?
+  ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$node"); _ovs_ok=$?
   {
     echo "################################################################"
-    echo "# NODE $node  (cilium-agent=${agent:-<none>} ovs=${ovs:-<none>})"
+    _agent_shown=${agent:-$([ "$_agent_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
+    _ovs_shown=${ovs:-$([ "$_ovs_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
+    echo "# NODE $node  (cilium-agent=$_agent_shown ovs=$_ovs_shown)"
     echo "################################################################"
 
     if [ -n "$agent" ]; then
@@ -443,7 +518,11 @@ capture_node() {
         sh -c 'command -v hubble >/dev/null 2>&1 && hubble observe --verdict DROPPED --last 200 2>&1 || echo "hubble CLI not present in agent"' 2>&1 || true
     else
       echo
-      echo "(no cilium-agent pod found on node $node)"
+      if [ "$_agent_ok" -eq 0 ]; then
+        echo "(no cilium-agent pod found on node $node)"
+      else
+        echo "(could not determine whether a cilium-agent runs on node $node -- the lookup did not answer)"
+      fi
     fi
 
     if [ -n "$ovs" ]; then
@@ -479,10 +558,14 @@ capture_node() {
         sh -c 'cat /sys/fs/cgroup/cpu.stat 2>/dev/null || cat /sys/fs/cgroup/cpu/cpu.stat 2>/dev/null || echo "no cpu.stat at /sys/fs/cgroup/cpu.stat (v2) or /sys/fs/cgroup/cpu/cpu.stat (v1)"' 2>&1 || true
     else
       echo
-      echo "(no ovs pod found on node $node)"
+      if [ "$_ovs_ok" -eq 0 ]; then
+        echo "(no ovs pod found on node $node)"
+      else
+        echo "(could not determine whether an ovs pod runs on node $node -- the lookup did not answer)"
+      fi
     fi
 
-    cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$node")
+    cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$node"); _cni_ok=$?
     if [ -n "$cni" ]; then
       echo
       echo "=== host netns: ip neigh (via kube-ovn cni-server, hostNetwork) ==="
@@ -500,16 +583,22 @@ capture_node() {
         ip addr show ovn0 2>&1 || true
     else
       echo
-      echo "(no kube-ovn-cni pod found on node $node -- host netns capture skipped)"
+      if [ "$_cni_ok" -eq 0 ]; then
+        echo "(no kube-ovn-cni pod found on node $node -- host netns capture skipped)"
+      else
+        echo "(could not determine whether a kube-ovn-cni pod runs on node $node -- the lookup did not answer; host netns capture skipped)"
+      fi
     fi
   } >> "$nf" 2>&1 || true
 }
 
 if [ -z "$affected" ] && [ "$_pods_rc" -ne 0 ]; then
-  # An empty list because the read never answered is not a cluster with nothing
-  # wrong. Without this the line below sits directly under the note saying the
-  # read failed and contradicts it.
-  log "the pod list did not answer, so no pod could be looked at -- checking LoadBalancers independently"
+  # Says what is unknown rather than what the read did. The list can answer in
+  # part and name only healthy pods, which lands here too, so a line asserting
+  # that it never answered would be wrong in exactly the case the note above
+  # already describes. The other two branches of this kind are worded the same
+  # way for the same reason.
+  log "whether any pod is affected is unknown -- checking LoadBalancers independently"
 elif [ -z "$affected" ]; then
   log "no scheduled NotReady pods -- skipping host->pod capture; checking LoadBalancers independently"
 else
@@ -528,7 +617,10 @@ else
   _central_rc=$?
   central=${central%% *}
   if [ "$_central_rc" -ne 0 ]; then
-    log "looking up an ovn-central replica $(dp_read_outcome "$_central_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); the cluster-global OVN dumps below are skipped"
+    # No consequence named here: the lookup can fail after naming a replica, in
+    # which case the dump below runs on what it named. The branch that actually
+    # skips says so itself.
+    log "looking up an ovn-central replica $(dp_read_outcome "$_central_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR")"
   fi
   if [ -n "$central" ]; then
     {
@@ -536,6 +628,11 @@ else
       timeout 30 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
         ovn-sbctl --no-leader-only lflow-list 2>&1 || true
     } > "$OUT/ovn-lflows.txt" 2>&1 || true
+  elif [ "$_central_rc" -ne 0 ]; then
+    # Same distinction the pod list makes above: a lookup that never answered is
+    # not a cluster without ovn-central. Saying otherwise here would contradict
+    # the note printed a few lines up.
+    log "whether $KUBEOVN_NS runs ovn-central is unknown -- skipping OVN logical-flow dump"
   else
     log "no ovn-central pod in $KUBEOVN_NS -- skipping OVN logical-flow dump"
   fi
@@ -652,7 +749,8 @@ fi
 # host_http_probe <node> <lbip> <port> -- one bounded reachability probe of the
 # LB IP from <node>'s host netns (via the hostNetwork kube-ovn cni-server, so the
 # probe traverses the same host->cross-node->backend datapath the flake breaks).
-# Echoes "ok" / "fail" per the result, or nothing when the cni-server image ships
+# Echoes "ok" / "fail" per the result, "unknown" when the cni-server lookup did
+# not answer so no probe could be attempted, or nothing when the image ships
 # no probe client (the decision helper treats no-attempt as skip). Prefers a pure
 # TCP connect (nc -z) so a non-HTTP backend is not misread as unreachable; the
 # curl/wget fallbacks send HTTP and so fail-toward-capture on a non-HTTP port,
@@ -660,7 +758,15 @@ fi
 # the traffic generator for the tcpdumps.
 host_http_probe() {
   _hp_node=$1; _hp_ip=$2; _hp_port=$3
-  _hp_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_hp_node")
+  _hp_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_hp_node"); _hp_rc=$?
+  # A lookup that never answered is not a node without a cni-server. Emitting
+  # nothing here is indistinguishable from a probe that ran and said nothing,
+  # and the caller reads zero outcomes as "reachable" -- a verdict about an
+  # address this script never reached. The token says so instead.
+  if [ "$_hp_rc" -ne 0 ]; then
+    echo unknown
+    return 0
+  fi
   [ -n "$_hp_cni" ] || return 0
   # The LB IP/port are embedded as inner single-quoted literals (same idiom as
   # the pod-path captures above) so the inner shell never re-splits them.
@@ -693,12 +799,15 @@ ovs_iface_for() {
 # of the path are unambiguous in the artifact.
 capture_lb_node() {
   _n=$1; _role=$2; _lbip=$3; _np=$4; _epip=$5; _of=$6
-  _agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$_n")
-  _ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$_n")
-  _cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_n")
+  _agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$_n"); _lb_agent_ok=$?
+  _ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$_n"); _lb_ovs_ok=$?
+  _cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_n"); _lb_cni_ok=$?
+  _lb_a=${_agent:-$([ "$_lb_agent_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
+  _lb_o=${_ovs:-$([ "$_lb_ovs_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
+  _lb_c=${_cni:-$([ "$_lb_cni_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
   {
     echo
-    echo "---------------- $_role node=$_n (cilium=${_agent:-<none>} ovs=${_ovs:-<none>} cni=${_cni:-<none>}) ----------------"
+    echo "---------------- $_role node=$_n (cilium=$_lb_a ovs=$_lb_o cni=$_lb_c) ----------------"
 
     if [ -n "$_agent" ]; then
       echo
@@ -744,8 +853,24 @@ capture_lb_datapath() {
   # shellcheck disable=SC2086  # empty DP_LIST_BOUND must vanish, not become ""
   _raw=$($DP_LIST_BOUND kubectl get svc -A \
     -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.spec.type}{"|"}{.status.loadBalancer.ingress[0].ip}{"|"}{.spec.ports[0].port}{"|"}{.spec.ports[0].nodePort}{"|"}{.spec.externalTrafficPolicy}{"\n"}{end}' \
-    2>/dev/null)
+    2>"${DP_ERR:-/dev/null}")
+  _raw_rc=$?
+  # Unconditional, like every other read's note: a list can fail AFTER emitting
+  # rows -- a bound firing mid-stream leaves output on stdout and 124 in $? --
+  # and gating this on emptiness would let a partial inventory be captured as a
+  # complete one. The pod list splits the same way, an unconditional note here
+  # and the empty-versus-unanswered distinction below.
+  if [ "$_raw_rc" -ne 0 ]; then
+    log "listing services $(dp_read_outcome "$_raw_rc" "$DP_LIST_TIMEOUT" "$DP_LIST_BOUND" "$DP_ERR"); any LoadBalancer it did not name is missing from the capture below"
+  fi
   _lbs=$(printf '%s\n' "$_raw" | lb_filter_services)
+  if [ -z "$_lbs" ] && [ "$_raw_rc" -ne 0 ]; then
+    # A Service list that never answered is not a cluster without
+    # LoadBalancers, the same distinction the pod list and the ovn-central
+    # lookup make.
+    log "whether any LoadBalancer needs capturing is unknown -- skipping LB-datapath capture"
+    return 0
+  fi
   if [ -z "$_lbs" ]; then
     log "no Service type=LoadBalancer with an ingress IP -- skipping LB-datapath capture"
     return 0
@@ -765,7 +890,10 @@ capture_lb_datapath() {
     -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.spec.nodeName}{"\n"}{end}' 2>"${DP_ERR:-/dev/null}")
   _speakers_rc=$?
   if [ "$_speakers_rc" -ne 0 ]; then
-    log "listing metallb speakers $(dp_read_outcome "$_speakers_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); the announcing node is left unresolved"
+    # Same reason: a list that failed after naming speakers still resolves an
+    # announcer from the ones it named, so the note says what is missing rather
+    # than what was given up on.
+    log "listing metallb speakers $(dp_read_outcome "$_speakers_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); any speaker it did not name is missing from the announcer lookup"
   fi
   if [ -n "$_speakers" ] && [ -n "$_speakerlog" ]; then
     printf '%s\n' "$_speakers" | while IFS='|' read -r _sp _spnode; do
@@ -822,6 +950,12 @@ capture_lb_datapath() {
         _decision=$( { host_http_probe "$_probenode" "$_lbip" "$_lbport"
                        host_http_probe "$_probenode" "$_lbip" "$_lbport"
                        host_http_probe "$_probenode" "$_lbip" "$_lbport"; } | lb_capture_decision )
+      fi
+
+      if [ "$_decision" = "unknown" ]; then
+        echo "probe: whether the LB is reachable from ${_probenode:-<none>} is unknown -- the cni-server lookup did not answer, so no probe ran (no heavy capture)" >> "$_of" 2>&1 || true
+        log "LB $_ns/$_name ($_lbip) not probed -- the cni-server lookup did not answer"
+        continue
       fi
 
       if [ "$_decision" != "capture" ]; then
