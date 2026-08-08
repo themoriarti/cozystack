@@ -606,10 +606,15 @@ jobs:
       # merge ref. The script below is the fork's own, so this hardens what the
       # selector reads and not what it decides — see the job header.
       # select-e2e.sh classifies every changed path explicitly: shared build
-      # inputs and the e2e harness escalate to the full suite, an inert path
-      # (docs, repo meta, agent config) selects nothing, and anything matching
-      # neither escalates rather than returning empty — so an empty selection
-      # here means "verified inert", not "TIA had no idea" (#3392).
+      # inputs and the e2e harness escalate to the full suite, several rules
+      # select nothing (docs and dashboards, a backups example with no suite,
+      # the inert repo-meta pattern), and anything matching none of them
+      # escalates rather than returning empty. So an empty selection here means
+      # some rule decided the change cannot affect a suite, not "TIA had no
+      # idea" (#3392). The exception to that, worth knowing before trusting it:
+      # a workflow added under .github/workflows/ reads as inert until it is
+      # added to the escalation list by name, because .github/ is inert as a
+      # directory and the e2e workflows are exempted from it individually.
       # Skipped (→ full suite below) on the full-e2e label.
       - name: Select E2E tests
         id: select
