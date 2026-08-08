@@ -17,8 +17,11 @@ suite: tenant cleanup pre-delete hook
 # cannot observe them about itself. hack/tenant-pre-delete-hook.bats covers the
 # script's own behaviour by running it.
 
-# Restrict rendering to the cleanup template so the chart's namespace.yaml
-# `lookup` (which errors under helm-unittest) is not evaluated.
+# Render only the cleanup template. The reason given here was that
+# namespace.yaml's `lookup` errors under helm-unittest; it does not. This suite
+# sets no values, so for as long as keycloakgroups.yaml indexes
+# `.Values._cluster` unguarded on its first line, rendering the whole chart
+# fails with "index of untyped nil".
 templates:
   - templates/cleanup-job.yaml
 
