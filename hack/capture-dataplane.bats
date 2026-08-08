@@ -6,12 +6,14 @@
 # unreachable while its backend stays Ready (the NotReady-pod path never sees
 # this case). Only the pure logic is unit-testable here:
 #
-#   - lb_filter_services      -- keep only LoadBalancer rows with an ingress IP;
+#   - lb_filter_services      -- keep only whole LoadBalancer rows that carry an
+#                               ingress IP;
 #   - lb_first_ready_endpoint -- pick the first addressed, non-NotReady endpoint;
 #   - lb_announcer_node       -- the speaker node of the most recent announce;
 #   - lb_capture_decision     -- capture when probes failed, skip when one
 #                               succeeded or none ran, unknown when none could run.
-#   - pod_filter_affected     -- retain scheduled NotReady pods even without IPs.
+#   - pod_filter_affected     -- retain scheduled NotReady pods even without IPs,
+#                               and only from whole rows.
 #
 # The tests come in two shapes, and neither needs a cluster.
 #
@@ -112,6 +114,45 @@ EOF
   if printf '%s\n' "$out" | grep -q 'pending'; then echo "FAIL: lb_filter_services must drop the pending (no external IP) row"; false; fi
 }
 
+@test "lb_filter_services drops a Service row cut off mid-record" {
+  # A bounded or interrupted list stops mid-record, and the fragment it leaves
+  # behind still satisfies a filter that only looks at values: what remains of
+  # `192.0.2.53` here is `192.0.2.5`, an address the cluster never had, and the
+  # row carrying it would be probed and written up as a Service. The jsonpath
+  # emits a fixed seven fields per Service, so a shorter row is a fragment by
+  # construction rather than by guess.
+  rows="$(printf '%s\n' \
+    'tenant|app|LoadBalancer|192.0.2.50|80|31000|Cluster' \
+    'tenant|db|LoadBalancer|192.0.2.5')"
+
+  out="$(printf '%s\n' "$rows" | lb_filter_services)"
+
+  [ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ]
+  # `! cmd` is vacuous under cozytest's `set -e`, hence the if/false form used
+  # by the sibling filter test above.
+  if printf '%s\n' "$out" | grep -q 'tenant|db'; then
+    echo "FAIL: lb_filter_services must drop the row cut off mid-record"
+    false
+  fi
+}
+
+@test "pod_filter_affected drops a pod row cut off mid-record" {
+  # The same cut over the six-field pod jsonpath. The fragment ends inside the
+  # nodeName column, so the half-parsed `nod` reads as a scheduled pod on a node
+  # of that name, and the capture opens a node-nod.txt for it.
+  rows="$(printf '%s\n' \
+    'tenant|wedged|192.0.2.80|node-b|False|Running' \
+    'tenant|cut||nod')"
+
+  out="$(printf '%s\n' "$rows" | pod_filter_affected)"
+
+  [ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ]
+  if printf '%s\n' "$out" | grep -q 'tenant|cut'; then
+    echo "FAIL: pod_filter_affected must drop the row cut off mid-record"
+    false
+  fi
+}
+
 @test "lb_first_ready_endpoint picks the first addressed endpoint that is not NotReady" {
   eps="$(printf '%s\n' \
     '||tenant|virt-launcher-x|true' \
@@ -130,6 +171,20 @@ EOF
   out="$(printf '%s\n' "$eps" | lb_first_ready_endpoint)"
 
   [ "$out" = "192.0.2.70|worker-9|tenant|app-0" ]
+}
+
+@test "lb_first_ready_endpoint drops an endpoint row cut off mid-record" {
+  # The third record filter over a bounded list, and the same cut: the fragment
+  # has to come first, because this one stops at the first row it accepts. A
+  # half-parsed node name would otherwise be the node every endpoint-side
+  # capture in the LB section is aimed at.
+  eps="$(printf '%s\n' \
+    '192.0.2.60|worker-' \
+    '192.0.2.61|worker-2|tenant|app-1|true')"
+
+  out="$(printf '%s\n' "$eps" | lb_first_ready_endpoint)"
+
+  [ "$out" = "192.0.2.61|worker-2|tenant|app-1" ]
 }
 
 @test "lb_announcer_node returns the speaker node of the most recent announce" {

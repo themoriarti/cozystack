@@ -124,8 +124,24 @@ set -u
 # (one Service per line, as emitted by the kubectl jsonpath in main). Emits only
 # the rows that are type=LoadBalancer AND carry a status ingress IP -- i.e. the
 # Services that actually have an external datapath to characterise.
+#
+# NF == 7 first, because a truncated list is exactly what a bounded or
+# interrupted read leaves behind and a fragment passes a value-only test: an IP
+# cut mid-octet still looks like an IP, and the row it sits in would be probed
+# and written up as a Service that has no such address. The jsonpath emits a
+# fixed seven fields per record, so anything shorter is a cut rather than a
+# Service. Dropping it loses nothing a reader needs -- the read's own note
+# already says the list did not finish.
+#
+# What a field count cannot catch: a cut inside the LAST field still delivers
+# every separator, so `...|30080|Clus` counts seven and passes, and nothing
+# in-band separates a truncated final value from a short one. Here the last
+# column is display-only. In the two filters below it is a decision column
+# (`phase`, `ready`), where a truncated value matches neither state being
+# excluded and the row is kept -- over-capturing rather than dropping evidence,
+# and the read's own cut-off note is what tells the reader the list ended early.
 lb_filter_services() {
-  awk -F'|' '$3 == "LoadBalancer" && $4 != "" { print }'
+  awk -F'|' 'NF == 7 && $3 == "LoadBalancer" && $4 != "" { print }'
 }
 
 # lb_first_ready_endpoint: stdin = `ip|node|targetNs|targetName|ready` rows (one
@@ -133,8 +149,14 @@ lb_filter_services() {
 # first endpoint that has an address and is not explicitly NotReady, then stops.
 # A blank `ready` (slice without conditions) counts as ready; only "false" is
 # excluded. This is the backend the LB IP is supposed to reach.
+#
+# NF == 5 for the reason the two row filters carry their own counts, and it
+# matters more here: this one stops at the first row it accepts, so a fragment
+# at the head of the list is not one bad row among many -- it is the backend,
+# and its half-parsed node is the node every endpoint-side capture below aims
+# at. Five fields per endpoint is what the jsonpath emits.
 lb_first_ready_endpoint() {
-  awk -F'|' '$1 != "" && $5 != "false" { print $1 "|" $2 "|" $3 "|" $4; exit }'
+  awk -F'|' 'NF == 5 && $1 != "" && $5 != "false" { print $1 "|" $2 "|" $3 "|" $4; exit }'
 }
 
 # lb_announcer_node <lbip>: stdin = MetalLB speaker logs, each line prefixed with
@@ -229,8 +251,14 @@ lb_budget_ok() {
 # cilium endpointManager leak this collector diagnoses can strand a pod before
 # an IP is assigned, and the node-global Cilium/OVN state plus pod events remain
 # useful in that state. IP-specific commands are gated later at their call sites.
+#
+# NF == 6 for the reason lb_filter_services carries NF == 7: a list cut
+# mid-record leaves a fragment whose remaining columns still read as values, and
+# a cut landing inside the nodeName column produces a half-parsed node this
+# capture would then open a node-<name>.txt for. Six fields per record is what
+# the jsonpath emits.
 pod_filter_affected() {
-  awk -F'|' '$4 != "" && $5 != "True" && $6 != "Succeeded" && $6 != "Failed"'
+  awk -F'|' 'NF == 6 && $4 != "" && $5 != "True" && $6 != "Succeeded" && $6 != "Failed"'
 }
 
 # How a cutoff should be described, mirroring prevlog_cutoff_desc in the sibling
@@ -900,6 +928,15 @@ capture_lb_datapath() {
     log "listing metallb speakers $(dp_read_outcome "$_speakers_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); any speaker it did not name is missing from the announcer lookup"
   fi
   if [ -n "$_speakers" ] && [ -n "$_speakerlog" ]; then
+    # No field-count check here, unlike the three record filters above, and the
+    # absence is the answer rather than an oversight. These records carry two
+    # fields. A cut in the first leaves no separator at all, so the emptiness
+    # test below already rejects it. A cut in the second delivers every
+    # separator, so a count sees a whole record: `speaker-1|nod` and
+    # `speaker-1|nodeA` are the same shape, and nothing in-band tells a
+    # truncated node name from a short one. The test below is therefore as far
+    # as any check here can reach -- adding NF == 2 would reject no input it
+    # accepts, while reading as a closed gap.
     printf '%s\n' "$_speakers" | while IFS='|' read -r _sp _spnode; do
       [ -n "$_sp" ] && [ -n "$_spnode" ] || continue
       timeout 15 kubectl logs -n "$METALLB_NS" "$_sp" -c speaker --tail=2000 2>/dev/null \
