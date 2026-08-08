@@ -66,7 +66,8 @@
 #   datapath (the suspected failing path) is never characterised. This section
 #   closes that gap. It is gated by a LIVE reachability probe so it only does the
 #   heavy capture for an LB that is actually broken; reachable LBs are enumerated
-#   and explicitly recorded as "reachable, skipped".
+#   and explicitly recorded as "reachable, skipped", and an LB no probe could be
+#   run against is recorded as unprobed rather than as either of those.
 #     - Enumerate every Service type=LoadBalancer that has a status ingress IP.
 #       For each, derive: the EndpointSlice backend (endpoint IP + node +
 #       targetPort), the Service nodePort + externalTrafficPolicy, and the
@@ -208,18 +209,18 @@ lb_announcer_node() {
 #     genuinely failed (the LB IP is unreachable -- the symptom we want
 #     characterised). A failure alongside an unrun probe still counts: the
 #     failures are evidence, and the unrun one adds no reason to doubt them;
-#   - "skip" when any probe succeeded (LB reachable) OR no probe ran at all (no
-#     HTTP/TCP client in the host netns -> cannot conclude unreachable, so only
-#     the cheap metadata is kept, never the heavy capture);
-#   - "unknown" when every outcome is unknown, i.e. nothing was ever attempted
-#     because the lookups behind the probe did not answer. Collapsing that into
-#     either of the other two would put a verdict about the address into the
-#     artifact without a single probe behind it.
+#   - "skip" when any probe succeeded, i.e. the LB is reachable and only the
+#     cheap metadata is worth keeping;
+#   - "unknown" when nothing was ever attempted -- no outcome at all (no
+#     HTTP/TCP client in the host netns, or an exec that could not run), or
+#     every outcome unknown because the lookups behind the probe did not
+#     answer. Collapsing either into skip would put a verdict about the address
+#     into the artifact without a single probe behind it.
 lb_capture_decision() {
   awk '
     { if ($0 == "") next; n++; if ($0 == "ok") ok++; if ($0 == "unknown") unk++ }
     END {
-      if (n == 0) { print "skip"; exit }
+      if (n == 0) { print "unknown"; exit }
       # Only a wholly unknown set is unknown. One unrun probe beside real
       # failures must not erase them: the failures are the evidence this
       # capture exists to characterise, and merge-base behaviour for that mix
@@ -781,8 +782,10 @@ fi
 # LB IP from <node>'s host netns (via the hostNetwork kube-ovn cni-server, so the
 # probe traverses the same host->cross-node->backend datapath the flake breaks).
 # Echoes "ok" / "fail" per the result, "unknown" when the cni-server lookup did
-# not answer so no probe could be attempted, or nothing when the image ships
-# no probe client (the decision helper treats no-attempt as skip). Prefers a pure
+# not answer so no probe could be attempted, or nothing when the lookup answered
+# that the node has no cni-server pod, when the image ships no probe client, or
+# when the exec itself could not run (the decision helper reads an empty set as
+# unknown too, and the caller tells the two shapes apart). Prefers a pure
 # TCP connect (nc -z) so a non-HTTP backend is not misread as unreachable; the
 # curl/wget fallbacks send HTTP and so fail-toward-capture on a non-HTTP port,
 # the safe direction (capture is cheap; a missed broken LB is not). Doubles as
@@ -790,10 +793,17 @@ fi
 host_http_probe() {
   _hp_node=$1; _hp_ip=$2; _hp_port=$3
   _hp_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_hp_node"); _hp_rc=$?
-  # A lookup that never answered is not a node without a cni-server. Emitting
-  # nothing here is indistinguishable from a probe that ran and said nothing,
-  # and the caller reads zero outcomes as "reachable" -- a verdict about an
-  # address this script never reached. The token says so instead.
+  # A lookup that never answered is not a node without a cni-server, and the
+  # two have to leave different traces. This emits an explicit unknown; the
+  # "no such pod" answer below emits nothing, as do a missing probe client and
+  # a failed exec. The caller reads exactly that difference: an outcome set
+  # that is present but wholly unknown names the lookup, an empty one names the
+  # three ways a probe can fail after the lookup answered.
+  #
+  # The decision helper reaches the same verdict from either shape -- an
+  # all-unknown set and an empty set both come back unknown -- so for
+  # capture-or-skip this token changes nothing. It exists for the caller's
+  # reason line, which is the only place the distinction reaches a reader.
   if [ "$_hp_rc" -ne 0 ]; then
     echo unknown
     return 0
@@ -1022,24 +1032,63 @@ capture_lb_datapath() {
 
       # Gate: probe the LB IP from the announcer node's host netns (fall back to
       # the endpoint node if the announcer is unknown). Reachable -> record and
-      # skip the heavy capture; unreachable -> characterise both hops.
+      # skip the heavy capture; unreachable -> characterise both hops; nothing
+      # probed -> say that, and say which of the ways it happened.
+      #
+      # Every path that runs zero probes ends on the unknown outcome, carrying
+      # the reason that path can actually support. Five of them used to arrive
+      # at the "reachable, skipped" line: no node to probe from, a Service with
+      # no port, a probe node the lookup says runs no kube-ovn-cni pod, a host
+      # netns with no TCP/HTTP client, and an exec that could not run at all. A
+      # sixth, the lookup itself not answering, already reported unknown and
+      # still does. None of the five observed the address. Inferring reachability from an
+      # unattempted probe is what this section must never write down -- an image
+      # without nc/curl/wget alone would stamp every LB in the cluster reachable
+      # and skip the entire heavy capture, which reads as a healthy datapath.
       _probenode="${_annode:-$_epnode}"
-      _decision=skip
-      if [ -n "$_probenode" ] && [ "$_lbport" != "0" ]; then
-        _decision=$( { host_http_probe "$_probenode" "$_lbip" "$_lbport"
+      _decision=unknown
+      if [ -z "$_probenode" ]; then
+        _why="nowhere to probe from -- neither an announcer nor an endpoint node is known"
+      elif [ "$_lbport" = "0" ]; then
+        _why="the Service names no port to probe"
+      else
+        # Held in a variable rather than piped straight in, because the SHAPE of
+        # the outcome set is the only place the two routes to an unknown verdict
+        # stay apart, and the reason line has to name a cause that was actually
+        # observed. host_http_probe emits an explicit unknown only when the
+        # cni-server lookup did not answer; everything else that stops a probe
+        # emits nothing.
+        _outcomes=$( { host_http_probe "$_probenode" "$_lbip" "$_lbport"
                        host_http_probe "$_probenode" "$_lbip" "$_lbport"
-                       host_http_probe "$_probenode" "$_lbip" "$_lbport"; } | lb_capture_decision )
+                       host_http_probe "$_probenode" "$_lbip" "$_lbport"; } )
+        _decision=$(printf '%s\n' "$_outcomes" | lb_capture_decision)
+        if [ -z "$_outcomes" ]; then
+          # Three ways in, and this script genuinely cannot tell them apart: the
+          # lookup answered that the node runs no kube-ovn-cni pod, its host
+          # netns ships no nc/curl/wget, or the exec could not run at all (no
+          # timeout on its PATH, exec denied, the pod gone mid-probe). The
+          # exec's status is swallowed by design -- this collector never fails a
+          # job -- so they are reported as the set they are rather than guessed
+          # apart. What is NOT said here is that the lookup went unanswered: it
+          # answered, and pod_on_node keeps that distinction for its callers.
+          _why="no probe outcome from $_probenode -- no kube-ovn-cni pod there, or no TCP/HTTP client in its host netns, or the exec into it could not run"
+        else
+          # Outcomes exist and the verdict is still unknown, which the decision
+          # helper only returns when every one of them is unknown -- and that
+          # token has exactly one source.
+          _why="no probe could be attempted from $_probenode -- the cni-server lookup did not answer"
+        fi
       fi
 
       if [ "$_decision" = "unknown" ]; then
-        echo "probe: whether the LB is reachable from ${_probenode:-<none>} is unknown -- the cni-server lookup did not answer, so no probe ran (no heavy capture)" >> "$_of" 2>&1 || true
-        log "LB $_ns/$_name ($_lbip) not probed -- the cni-server lookup did not answer"
+        echo "probe: whether the LB is reachable is unknown -- $_why (no heavy capture)" >> "$_of" 2>&1 || true
+        log "LB $_ns/$_name ($_lbip) not probed -- $_why"
         continue
       fi
 
       if [ "$_decision" != "capture" ]; then
-        echo "probe: LB reachable or not probeable from ${_probenode:-<none>} -- reachable, skipped (no heavy capture)" >> "$_of" 2>&1 || true
-        log "LB $_ns/$_name ($_lbip) reachable or not probeable -- skipped"
+        echo "probe: at least one probe from $_probenode succeeded -- reachable, skipped (no heavy capture)" >> "$_of" 2>&1 || true
+        log "LB $_ns/$_name ($_lbip) reachable -- skipped"
         continue
       fi
 
