@@ -895,6 +895,118 @@ STUB
   rm -rf "$d"
 }
 
+@test "an unknown announcer does not point the tcpdump at a pending pod" {
+  # pod_on_node builds `--field-selector spec.nodeName=$3`, so an empty node
+  # asks for pods whose nodeName is EMPTY -- the unscheduled ones. The announcer
+  # is unknown exactly when MetalLB is misbehaving, which is when this leg
+  # matters, and an unguarded lookup then hands the first pending kube-ovn-cni
+  # pod to a tcpdump labelled ANNOUNCER. The sibling uses of the announcer node
+  # in this same block are all guarded; this one was not.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *--field-selector*) echo "$*" >>"$STUB_CALLS" ;;
+esac
+case "$*" in
+  # Answers every per-node cni lookup, INCLUDING one made with an empty node --
+  # which is what an apiserver holding a pending pod returns for that selector.
+  # A stub that answered nothing there would hide the bug behind an empty result.
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  # The LB must probe UNREACHABLE or the heavy capture that carries the tcpdumps
+  # never runs and the test asserts nothing.
+  *'nc -z'*) echo fail; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  STUB_CALLS="$d/calls" PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # Positive controls: the heavy capture ran, and it ran with no announcer --
+  # no speaker logs were produced, so lb_announcer_node reported nothing.
+  grep -q 'UNREACHABLE' "$d/log"
+  grep -q 'announcer node: <unknown>' "$d/out/lb-tenant-web.txt"
+  # The lookup itself must not go out with an empty node. Trailing space, so this
+  # does not also match the endpoint node's own `spec.nodeName=node-a` lookup.
+  if grep -q -- '--field-selector spec.nodeName= ' "$d/calls"; then
+    echo "the announcer lookup was issued with an empty node selector:"
+    grep -- 'spec.nodeName=' "$d/calls"
+    exit 1
+  fi
+  # And no ANNOUNCER tcpdump artifact may exist for a node nobody identified.
+  if [ -f "$d/out/lb-tenant-web.tcpdump-announcer.txt" ]; then
+    echo "an announcer tcpdump ran with no announcer node:"
+    cat "$d/out/lb-tenant-web.tcpdump-announcer.txt"
+    exit 1
+  fi
+  # The skip is stated rather than silent: absence of a block is not a reason.
+  grep -q 'announcer node unknown' "$d/out/lb-tenant-web.txt"
+  rm -rf "$d"
+}
+
+@test "an unknown endpoint node does not point the tcpdump at a pending pod" {
+  # The endpoint half of the same defect, on the same block: an LB whose
+  # announcer IS known but whose Service has no ready endpoint reaches the heavy
+  # capture with an empty endpoint node, and the two lookups on that side --
+  # the cni-server pod and the backend's OVS interface -- both go out with
+  # `spec.nodeName=`, which matches unscheduled pods. No ready endpoint is
+  # exactly the shape of an LB outage, so this is not a rare corner of the leg.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    # No ready endpoint: the Service is enumerated, its backend is not.
+    endpointslices) exit 0 ;;
+    # The announcer, so the probe has somewhere to run from and the capture is
+    # reached with only the ENDPOINT side unknown.
+    logs) echo '{"event":"serviceAnnounced","ips":["192.0.2.10"],"node":"node-a"}'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *'component=speaker'*) echo 'speaker-0|node-a'; exit 0 ;;
+esac
+case "$*" in
+  *--field-selector*) echo "$*" >>"$STUB_CALLS" ;;
+esac
+case "$*" in
+  # Answers every cni lookup, the one with an empty node included -- what an
+  # apiserver holding a pending pod returns for that selector.
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *'nc -z'*) echo fail; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  STUB_CALLS="$d/calls" PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # Positive controls: the heavy capture ran, the announcer side was identified
+  # and did run, so what follows is about the endpoint side alone.
+  grep -q 'UNREACHABLE' "$d/log"
+  [ -f "$d/out/lb-tenant-web.tcpdump-announcer.txt" ]
+  if grep -q -- '--field-selector spec.nodeName= ' "$d/calls"; then
+    echo "an endpoint-side lookup was issued with an empty node selector:"
+    grep -- 'spec.nodeName=' "$d/calls"
+    exit 1
+  fi
+  if [ -f "$d/out/lb-tenant-web.tcpdump-endpoint.txt" ]; then
+    echo "an endpoint tcpdump ran with no endpoint node:"
+    cat "$d/out/lb-tenant-web.tcpdump-endpoint.txt"
+    exit 1
+  fi
+  grep -q 'endpoint node unknown' "$d/out/lb-tenant-web.txt"
+  rm -rf "$d"
+}
+
 @test "lb_capture_decision keeps failures visible when one probe could not run" {
   # An unrun probe adds no reason to doubt the ones that failed, so the mix must
   # not read as reachable. Collapsing it toward skip is what stamps the artifact

@@ -1034,12 +1034,34 @@ capture_lb_datapath() {
       # Live tcpdump on both hops WHILE the probe is replayed: announcer geneve
       # tunnel egress + endpoint backend tap ingress. Shows whether the packet
       # crosses announcer->endpoint and reaches the backend's host-side iface.
-      _an_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "${_annode:-}")
-      _en_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "${_epnode:-}")
+      # Guarded like the announcer capture above, and for a reason the empty
+      # string hides: pod_on_node turns its third argument into
+      # `--field-selector spec.nodeName=<node>`, so an empty node asks for pods
+      # whose nodeName is EMPTY -- the unscheduled ones. An unknown announcer
+      # would then hand the first pending kube-ovn-cni pod to a tcpdump stamped
+      # ANNOUNCER, pointing the reader away from the actual problem at the one
+      # moment this leg matters: the announcer is unknown exactly when MetalLB
+      # is misbehaving.
+      _an_cni=""
+      if [ -n "$_annode" ]; then
+        _an_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_annode")
+      else
+        echo "(announcer node unknown -- announcer-side tcpdump skipped)" >> "$_of" 2>&1 || true
+      fi
+      # Same guard on the endpoint side, and it is not the rarer case: a Service
+      # with no ready endpoint is the ordinary shape of an LB outage, and both
+      # lookups here -- the cni-server pod and the backend's OVS interface --
+      # reach pod_on_node with the node in hand.
+      _en_cni=""
       _en_iface="$GENEVE_IFACE"
-      if [ -n "$_eptname" ] && [ -n "$_eptns" ]; then
-        _cand=$(ovs_iface_for "${_epnode:-}" "$_eptname.$_eptns")
-        [ -n "$_cand" ] && _en_iface="$_cand"
+      if [ -n "$_epnode" ]; then
+        _en_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_epnode")
+        if [ -n "$_eptname" ] && [ -n "$_eptns" ]; then
+          _cand=$(ovs_iface_for "$_epnode" "$_eptname.$_eptns")
+          [ -n "$_cand" ] && _en_iface="$_cand"
+        fi
+      else
+        echo "(endpoint node unknown -- endpoint-side tcpdump skipped)" >> "$_of" 2>&1 || true
       fi
 
       _an_pcap="$OUT/lb-$_ns-$_name.tcpdump-announcer.txt"
