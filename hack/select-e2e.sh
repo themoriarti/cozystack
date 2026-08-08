@@ -6,8 +6,10 @@
 # Defaults: sources-dir = packages/core/platform/sources
 #
 # Output:
-#   - empty         no E2E impact — an explicitly INERT path (docs, dashboards,
-#                   *.md, repo meta files; see inert_config_pattern)
+#   - empty         no E2E impact, decided by one of the rules that select
+#                   nothing: step 1 for docs/, dashboards/ and *.md, step 2 for
+#                   an examples/backups/<app>/ with no suite, and
+#                   inert_config_pattern for repo meta and agent config
 #   - <suite names> selected per the PackageSource dependency graph
 #   - full list     any path that affects all tests, OR an unrecognised
 #                   packages/* path, OR a per-app source whose graph has
@@ -22,12 +24,20 @@
 # that genuinely cannot affect e2e, add it to inert_config_pattern — do not
 # widen the fall-through.
 #
-# One rule selects nothing without going through inert_config_pattern: an edit
-# under examples/backups/<app>/ where <app> has no Chainsaw suite, decided
-# inline at step 2. So "empty" does not always mean "matched the inert list";
-# it means some rule decided this change cannot affect a suite. That is the
-# property the lanes depend on, and it is the one to preserve: an empty
-# selection is always a decision, never a path nothing looked at.
+# "Empty" is not a synonym for inert_config_pattern. Several rules select
+# nothing: step 1 for docs/, dashboards/ and *.md, step 2 for an
+# examples/backups/<app>/ whose app has no suite, and the pattern itself. The
+# property the lanes depend on is weaker than "matched the inert list" and it is
+# the one to preserve: an empty selection is a decision some rule reached, never
+# a path nothing looked at.
+#
+# One caveat worth knowing before trusting that: inert_config_pattern makes
+# .github/ inert as a whole directory, and the e2e workflows are exempted by
+# NAME in full_suite_pattern, which is checked first. So a workflow added under
+# .github/workflows/ that runs the suite is silently inert until someone adds it
+# to that list — the fall-through never sees it. The enumeration is the guard,
+# which is why it carries the `rg -l test-chainsaw` reminder; treat that comment
+# as load-bearing rather than decorative.
 set -eu
 
 CHANGED="${1:?missing changed-files arg}"

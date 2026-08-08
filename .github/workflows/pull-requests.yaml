@@ -838,12 +838,15 @@ jobs:
       # diff and select only the Chainsaw suites affected. Runs by default; opt
       # out via the `full-e2e` label to run the full suite.
       #
-      # `skip=true` means every changed path is EXPLICITLY inert (docs, repo
-      # meta, agent config — see select-e2e.sh's inert_config_pattern), so
-      # skipping Chainsaw and reporting green is the correct verdict. A path the
-      # selector does not recognise escalates to the full suite instead of
-      # returning empty, so `skip=true` can no longer mean "TIA had no idea"
-      # (#3392).
+      # `skip=true` means every changed path was matched by one of select-e2e.sh's
+      # rules that select nothing — docs and dashboards, a backups example with
+      # no suite, or the inert repo-meta pattern — so skipping Chainsaw and
+      # reporting green is the correct verdict. A path none of the rules
+      # recognise escalates to the full suite instead of returning empty, so
+      # `skip=true` can no longer mean "TIA had no idea" (#3392). The one thing
+      # it still cannot mean is "a workflow nobody classified": .github/ is
+      # inert as a directory and the e2e workflows are exempted by name, so
+      # adding one to that list is a manual step.
       - name: Select E2E tests
         id: select
         if: ${{ !contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
