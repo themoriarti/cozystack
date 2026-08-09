@@ -65,6 +65,18 @@ kubectl() {
   fi
 
   case "$*" in
+    *"get pods -l kubevirt.io=virt-launcher"*"spec.nodeName"*)
+      # One node, so the throttle capture proceeds past its listing into the
+      # per-node kubelet read. Without this the walk ends at an empty node set
+      # and the audit only ever sees the listing -- an unbounded `get --raw`
+      # added later would slip past the one instrument that watches it.
+      #
+      # Narrowed to the node-name projection because two other reads in this
+      # block carry the same label selector, and a node name is not an answer
+      # either of them could have received.
+      printf 'srv1\n'
+      return 0
+      ;;
     *"get pods -o name"*)
       [ -z "${importer_pod_names}" ] || printf '%s\n' ${importer_pod_names}
       return 0
@@ -111,15 +123,66 @@ timeout() {
   return "${rc}"
 }
 
-# The block calls four collectors that have their own suites and their own
-# bounds. Stubbed after sourcing so these tests are about the block's own reads;
-# left un-stubbed they would drag a Certificate, a helper Pod and a cache probe
-# into every case here.
+# Point a test's report dir at its own temp dir.
+#
+# The collectors this file drives write into COZY_REPORT_DIR. Unset, the
+# library falls back to /workspace/_out, which is not writable under the bare
+# `bats` binary. The collector does not die there -- its call site's `|| true`
+# suspends set -e for the whole body, so mkdir fails, the reads then fail on
+# their own redirects into the directory that was never created, and any
+# assertion about those reads fails for a reason that has nothing to do with
+# the code. cozytest.sh hides this by defaulting the variable to a
+# repo-relative path, so the two runners disagree, which is the divergence
+# docs/agents/e2e-testing.md warns about. Pointing it at the temp dir also
+# keeps the suite from writing into _out/ under the snapshot name the real e2e
+# uses.
+#
+# Called from every test that stages a temp dir -- 20 of the 22 here; the two
+# that do not are pure source greps over the library and stage nothing. Among
+# the 20 are the four whose work happens inside a
+# `bash -c` subprocess. Exported so it reaches those too: they stub every
+# collector today and write nothing, but a stub that later grows a real read
+# would put its report under the tree the e2e run uses, and the call that was
+# supposed to prevent that would have been decorative the whole time.
+#
+# Assigned per test rather than in a bats `setup`: cozytest.sh calls each @test
+# body directly and never runs setup, so a setup-based version would work under
+# one runner and not the other -- the same divergence one level up.
+use_temp_report_dir() {
+  export COZY_REPORT_DIR="$1/report"
+}
+
+# The block calls six collectors that have their own suites and their own
+# bounds. Four of them are stubbed here; the other two are stubbed only where
+# the test is about the budget rather than the reads, for the reason given
+# under stub_gated_collectors below. Stubbed after sourcing so these tests are
+# about the block's own reads; left un-stubbed they would drag a Certificate, a
+# helper Pod and a cache probe into every case here.
 stub_collectors() {
   cozy_report_guest_console_wedge() { printf 'wedge-stub\n'; }
   cozy_capture_tenant_serial_console() { printf 'serial-console-stub\n'; }
   cozy_capture_tenant_talos() { printf 'talos-stub\n'; }
   talos_image_cache_diagnose() { printf 'image-cache-stub\n'; }
+}
+
+# The two collectors below are deliberately NOT in stub_collectors, and that is
+# load-bearing rather than an omission. The block-level audit above --
+# "no node join diagnostic read escapes a wall clock bound" -- works by letting
+# the real collectors run against the kubectl mock and failing on any read that
+# reached it outside a `timeout` wrapper. Stubbing a collector there does not
+# make that test pass more easily; it removes the collector from the audit
+# entirely, and the test stays green because there is nothing left to audit.
+# Both of these carry reads the audit is the only instrument that sees:
+# ghcr_mirror_diagnose issues five, and the throttle capture issues its Pod
+# listing. Their own suites substitute a grep over the source, which by
+# construction cannot see a read that was added without a bound.
+#
+# They are stubbed only where the test is about the phase budget rather than
+# about the reads, which is the one place their real bodies would drown the
+# signal.
+stub_gated_collectors() {
+  cozy_capture_tenant_worker_cpu_throttle() { printf 'cpu-throttle-stub\n'; }
+  ghcr_mirror_diagnose() { printf 'ghcr-mirror-stub\n'; }
 }
 
 assert_file_contains() {
@@ -137,6 +200,7 @@ assert_file_contains() {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   stub_collectors
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -156,6 +220,20 @@ assert_file_contains() {
   # And the block did read: without this the check above passes just as well on
   # an implementation that reads nothing at all.
   [ "$(grep -c . "$kubectl_calls")" -ge 11 ]
+  # Named reads, not just a count. The two gated collectors below are the ones
+  # this audit is the only instrument for, and both are one line away from
+  # vanishing from it: moving their stubs into stub_collectors takes them out
+  # of the run entirely, and every suite stays green because the audit has
+  # nothing left to look at. A count cannot notice that -- eleven other reads
+  # keep it satisfied -- so each is pinned by a read only it issues.
+  if ! grep -q 'get deploy ghcr-mirror' "$kubectl_calls"; then
+    echo "FAIL: ghcr_mirror_diagnose did not run, so its reads were not audited" >&2
+    false
+  fi
+  if ! grep -q 'kubevirt.io=virt-launcher.*spec.nodeName' "$kubectl_calls"; then
+    echo "FAIL: the CPU throttling capture did not run, so its listing was not audited" >&2
+    false
+  fi
   rm -rf "$tmp"
 }
 
@@ -163,6 +241,7 @@ assert_file_contains() {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   stub_collectors
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -188,6 +267,7 @@ assert_file_contains() {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   stub_collectors
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -212,6 +292,7 @@ assert_file_contains() {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   stub_collectors
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -236,6 +317,7 @@ assert_file_contains() {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   stub_collectors
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -254,6 +336,7 @@ assert_file_contains() {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   stub_collectors
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -276,6 +359,7 @@ assert_file_contains() {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   stub_collectors
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -299,6 +383,7 @@ assert_file_contains() {
 @test "a cache gate read that was cut off is not reported as a cache that was never deployed" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -321,6 +406,7 @@ assert_file_contains() {
 @test "a cache gate read that failed is not reported as a cache that was never deployed" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -343,6 +429,7 @@ assert_file_contains() {
 @test "a cache gate that answered with nothing reports the cache as not deployed" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -360,7 +447,12 @@ assert_file_contains() {
 @test "the diagnostics phase declines the rest out loud once its budget is spent" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   stub_collectors
+  # This test is about which collectors the budget declines, so the two that
+  # stay real elsewhere are stubbed here: their reads would say nothing about
+  # the decline and their markers are what the loop below checks for absence.
+  stub_gated_collectors
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -397,11 +489,24 @@ assert_file_contains() {
     cat "$kubectl_calls" >&2
     false
   fi
-  # The three section gates are the mechanism, not a detail: declining the heaviest
-  # guest-Talos capture is what the budget derivation is for, and the stubs
-  # issue no kubectl, so the check above cannot see them run. Each stub prints a
-  # marker; none of the three may appear, and each must have said why.
-  for marker in serial-console-stub talos-stub image-cache-stub; do
+  # The five gates whose collectors are stubbed here are the mechanism, not a
+  # detail: declining the heaviest guest-Talos capture is what the budget
+  # derivation is for, and a stub issues no kubectl, so the check above cannot
+  # see it run. That is the whole reason the count is over the stubbed ones and
+  # not over every gate in the block -- the importer listing is gated too, and
+  # it reads for real, so the check above already covers it. Each stub prints a
+  # marker; none of the five may appear, and each must have said why. The count
+  # is load-bearing rather than descriptive -- a stubbed gate added without a
+  # line here is a collector that may run past the deadline while this test
+  # stays green, which is exactly what the empty-kubectl_calls check above
+  # cannot catch for a collector that issues no reads of its own.
+  #
+  # The same risk runs the other way, and the other way is the one that already
+  # happened: a collector STUBBED in the shared helper stops being visible to
+  # the bound audit at the top of this file, which needs it to run for real.
+  # A rule written for additions does not catch a removal, so both directions
+  # are named here.
+  for marker in serial-console-stub talos-stub image-cache-stub cpu-throttle-stub ghcr-mirror-stub; do
     if grep -q "$marker" "$tmp/out"; then
       echo "FAIL: $marker ran after the phase ran out of budget" >&2
       false
@@ -410,12 +515,15 @@ assert_file_contains() {
   assert_file_contains '(b1) tenant worker guest serial console: not collected' "$tmp/out"
   assert_file_contains '(b) in-guest Talos dmesg + kubelet logs: not collected' "$tmp/out"
   assert_file_contains 're-probe talos-image-cache ClusterIP + cacher debug bundle: not collected' "$tmp/out"
+  assert_file_contains '(d) tenant worker CPU throttling: not collected' "$tmp/out"
+  assert_file_contains 'ghcr-mirror state + access log: not collected' "$tmp/out"
   rm -rf "$tmp"
 }
 
 @test "a read outside any diagnostics phase is not gated by the phase budget" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -435,6 +543,7 @@ assert_file_contains() {
 @test "the cache diagnostic dumps each run inside a wall clock bound" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -480,6 +589,7 @@ assert_file_contains() {
 @test "a cache dump cut off mid flight says so instead of leaving a bare section header" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -504,6 +614,7 @@ assert_file_contains() {
 @test "lowering the cache read budget after sourcing moves the wall clock too" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
@@ -535,6 +646,7 @@ assert_file_contains() {
   # The cap's `[ n -gt 3s ]` exits 2 and the comparison reads false, so the cap
   # stops existing. The read bound becomes `--request-timeout=2ms`.
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   # 0480 alongside 8m: all digits, so a digits-only check passes it, and then the
   # budget dies in `$(( ))` as octal exactly as the suffix does while the read bound
   # quietly becomes 480 seconds. Same arm the previous-logs collector already has.
@@ -554,6 +666,8 @@ assert_file_contains() {
       cozy_capture_tenant_serial_console() { :; }
       cozy_capture_tenant_talos() { :; }
       talos_image_cache_diagnose() { :; }
+      cozy_capture_tenant_worker_cpu_throttle() { :; }
+      ghcr_mirror_diagnose() { :; }
       kubectl() { :; }
       cozy_report_node_join_failure test-latest-version
     ' 2>&1) || true
@@ -585,6 +699,7 @@ assert_file_contains() {
   # function and `command -v` finds functions -- the condition cannot be reached from
   # inside this file.
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   mkdir -p "$tmp/bin"
   # Resolved from known directories rather than through `command -v`: this file mocks
   # `date` as a shell function, so `command -v date` answers with the function name,
@@ -616,6 +731,8 @@ assert_file_contains() {
     cozy_capture_tenant_serial_console() { :; }
     cozy_capture_tenant_talos() { :; }
     talos_image_cache_diagnose() { :; }
+    cozy_capture_tenant_worker_cpu_throttle() { :; }
+    ghcr_mirror_diagnose() { :; }
     kubectl() { printf "KUBECTL_RAN\n" >&2; }
     PATH='"$tmp"'/bin
     cozy_report_node_join_failure test-latest-version
@@ -643,6 +760,7 @@ assert_file_contains() {
 
 @test "a zero read bound is rejected because zero disables the bound instead of tightening it" {
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   # `timeout -k 5 0` does not time out at all and `--request-timeout=0s` means "no
   # timeout" to kubectl, so zero reintroduces the unbounded read this change removes.
   # The phase budget must keep taking zero -- the suite uses it as "already spent" --
@@ -669,6 +787,8 @@ assert_file_contains() {
     cozy_capture_tenant_serial_console() { :; }
     cozy_capture_tenant_talos() { :; }
     talos_image_cache_diagnose() { :; }
+    cozy_capture_tenant_worker_cpu_throttle() { :; }
+    ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
   printf '%s\n' "$out" >"$tmp/postsource"
@@ -698,6 +818,8 @@ assert_file_contains() {
     cozy_capture_tenant_serial_console() { :; }
     cozy_capture_tenant_talos() { :; }
     talos_image_cache_diagnose() { :; }
+    cozy_capture_tenant_worker_cpu_throttle() { :; }
+    ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
   printf '%s\n' "$out" >"$tmp/empty"
@@ -807,6 +929,7 @@ assert_file_contains() {
     return 0
   fi
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   bash -c '
     set -eu
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
@@ -814,6 +937,8 @@ assert_file_contains() {
     cozy_capture_tenant_serial_console() { :; }
     cozy_capture_tenant_talos() { :; }
     talos_image_cache_diagnose() { :; }
+    cozy_capture_tenant_worker_cpu_throttle() { :; }
+    ghcr_mirror_diagnose() { :; }
     kubectl() { :; }
     COZY_DIAG_PHASE_BUDGET=0
     cozy_report_node_join_failure test-latest-version
@@ -902,6 +1027,7 @@ assert_file_contains() {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   stub_collectors
   tmp=$(mktemp -d)
+  use_temp_report_dir "$tmp"
   kubectl_calls="$tmp/kubectl.calls"
   unbounded_calls="$tmp/unbounded.calls"
   timeout_calls="$tmp/timeout.calls"
