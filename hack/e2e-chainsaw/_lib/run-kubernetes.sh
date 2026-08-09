@@ -9,6 +9,11 @@
 # (registryMirrors), each included only when its in-sandbox mirror is up. Prints
 # nothing when both fall back to the public defaults, so the chart defaults apply.
 # Indented for insertion directly under `spec:` in the heredoc below.
+#
+# No trailing newline, unlike the single-key helper this replaced: the caller reads
+# it through `$(...)`, which strips one anyway, and `${talos_block}` sits on a line
+# of its own in the heredoc, which supplies the break before the next `spec` key.
+# An empty result therefore leaves a blank line, which is valid YAML.
 talos_spec_block() {
   local url ghcr mirrors
   url=$(resolve_talos_image_factory_url)
@@ -1451,6 +1456,20 @@ cozy_report_node_join_failure() {
   if cozy_diag_phase_has_time '(b) in-guest Talos dmesg + kubelet logs'; then
     echo "=== (b) in-guest Talos dmesg + kubelet logs ==="
     cozy_capture_tenant_talos "${test_name}" || true
+  fi
+
+  # The OS-image cache and the ghcr.io mirror fail independently and produce the
+  # same symptom from outside the guest, so both get dumped: this one answers
+  # whether the worker's kubelet-image pull reached the mirror or fell back to
+  # public ghcr.io, which the node-join failure alone cannot distinguish. Gated
+  # like its neighbours, and after the guest captures: its whole-log read carries
+  # no bound of its own, the console evidence it would otherwise starve is
+  # irreplaceable, and the mirror's state is partly recoverable from the reads
+  # above. Cheaper than the talos-image-cache re-probe below, which creates a
+  # Pod and waits on curl retries, so it goes ahead of it.
+  if cozy_diag_phase_has_time 'ghcr-mirror state + access log'; then
+    echo "--- ghcr-mirror state + access log ---"
+    ghcr_mirror_diagnose || true
   fi
 
   # Last, and gated on the phase as well as bounded per read, because it is the

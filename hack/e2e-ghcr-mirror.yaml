@@ -9,25 +9,49 @@
 # cozystack/cozystack#3548 (in-guest Talos dmesg) and tracked by #3513. This is the
 # same flaky-public-egress class as the Talos OS image (#3231 / hack/e2e-talos-image-cache.yaml).
 #
+# This addresses ONE variant of #3513, and the issue stays open past it. The same
+# thread records failures that issue no apid CSR at all inside the whole budget --
+# time lost before Talos gets anywhere near the kubelet image -- which no registry
+# mirror can touch. A green suite after this lands is not evidence the flake is
+# closed.
+#
 # This Deployment runs a standard registry:2 configured as a PULL-THROUGH cache for
 # ghcr.io: worker pulls are routed here by the chart's `talos.registryMirrors` knob
-# (machine.registries.mirrors), the cache fetches from ghcr.io ONCE per blob (with
-# registry:2's own retry) and serves every subsequent worker locally over plain
-# HTTP, so the many per-worker pulls no longer each depend on live public egress.
+# (machine.registries.mirrors), the cache fetches from ghcr.io ONCE per blob and
+# serves every subsequent worker locally over plain HTTP, so the many per-worker
+# pulls no longer each depend on live public egress. The retry around a failed
+# fetch is containerd's, in the guest -- distribution 2.8's proxy blobstore has
+# none of its own, so a first fetch that fails is simply a failed pull.
 #
 # CI band-aid, not a product artifact. The durable knob is the chart's
 # `talos.registryMirrors` this manifest exercises; a production operator points it at
 # their own mirror/pull-through registry.
 #
-# ASSUMPTIONS THAT NEED A CI RUN TO CONFIRM (this half is not locally validatable):
-#   1. The registry:2 image below is reachable/preloadable in the sandbox. Like the
-#      talos-image-cache's reuse of a pre-pulled image, the mirror's OWN image must
-#      not reintroduce the flaky pull it exists to remove; pin/preload as needed.
-#   2. Talos honours a plain-http mirror endpoint for ghcr.io via
+# ASSUMPTIONS THAT NEED A CI RUN TO CONFIRM:
+#   1. Talos honours a plain-http mirror endpoint for ghcr.io via
 #      machine.registries.mirrors[ghcr.io].endpoints=[http://...]. If a scheme/TLS
 #      knob is additionally required, add machine.registries.config here too.
-#   3. The worker VM (virt-launcher) egress identity below is the one Cilium sees for
-#      the containerd pull.
+#   2. The containerd pull from inside the worker VM leaves with the virt-launcher
+#      Pod's own Cilium identity, which is what the policy below selects. The label
+#      half is settled -- run-kubernetes.sh already reads tenant worker Pods by
+#      `kubevirt.io=virt-launcher` -- but that the pull is subject to that Pod's
+#      egress policy at all is what a run has to show.
+#
+# Not an assumption, though it looks like one: the guest resolving the short name
+# `ghcr-mirror.kube-system.svc`. The worker machineconfig this repo renders sets
+# machine.network.searchDomains to svc.<mgmtClusterDomain> and <mgmtClusterDomain>
+# (see the nameservers block in the reconcile Job), and the same guest already
+# depends on that list to reach `linstor-csi-nfs.cozy-linstor.svc` for NFS mounts.
+# The mechanism is in-tree and load-bearing elsewhere. If a run ever shows
+# otherwise, point GHCR_MIRROR_SVC_URL at the FQDN.
+#
+# What the registry:2 image itself no longer assumes: it is digest-pinned on
+# mirror.gcr.io below, and that exact digest was checked to run under the security
+# context here (non-root 65532, read-only rootfs, dropped caps) and to serve
+# ghcr.io/siderolabs/kubelet manifests and blobs as an anonymous pull-through. It is
+# deliberately NOT in the pre-pull set: hack/e2e-install-cozystack.bats applies this
+# manifest before the pre-pull DaemonSet runs, and one replica pulls it once, so
+# adding it there would cache it after the only pull that matters.
 apiVersion: v1
 kind: Service
 metadata:
@@ -143,6 +167,11 @@ spec:
 # Mirrors the e2e-talos-image-cache-importer-egress policy pattern, but selects the
 # worker VM identity (kubevirt.io: virt-launcher) that actually performs the
 # kubelet-image pull, not the CDI importer.
+#
+# The helper commits the mirror endpoint once the API accepts this object, which is
+# not the same as the flow being allowed: if the selector misses the identity the
+# in-guest pull really carries, the SYNs are dropped and every worker pull pays a
+# connect timeout before Talos falls back. Assumption 2 above is exactly that gap.
 #
 # Applied at point-of-use by hack/e2e-chainsaw/_lib/ghcr-mirror.sh (after Cilium's
 # CRDs exist), not with the rest of this manifest at install time.
