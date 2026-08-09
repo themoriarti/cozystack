@@ -9,8 +9,12 @@
 # applies ONLY that policy later once Cilium is up. These tests pin that split, the
 # egress selector/target identities the allow depends on, the pull-through config, and
 # the one pure string fragment (ghcr_registry_mirrors_block) whose indentation decides
-# whether tenant CRs render at all. The kubectl orchestration around it needs a live
-# cluster and is covered by the e2e run, matching the other hack/ helpers.
+# whether tenant CRs render at all.
+#
+# They also cover resolve_ghcr_mirror_endpoint, which is where the helper's safety
+# property actually lives: it decides whether tenant workers are pointed at the mirror
+# at all, and it caches that decision for every later suite in the shared sandbox. Its
+# kubectl calls are stubbed below, so all four outcomes are reachable without a cluster.
 #
 # cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its own line;
 # there is no bats `run`/`$status`, and setup()/teardown() are not honored. Sourcing
@@ -19,6 +23,73 @@
 #
 # Run with: hack/cozytest.sh hack/ghcr-mirror_test.bats
 # -----------------------------------------------------------------------------
+
+# kubectl stub for the resolve_ghcr_mirror_endpoint cases. Each test sets the three
+# globals below to pick a branch; every path returns explicitly, because cozytest.sh
+# rewrites a bare `}` at column 0 into `return 0; }` and would otherwise force this
+# stub to succeed no matter what the test asked for.
+stub_get_rc=0
+stub_get_out=""
+stub_rollout_rc=0
+stub_apply_rc=0
+stub_log_lines=""
+stub_avail="False"
+stub_avail_rc=0
+stub_log_rc=0
+stub_apply_err=""
+
+kubectl() {
+    case "$*" in
+        *conditions*)
+            [ -z "${stub_avail}" ] || printf '%s' "${stub_avail}"
+            return "${stub_avail_rc}"
+            ;;
+        *"get deploy ghcr-mirror"*)
+            [ -z "${stub_get_out}" ] || printf '%s\n' "${stub_get_out}"
+            return "${stub_get_rc}"
+            ;;
+        *"rollout status"*)
+            return "${stub_rollout_rc}"
+            ;;
+        *apply*)
+            cat >/dev/null
+            # To stderr, as the real kubectl reports errors: the code under test
+            # captures the reason via the braced group's 2>&1, and a stub that
+            # printed it to stdout would have it eaten by kubectl's >/dev/null.
+            [ -z "${stub_apply_err}" ] || printf '%s\n' "${stub_apply_err}" >&2
+            return "${stub_apply_rc}"
+            ;;
+        *logs*)
+            [ "${stub_log_rc}" -eq 0 ] || return "${stub_log_rc}"
+            # Honour --tail=N, so a test can tell a read that filters the whole log
+            # from one that truncates it. Note kubectl's own default with a label
+            # selector is --tail=10, not "everything".
+            _n=10
+            for _a in "$@"; do
+                case "${_a}" in --tail=*) _n=${_a#--tail=} ;; esac
+            done
+            if [ "${_n}" -ge 0 ] 2>/dev/null; then
+                printf '%s\n' "${stub_log_lines}" | tail -n "${_n}"
+            else
+                printf '%s\n' "${stub_log_lines}"
+            fi
+            return 0
+            ;;
+    esac
+    return 0
+}
+
+# ghcr_mirror_diagnose bounds every read with `timeout -k <grace> <n>`. Real
+# timeout would exec past the kubectl shell-function stub above -- a process
+# cannot exec a shell function -- so the diagnose tests would talk to a real
+# kubectl or to nothing. Model timeout in-process: reject anything not spelled
+# `-k <grace> <n>` with a status no kubectl returns, then drop those three
+# tokens and run the command as the shell sees it, so the stub stays reachable.
+timeout() {
+    [ "${1:-}" = -k ] || return 97
+    shift 3
+    "$@"
+}
 
 @test "manifest documents partition into pre-Cilium apply plus the Cilium policy" {
     manifest=hack/e2e-ghcr-mirror.yaml
@@ -96,6 +167,252 @@
     [ "$(yq "$d | $c.allowPrivilegeEscalation" "$manifest")" = "false" ]
     [ "$(yq "$d | $c.readOnlyRootFilesystem" "$manifest")" = "true" ]
     [ "$(yq "$d | $c.capabilities.drop[0]" "$manifest")" = "ALL" ]
+}
+
+@test "a NotFound mirror Deployment falls back to direct pulls and caches that" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    work=$(mktemp -d)
+    _GHCR_MIRROR_DECISION_FILE="$work/decision"
+    stub_get_rc=1
+    stub_get_out='Error from server (NotFound): deployments.apps "ghcr-mirror" not found'
+    out=$(resolve_ghcr_mirror_endpoint 2>/dev/null)
+    [ -z "$out" ] || { echo "expected no endpoint when the Deployment does not exist, got [$out]" >&2; rm -rf "$work"; exit 1; }
+    # A NotFound is a stable answer: the mirror was never applied in this sandbox, so
+    # every later suite may reuse it instead of re-asking.
+    [ -f "$work/decision" ] || { echo "expected a NotFound decision to be cached" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "a transient query failure falls back without caching" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    work=$(mktemp -d)
+    _GHCR_MIRROR_DECISION_FILE="$work/decision"
+    stub_get_rc=1
+    stub_get_out='Error from server: etcdserver: request timed out'
+    out=$(resolve_ghcr_mirror_endpoint 2>/dev/null)
+    [ -z "$out" ] || { echo "expected no endpoint after a failed query, got [$out]" >&2; rm -rf "$work"; exit 1; }
+    # Caching this would let one apiserver blip disable the mirror for every later
+    # suite in the shared sandbox, which is the failure the helper exists to avoid.
+    [ ! -f "$work/decision" ] || { echo "a transient query failure must not be cached" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "a missing kubectl binary is not mistaken for an absent Deployment" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    work=$(mktemp -d)
+    _GHCR_MIRROR_DECISION_FILE="$work/decision"
+    stub_get_rc=127
+    stub_get_out='sh: 1: kubectl: not found'
+    out=$(resolve_ghcr_mirror_endpoint 2>/dev/null)
+    [ -z "$out" ] || { echo "expected no endpoint when kubectl could not run, got [$out]" >&2; rm -rf "$work"; exit 1; }
+    # Only the API's own NotFound means "the mirror was never applied here". A
+    # shell reporting a missing binary, or a bad context, also says "not found"
+    # and would otherwise be cached as that stable answer for the whole sandbox.
+    [ ! -f "$work/decision" ] || { echo "a failure that is not an API NotFound must not be cached" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "a failed egress allow falls back without caching" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    work=$(mktemp -d)
+    _GHCR_MIRROR_DECISION_FILE="$work/decision"
+    stub_get_rc=0
+    stub_rollout_rc=0
+    stub_apply_rc=1
+    out=$(resolve_ghcr_mirror_endpoint 2>/dev/null)
+    [ -z "$out" ] || { echo "expected no endpoint when the egress allow did not apply, got [$out]" >&2; rm -rf "$work"; exit 1; }
+    # Same class as the query blip above: a failed `kubectl apply` says nothing about
+    # whether the next attempt would succeed, so it must not become the sandbox-wide
+    # answer. This is the branch that used to cache and the query branch did not.
+    [ ! -f "$work/decision" ] || { echo "a failed egress allow must not be cached" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "a ready mirror with its egress allow applied commits the endpoint and caches it" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    work=$(mktemp -d)
+    _GHCR_MIRROR_DECISION_FILE="$work/decision"
+    stub_get_rc=0
+    stub_rollout_rc=0
+    stub_apply_rc=0
+    out=$(resolve_ghcr_mirror_endpoint 2>/dev/null)
+    [ "$out" = "$GHCR_MIRROR_SVC_URL" ] || { echo "expected the mirror endpoint, got [$out]" >&2; rm -rf "$work"; exit 1; }
+    [ -f "$work/decision" ] || { echo "expected the committed endpoint to be cached" >&2; rm -rf "$work"; exit 1; }
+    [ "$(cat "$work/decision")" = "$GHCR_MIRROR_SVC_URL" ] || { echo "cached decision does not match the returned endpoint" >&2; rm -rf "$work"; exit 1; }
+    # The cache is what later suites read, so it has to short-circuit the kubectl path
+    # entirely -- that is the whole reason only the first tenant test pays the wait.
+    stub_get_rc=1
+    stub_get_out='Error from server (NotFound): deployments.apps "ghcr-mirror" not found'
+    again=$(resolve_ghcr_mirror_endpoint 2>/dev/null)
+    [ "$again" = "$GHCR_MIRROR_SVC_URL" ] || { echo "a cached decision must be returned without re-querying, got [$again]" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "the diagnostic finds a kubelet pull buried behind the readiness probe's own log" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    stub_get_rc=0
+    # The shape the real log has at diagnose time: the worker's kubelet pull happens
+    # early, then the readinessProbe writes a /v2/ line every 5s for the rest of the
+    # run. After the 18m node-join budget that is 200+ probe lines stacked on top of
+    # the one request worth finding, so a fixed tail window never reaches it.
+    kubelet_line='10.244.1.92 - - [09/Aug/2026:01:00:00 +0000] "GET /v2/siderolabs/kubelet/manifests/v1.35.6 HTTP/1.1" 200 683'
+    probe_lines=$(i=0; while [ "$i" -lt 300 ]; do echo '10.244.0.1 - - [09/Aug/2026:01:18:00 +0000] "GET /v2/ HTTP/1.1" 200 2'; i=$((i+1)); done)
+    stub_log_lines=$(printf '%s\n%s' "$kubelet_line" "$probe_lines")
+    out=$(ghcr_mirror_diagnose 2>&1)
+    printf '%s' "$out" | grep -q 'the mirror served 1 kubelet-image request' || {
+        echo "diagnose did not find the kubelet pull behind the probe log; it reported:" >&2
+        printf '%s\n' "$out" | grep -i 'kubelet-image' >&2
+        exit 1
+    }
+}
+
+@test "the diagnostic reports honestly when no kubelet pull reached the mirror" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    stub_get_rc=0
+    # Probe traffic only: the mirror was up and nothing pulled through it. This must
+    # not be reported the same way as the case above, which is the whole point.
+    stub_log_lines=$(i=0; while [ "$i" -lt 50 ]; do echo '10.244.0.1 - - [09/Aug/2026:01:18:00 +0000] "GET /v2/ HTTP/1.1" 200 2'; i=$((i+1)); done)
+    out=$(ghcr_mirror_diagnose 2>&1)
+    printf '%s' "$out" | grep -q 'no kubelet-image request reached the mirror' || {
+        echo "diagnose did not report the empty case distinctly" >&2
+        printf '%s\n' "$out" | grep -i 'kubelet-image' >&2
+        exit 1
+    }
+}
+
+@test "a rollout watch that failed for another reason is not cached as unavailability" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    work=$(mktemp -d)
+    _GHCR_MIRROR_DECISION_FILE="$work/decision"
+    stub_get_rc=0
+    stub_rollout_rc=1
+    # `kubectl rollout status` exits non-zero on a broken or aborted watch as well
+    # as on elapsing its timeout, and its output is discarded, so the call site
+    # cannot tell the two apart. Here the follow-up read cannot answer either.
+    stub_avail=""
+    stub_avail_rc=1
+    out=$(resolve_ghcr_mirror_endpoint 2>/dev/null)
+    [ -z "$out" ] || { echo "expected no endpoint when readiness could not be confirmed, got [$out]" >&2; rm -rf "$work"; exit 1; }
+    [ ! -f "$work/decision" ] || { echo "an unconfirmed rollout failure must not be cached" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "a broken rollout watch over a Deployment the API calls Available still commits the mirror" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    work=$(mktemp -d)
+    _GHCR_MIRROR_DECISION_FILE="$work/decision"
+    stub_get_rc=0
+    stub_rollout_rc=1
+    stub_apply_rc=0
+    # The watch broke, but the API says the Deployment is up. Falling back here
+    # would discard a mirror that is serving, on the strength of a failed watch.
+    stub_avail="True"
+    stub_avail_rc=0
+    out=$(resolve_ghcr_mirror_endpoint 2>/dev/null)
+    [ "$out" = "$GHCR_MIRROR_SVC_URL" ] || { echo "expected the mirror endpoint when the API reports Available=True, got [$out]" >&2; rm -rf "$work"; exit 1; }
+    [ -f "$work/decision" ] || { echo "expected the committed endpoint to be cached" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "a Deployment the API reports Available=False is cached as unavailable" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    work=$(mktemp -d)
+    _GHCR_MIRROR_DECISION_FILE="$work/decision"
+    stub_get_rc=0
+    stub_rollout_rc=1
+    # A definite False is the settled answer: nothing in the run re-applies the
+    # manifest, so this one may be cached for the rest of the sandbox.
+    stub_avail="False"
+    stub_avail_rc=0
+    out=$(resolve_ghcr_mirror_endpoint 2>/dev/null)
+    [ -z "$out" ] || { echo "expected no endpoint for an unavailable mirror, got [$out]" >&2; rm -rf "$work"; exit 1; }
+    [ -f "$work/decision" ] || { echo "a definite Available=False should be cached" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "a log the diagnostic cannot read is not reported as zero kubelet pulls" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    stub_get_rc=0
+    stub_log_rc=1
+    out=$(ghcr_mirror_diagnose 2>&1)
+    printf '%s' "$out" | grep -q 'could not read the mirror' || {
+        echo "an unreadable log must not be reported as a finding about the workers" >&2
+        printf '%s\n' "$out" | grep -iE 'kubelet-image|could not read' >&2
+        exit 1
+    }
+    printf '%s' "$out" | grep -q 'no kubelet-image request reached the mirror' && {
+        echo "an unreadable log was reported as zero pulls" >&2
+        exit 1
+    }
+    stub_log_rc=0
+}
+
+@test "a failed egress allow reports why it failed" {
+    . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+    work=$(mktemp -d)
+    _GHCR_MIRROR_DECISION_FILE="$work/decision"
+    stub_get_rc=0
+    stub_rollout_rc=0
+    stub_apply_rc=1
+    stub_apply_err='error: unable to recognize "STDIN": no matches for kind "CiliumClusterwideNetworkPolicy"'
+    # xtrace off from here on: cozytest runs test bodies under set -x, and the
+    # helper's own `2>&1` then captures trace lines along with real stderr --
+    # the trace of the stub's printf carries 'no matches for kind' whether or not
+    # the helper delivered it, and the trace of yq pushes the real reason off the
+    # warning's line. Both fake the assertion, in opposite directions. Not turned
+    # back on: xtrace is the runner's artifact, nothing after this needs it, and
+    # under plain bats a `set -x` here ENABLES tracing that was never on -- a
+    # test that then fails hangs the bats runner instead of reporting.
+    set +x
+    err=$(resolve_ghcr_mirror_endpoint 2>&1 >/dev/null)
+    # A permanent cause -- an unserved apiVersion, an RBAC denial, a missing yq --
+    # must reach the log rather than be summarised as a blip. Retrying is what the
+    # code does; asserting the cause is not something it can know. Anchored to the
+    # warning's own prefix so only the helper's real line -- 'Reason:' and the
+    # cause together -- satisfies it.
+    printf '%s' "$err" | grep -q 'Reason: .*no matches for kind' || {
+        echo "the apply failure reason was discarded" >&2
+        printf '%s\n' "$err" >&2
+        rm -rf "$work"; exit 1
+    }
+    stub_apply_err=""
+    stub_apply_rc=0
+    rm -rf "$work"
+}
+
+@test "the install-time apply is not gated behind the Talos image cache's precondition" {
+    f=hack/e2e-install-cozystack.bats
+    # The Talos image cache's install step reads talos.schematicID/version out of
+    # packages/apps/kubernetes/values.yaml and returns early when either is absent,
+    # because its manifest carries placeholders for them. This manifest carries no
+    # placeholders and needs neither value, so sharing that @test block would let a
+    # values.yaml restructure silently stop deploying the mirror while the log
+    # blamed the Talos factory. Each mirror gets its own block.
+    ghcr=$(awk '/^@test /{n=$0} /e2e-ghcr-mirror\.yaml/ && n {print n}' "$f" | head -1)
+    talos=$(awk '/^@test /{n=$0} /e2e-talos-image-cache\.yaml/ && n {print n}' "$f" | head -1)
+    [ -n "$ghcr" ] || { echo "no @test in $f applies hack/e2e-ghcr-mirror.yaml" >&2; exit 1; }
+    [ -n "$talos" ] || { echo "no @test in $f applies hack/e2e-talos-image-cache.yaml" >&2; exit 1; }
+    [ "$ghcr" != "$talos" ] || {
+        echo "both mirrors are applied from one @test block, so its early return skips this one too:" >&2
+        echo "  $ghcr" >&2
+        exit 1
+    }
+}
+
+@test "the install-time apply excludes the Cilium policy" {
+    f=hack/e2e-install-cozystack.bats
+    # Tests above pin what the yq exclusion produces from the manifest; this pins
+    # that the install step actually runs it. Without the filter the whole-file
+    # apply still converges -- the policy apply fails on the absent CRD, the || arm
+    # swallows it, and point-of-use applies the policy later anyway -- but the step
+    # then logs a scary unrelated error and its WARNING line misreports what
+    # happened, in the subsystem whose legibility is the point.
+    block=$(awk '/^@test /{b=""} {b=b ORS $0} /^}$/ && b ~ /e2e-ghcr-mirror\.yaml/ {print b; exit}' "$f")
+    [ -n "$block" ] || { echo "no @test block in $f applies hack/e2e-ghcr-mirror.yaml" >&2; exit 1; }
+    printf '%s\n' "$block" | grep -qF "select(.kind != \"CiliumClusterwideNetworkPolicy\")" || {
+        echo "the install-time apply no longer excludes the CiliumClusterwideNetworkPolicy" >&2
+        exit 1
+    }
 }
 
 @test "the manifest and helper agree on the mirror Service DNS name" {
