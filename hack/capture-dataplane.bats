@@ -15,6 +15,8 @@
 #                               succeeded, unknown when none ran or none could.
 #   - pod_filter_affected     -- retain scheduled NotReady pods even without IPs,
 #                               and only from whole rows.
+#   - pod_first_ready         -- pick the healthy-pod baseline for one node out
+#                               of the cluster-wide snapshot, whole rows only.
 #
 # The tests come in two shapes, and neither needs a cluster.
 #
@@ -57,23 +59,148 @@ E2E_CAPTURE_DATAPLANE_LIB=1
 
 @test "pod_filter_affected keeps a scheduled NotReady pod without a podIP" {
   rows="$(printf '%s\n' \
-    'tenant|no-ip||node-a|False|Pending' \
-    'tenant|with-ip|192.0.2.80|node-b|False|Running')"
+    'tenant|no-ip||node-a|False|Pending||eol' \
+    'tenant|with-ip|192.0.2.80|node-b|False|Running||eol')"
 
   out="$(printf '%s\n' "$rows" | pod_filter_affected)"
 
   [ "$(printf '%s\n' "$out" | awk 'END { print NR }')" -eq 2 ]
-  printf '%s\n' "$out" | awk '$0 == "tenant|no-ip||node-a|False|Pending" { found = 1 } END { exit !found }'
+  printf '%s\n' "$out" | awk '$0 == "tenant|no-ip||node-a|False|Pending||eol" { found = 1 } END { exit !found }'
 }
 
 @test "pod_filter_affected drops Ready unscheduled and terminal pods" {
   rows="$(printf '%s\n' \
-    'tenant|ready|192.0.2.81|node-a|True|Running' \
-    'tenant|unscheduled|||False|Pending' \
-    'tenant|succeeded|192.0.2.82|node-b|False|Succeeded' \
-    'tenant|failed|192.0.2.83|node-b|False|Failed')"
+    'tenant|ready|192.0.2.81|node-a|True|Running||eol' \
+    'tenant|unscheduled|||False|Pending||eol' \
+    'tenant|succeeded|192.0.2.82|node-b|False|Succeeded||eol' \
+    'tenant|failed|192.0.2.83|node-b|False|Failed||eol')"
 
   [ -z "$(printf '%s\n' "$rows" | pod_filter_affected)" ]
+}
+
+@test "pod_first_ready picks the first Ready Running pod on the named node" {
+  # Rows are the cluster-wide snapshot, so the filter scopes to a node itself:
+  # ns|name|podIP|nodeName|ready|phase|hostNetwork.
+  rows="$(printf '%s\n' \
+    'tenant|not-ready|192.0.2.90|node-a|False|Running||eol' \
+    'tenant|pending|192.0.2.91|node-a|True|Pending||eol' \
+    'tenant|other-node|192.0.2.94|node-b|True|Running||eol' \
+    'tenant|healthy-1|192.0.2.92|node-a|True|Running||eol' \
+    'tenant|healthy-2|192.0.2.93|node-a|True|Running||eol')"
+
+  out="$(printf '%s\n' "$rows" | pod_first_ready node-a)"
+
+  [ "$out" = "tenant|healthy-1|192.0.2.92" ]
+}
+
+@test "pod_first_ready ignores an eligible pod on a different node" {
+  # The scoping is the whole reason this reads the cluster-wide list safely: a
+  # baseline from another machine would compare the wedged pod's route against
+  # a route that never shared a kernel with it.
+  rows="$(printf '%s\n' 'tenant|healthy|192.0.2.95|node-b|True|Running||eol')"
+
+  [ -z "$(printf '%s\n' "$rows" | pod_first_ready node-a)" ]
+}
+
+@test "pod_first_ready emits nothing when no pod on the node is Ready and Running" {
+  rows="$(printf '%s\n' \
+    'tenant|not-ready|192.0.2.94|node-a|False|Running||eol' \
+    'tenant|pending|192.0.2.95|node-a|True|Pending||eol')"
+
+  [ -z "$(printf '%s\n' "$rows" | pod_first_ready node-a)" ]
+}
+
+@test "pod_first_ready emits nothing on empty input" {
+  [ -z "$(printf '' | pod_first_ready node-a)" ]
+}
+
+@test "pod_first_ready rejects a hostNetwork row cut at the separator" {
+  # The half a value check cannot reach on its own. A stream cut RIGHT AFTER the
+  # sixth separator leaves the hostNetwork column empty, and empty is
+  # byte-identical to the omitempty-false the filter must accept -- so `$7 ==
+  # ""` alone seats a hostNetwork pod whose `true` was cut away entirely. The
+  # trailing constant is what separates them, and the two halves of that guard
+  # catch different cuts, so both are exercised here:
+  #   row 1 loses its tail before the last separator  -> NF is 7, not 8
+  #   row 2 keeps the count but the sentinel is cut   -> NF is 8, $8 is not eol
+  # Neither may be picked; the whole row behind them must be.
+  rows="$(printf '%s\n' \
+    'cozy-cilium|cilium-abcde|192.0.2.10|node-a|True|Running|' \
+    'cozy-cilium|cilium-fghij|192.0.2.13|node-a|True|Running||eo' \
+    'tenant|workload|192.0.2.12|node-a|True|Running||eol')"
+
+  out="$(printf '%s\n' "$rows" | pod_first_ready node-a)"
+
+  [ "$out" = "tenant|workload|192.0.2.12" ]
+}
+
+@test "pod_first_ready rejects a hostNetwork row cut inside its last value" {
+  # The one filter here where a truncated last value must NOT be kept.
+  # `tru` carries all eight fields and passes every other gate, so a deny-list
+  # (`$7 != "true"`) accepts it -- and because this filter stops at the row it
+  # takes, the baseline then IS a hostNetwork pod, whose podIP is the node's own
+  # address. That is the fingerprint the exclusion exists to keep out of the
+  # comparison, so the control would be the thing it excludes. The allow-list
+  # form rejects any value that is not an exact known state.
+  rows="$(printf '%s\n' \
+    'cozy-cilium|cilium-abcde|192.0.2.10|node-a|True|Running|tru|eol' \
+    'tenant|workload|192.0.2.11|node-a|True|Running||eol')"
+
+  out="$(printf '%s\n' "$rows" | pod_first_ready node-a)"
+
+  [ "$out" = "tenant|workload|192.0.2.11" ]
+}
+
+@test "pod_first_ready skips a Ready pod that has no podIP yet" {
+  # The filter stops at the row it takes, so an addressless pod does not just
+  # produce a thin baseline -- it consumes the only pick and the pod behind it
+  # is never considered.
+  rows="$(printf '%s\n' \
+    'tenant|no-ip-yet||node-a|True|Running||eol' \
+    'tenant|healthy|192.0.2.99|node-a|True|Running||eol')"
+
+  out="$(printf '%s\n' "$rows" | pod_first_ready node-a)"
+
+  [ "$out" = "tenant|healthy|192.0.2.99" ]
+}
+
+@test "pod_first_ready drops a pod row cut off mid-record" {
+  # The cut has to land where the fragment still satisfies every value test, or
+  # the row is rejected for an unrelated reason and the count is never
+  # consulted: here the stream ends right after `Running`, one separator short
+  # of the hostNetwork column.
+  rows="$(printf '%s\n' \
+    'tenant|cut-off|192.0.2.9|node-a|True|Running' \
+    'tenant|healthy|192.0.2.98|node-a|True|Running||eol')"
+
+  out="$(printf '%s\n' "$rows" | pod_first_ready node-a)"
+
+  [ "$out" = "tenant|healthy|192.0.2.98" ]
+}
+
+@test "pod_first_ready skips a hostNetwork pod even when it is Ready Running and first" {
+  # cilium-agent / kube-ovn-cni / ovs-ovn run hostNetwork on every node, and a
+  # hostNetwork pod's podIP IS the node's own address -- picking one as the
+  # baseline would resolve to a local route for an entirely ordinary reason,
+  # which is the same fingerprint the address-attribution capture exists to
+  # recognise, so the baseline would defeat itself.
+  rows="$(printf '%s\n' \
+    'cozy-cilium|cilium-agent-abcde|192.0.2.10|node-a|True|Running|true|eol' \
+    'tenant|workload|192.0.2.96|node-a|True|Running||eol')"
+
+  out="$(printf '%s\n' "$rows" | pod_first_ready node-a)"
+
+  [ "$out" = "tenant|workload|192.0.2.96" ]
+}
+
+@test "pod_first_ready treats a blank hostNetwork column as NOT hostNetwork" {
+  # The API omits spec.hostNetwork (omitempty) when it is false/unset, so
+  # kubectl's jsonpath emits an empty string, not the literal "false".
+  rows="$(printf '%s\n' 'tenant|workload|192.0.2.97|node-a|True|Running||eol')"
+
+  out="$(printf '%s\n' "$rows" | pod_first_ready node-a)"
+
+  [ "$out" = "tenant|workload|192.0.2.97" ]
 }
 
 @test "runtime checks LoadBalancers when there are no affected pods" {
@@ -138,11 +265,13 @@ EOF
 }
 
 @test "pod_filter_affected drops a pod row cut off mid-record" {
-  # The same cut over the six-field pod jsonpath. The fragment ends inside the
+  # The same cut over the eight-field pod jsonpath. The fragment ends inside the
   # nodeName column, so the half-parsed `nod` reads as a scheduled pod on a node
-  # of that name, and the capture opens a node-nod.txt for it.
+  # of that name, and the capture opens a node-nod.txt for it. Note the cut has
+  # to land in a column this filter reads: hostNetwork is last now, and a cut
+  # inside THAT one leaves every column this filter decides on intact.
   rows="$(printf '%s\n' \
-    'tenant|wedged|192.0.2.80|node-b|False|Running' \
+    'tenant|wedged|192.0.2.80|node-b|False|Running||eol' \
     'tenant|cut||nod')"
 
   out="$(printf '%s\n' "$rows" | pod_filter_affected)"
@@ -381,7 +510,7 @@ dp_hanging_kubectl_dir() {
 #!/bin/sh
 for a in "$@"; do
   case $a in
-    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
   esac
 done
 sleep 300
@@ -466,7 +595,7 @@ STUB
 #!/bin/sh
 for a in "$@"; do
   case $a in
-    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
   esac
 done
 # The behaviour under test: client-go's evalArray has no allowMissingKeys
@@ -508,7 +637,7 @@ STUB
 #!/bin/sh
 for a in "$@"; do
   case $a in
-    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
   esac
 done
 case "$*" in
@@ -556,7 +685,7 @@ STUB
 #!/bin/sh
 for a in "$@"; do
   case $a in
-    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
   esac
 done
 case "$*" in
@@ -683,7 +812,7 @@ STUB
 #!/bin/sh
 for a in "$@"; do
   case $a in
-    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
   esac
 done
 case "$*" in
@@ -717,7 +846,7 @@ STUB
 #!/bin/sh
 for a in "$@"; do
   case $a in
-    pods) echo 'tenant-test|healthy|10.0.0.9|node-a|True|Running'; exit 1 ;;
+    pods) echo 'tenant-test|healthy|10.0.0.9|node-a|True|Running||eol'; exit 1 ;;
   esac
 done
 exit 0
@@ -744,7 +873,7 @@ STUB
 #!/bin/sh
 for a in "$@"; do
   case $a in
-    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
   esac
 done
 case "$*" in
@@ -765,6 +894,413 @@ STUB
   rm -rf "$d"
 }
 
+@test "the host netns capture names every address, not only ovn0" {
+  # The reason this commit exists: when a podIP turns out to be a local address
+  # of the host netns, `ip addr show ovn0` cannot say which interface holds it.
+  # Nothing else in this suite reaches these two captures -- deleting both left
+  # every other test green -- so without this the collector could quietly lose
+  # the evidence the change was written to collect.
+  #
+  # Asserted on the kubectl argv, and the section headers are the secondary
+  # check rather than the primary one. A header is an `echo` the script emits
+  # before the exec, so dropping the exec and keeping the label leaves an empty
+  # section behind and every header grep green -- either capture alone, or both
+  # together, and the whole suite stays green. The argv also pins WHERE the
+  # capture runs -- `-c cni-server`, the container that shares the host netns --
+  # which is half the property and one a header cannot carry at all.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  *'ip -o addr show'*|*'ip route show table local'*) echo "$*" >>"$STUB_CALLS" ;;
+esac
+for a in "$@"; do
+  case $a in
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  STUB_CALLS="$d/calls" PATH="$d/bin:$PATH" timeout 120 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  [ -f "$d/out/node-node-a.txt" ]
+  # Positive control: the host-netns section ran, so a missing address capture
+  # below is that capture's absence and not the whole block being skipped.
+  grep -q 'host netns: ip rule' "$d/out/node-node-a.txt"
+  # The commands the collector actually issued into the host netns ...
+  grep -q -- '-c cni-server -- ip -o addr show' "$d/calls"
+  grep -q -- '-c cni-server -- ip route show table local' "$d/calls"
+  # ... and the labels a reader of the artifact finds them under.
+  grep -q 'ip -o addr show, all interfaces' "$d/out/node-node-a.txt"
+  grep -q 'ip route show table local' "$d/out/node-node-a.txt"
+  rm -rf "$d"
+}
+
+@test "a healthy pod on the node is captured beside the affected one" {
+  # The baseline is the point of the reference leg, and it only pays off in the
+  # SAME file as the affected pod: a reader comparing a suspicious route against
+  # a normal one should not have to go and find the normal one.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods)
+      echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'
+      echo 'cozy-cilium|cilium-xyz|10.0.0.5|node-a|True|Running|true|eol'
+      echo 'tenant|healthy|10.0.0.9|node-a|True|Running||eol'
+      exit 0 ;;
+  esac
+done
+case "$*" in
+  # A cni-server on the node, so the IP-specific legs actually run. Without it
+  # they are skipped and the baseline would be a header with no comparison in
+  # it -- which is the whole thing this leg is for.
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  [ -f "$d/out/pod-tenant-test-wedged.txt" ]
+  grep -q 'POD tenant-test/wedged' "$d/out/pod-tenant-test-wedged.txt"
+  grep -q 'REFERENCE (Ready)' "$d/out/pod-tenant-test-wedged.txt"
+  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test-wedged.txt"
+  # And the baseline carries the evidence it exists to provide: the route and
+  # conntrack for the HEALTHY pod's address, not just a section header. A
+  # baseline without these compares nothing.
+  grep -q 'ip route get 10.0.0.9' "$d/out/pod-tenant-test-wedged.txt"
+  grep -q 'kernel conntrack for 10.0.0.9' "$d/out/pod-tenant-test-wedged.txt"
+  # The hostNetwork pod sorts first in the snapshot and must not have been
+  # taken: its podIP is the node's own address, the fingerprint the baseline
+  # exists to rule out.
+  if grep -q 'POD cozy-cilium/cilium-xyz' "$d/out/pod-tenant-test-wedged.txt"; then
+    echo "a hostNetwork pod was taken as the baseline:"
+    cat "$d/out/pod-tenant-test-wedged.txt"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "the baseline is captured at route-only scope, not the full one" {
+  # The baseline exists to show a normal route and conntrack beside a suspicious
+  # one. Cilium CT, the OVN port binding and the OVS ovn-installed flag describe
+  # how a pod was PROGRAMMED, and a pod chosen for being healthy is correctly
+  # programmed by definition -- they compare nothing and cost 105s of exec bound
+  # on the leg most likely to be cut. Dropping them is what keeps one affected
+  # pod on one node inside the 600s backstop, so the scope is load-bearing and
+  # not a preference.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods)
+      echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'
+      echo 'tenant|healthy|10.0.0.9|node-a|True|Running||eol'
+      exit 0 ;;
+  esac
+done
+case "$*" in
+  # Everything the full scope needs is present, so its absence from the
+  # baseline is a decision and not a missing dependency.
+  *'k8s-app=cilium'*) echo 'cilium-xyz'; exit 0 ;;
+  *'app=ovs'*) echo 'ovs-xyz'; exit 0 ;;
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *'app=ovn-central'*) echo 'ovn-central-0'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 120 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  f="$d/out/pod-tenant-test-wedged.txt"
+  [ -f "$f" ]
+  # Positive control: the affected pod gets the full scope, so the blocks exist
+  # and their absence below is scope and not a stub that answered nothing.
+  awk '/REFERENCE \(Ready\)/ { exit } { print }' "$f" | grep -q 'cilium-dbg bpf ct list global'
+  awk '/REFERENCE \(Ready\)/ { exit } { print }' "$f" | grep -q 'OVN Port_Binding'
+  # The baseline keeps what it is read for ...
+  awk '/REFERENCE \(Ready\)/,0' "$f" | grep -q 'ip route get 10.0.0.9'
+  awk '/REFERENCE \(Ready\)/,0' "$f" | grep -q 'kernel conntrack for 10.0.0.9'
+  # ... says in the artifact that the rest was a decision ...
+  awk '/REFERENCE \(Ready\)/,0' "$f" | grep -q 'scope: route and conntrack only'
+  awk '/REFERENCE \(Ready\)/,0' "$f" | grep -q 'absence below is a decision, not a lookup'
+  # ... and drops what compares nothing. Matched against SECTION HEADERS only:
+  # the marker line above names the very blocks it skips, so a bare substring
+  # search finds the explanation and calls it the block.
+  for section in 'cilium-dbg bpf ct list global' 'OVN Port_Binding' 'ovn-installed' 'Ready conditions'; do
+    if awk '/REFERENCE \(Ready\)/,0' "$f" | grep '^=== ' | grep -q "$section"; then
+      echo "the baseline was captured at full scope: section '$section' present after REFERENCE"
+      awk '/REFERENCE \(Ready\)/,0' "$f" | grep '^=== '
+      exit 1
+    fi
+  done
+  rm -rf "$d"
+}
+
+@test "the baseline column is read from the cluster-wide snapshot" {
+  # The seventh column is what lets the baseline be chosen without a second
+  # read. Drop it from the jsonpath and every row is a six-field fragment that
+  # the NF guards reject -- no affected pods, no baseline, nothing captured. The
+  # stub answers only a request that asks for hostNetwork, so a jsonpath that
+  # stopped asking produces an empty list and this test goes red.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  *'spec.hostNetwork'*)
+    echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'
+    echo 'tenant|healthy|10.0.0.9|node-a|True|Running||eol'
+    exit 0 ;;
+esac
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  [ -f "$d/out/pod-tenant-test-wedged.txt" ]
+  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test-wedged.txt"
+  rm -rf "$d"
+}
+
+@test "two affected pods on one node share a single baseline capture" {
+  # The baseline depends on the node alone, and several affected pods on one
+  # node is what a wedged datapath looks like rather than an edge case. What
+  # must not repeat is the CAPTURE -- a second full per-pod capture of the same
+  # healthy pod, against a backstop the pod leg already strains. Counted by the
+  # baseline pod's own conditions read, which happens once per capture.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  # The baseline runs at route-only scope, so its conditions read is gone --
+  # count the route exec, which is the read that scope does make.
+  *'ip route get 10.0.0.9'*) echo ref-capture >>"$STUB_CALLS" ;;
+esac
+for a in "$@"; do
+  case $a in
+    pods)
+      echo 'tenant-test|wedged-a|10.0.0.1|node-a|False|Running||eol'
+      echo 'tenant-test|wedged-b|10.0.0.2|node-a|False|Running||eol'
+      echo 'tenant|healthy|10.0.0.9|node-a|True|Running||eol'
+      exit 0 ;;
+  esac
+done
+case "$*" in
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  STUB_CALLS="$d/calls" PATH="$d/bin:$PATH" timeout 120 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  # Both pods carry the baseline: the saving must not cost one of them its copy.
+  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test-wedged-a.txt"
+  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test-wedged-b.txt"
+  n=$(grep -c ref-capture "$d/calls")
+  if [ "$n" -ne 1 ]; then
+    echo "the baseline was captured $n times for one node instead of once"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "the pod list jsonpath emits its columns in the order its readers index" {
+  # Every runtime test below answers the pod list from a stub that writes rows
+  # by hand, so none of them can observe the jsonpath's column ORDER: swap two
+  # fields in it and the suite stays green while the filters go on reading
+  # position 6 as phase and 7 as hostNetwork. Measured -- swapping
+  # `.status.phase` with `.spec.hostNetwork` passed 72 of 72.
+  #
+  # Against a cluster that swap makes pod_filter_affected compare a boolean
+  # against Succeeded/Failed and pod_first_ready compare a phase against
+  # "false", so the collector selects the wrong pods and says nothing. The
+  # positions are a contract between one jsonpath and three readers -- both awk
+  # filters and the `read` in the capture loop -- and no stub can hold it.
+  #
+  # Asserted as ORDER rather than as an exact string, so reformatting the
+  # jsonpath is free and reordering it is not.
+  #
+  # Each field carries its closing brace, and that is load-bearing rather than
+  # tidy: `.metadata.name` is a prefix of `.metadata.namespace`, so searching
+  # for it bare finds the namespace field and reports the two columns at one
+  # offset. The brace is what makes each search hit its own column.
+  line=$(grep -F '{range .items[*]}' "$SCRIPT" | grep -F 'spec.hostNetwork')
+  [ -n "$line" ]
+  prev=0
+  for f in '.metadata.namespace}' '.metadata.name}' '.status.podIP}' '.spec.nodeName}' \
+           'type=="Ready")].status}' '.status.phase}' '.spec.hostNetwork}' '|eol"}'; do
+    cur=$(printf '%s\n' "$line" | awk -v s="$f" '{ print index($0, s) }')
+    # index() returns 0 for absent, so this one comparison catches a field that
+    # moved and a field that vanished.
+    if [ "$cur" -le "$prev" ]; then
+      echo "the pod list jsonpath no longer emits its columns in the order its readers assume"
+      echo "field '$f' is at offset $cur, expected after $prev"
+      echo "line: $line"
+      exit 1
+    fi
+    prev=$cur
+  done
+}
+
+@test "an affected pod gets the baseline from its own node" {
+  # The complement of the test above, and the half a shared cache can break
+  # without breaking that one: the cache is keyed by node, and a key that
+  # stopped telling nodes apart would serve every node the first node's
+  # answer. The test above counts captures and a single shared answer is
+  # exactly one capture, so it would stay green.
+  #
+  # What the reader would then get is a route and a conntrack table read on
+  # one kernel, filed under a heading naming a different node, with nothing
+  # in the artifact saying so -- a capture reporting what it never observed,
+  # which is the failure this collector exists to rule out. So the assertion
+  # is on WHICH healthy pod each file carries, per file, not on how many
+  # captures ran.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods)
+      echo 'tenant-test|wedged-a|10.0.0.1|node-a|False|Running||eol'
+      echo 'tenant-test|wedged-b|10.0.0.2|node-b|False|Running||eol'
+      echo 'tenant|healthy-a|10.0.0.9|node-a|True|Running||eol'
+      echo 'tenant|healthy-b|10.0.0.8|node-b|True|Running||eol'
+      exit 0 ;;
+  esac
+done
+case "$*" in
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 120 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  fa="$d/out/pod-tenant-test-wedged-a.txt"
+  fb="$d/out/pod-tenant-test-wedged-b.txt"
+  [ -f "$fa" ]
+  [ -f "$fb" ]
+  # Each file names its own node's healthy pod ...
+  grep -q 'POD tenant/healthy-a' "$fa"
+  grep -q 'POD tenant/healthy-b' "$fb"
+  # ... and carries that pod's address in the evidence, not just in a heading.
+  grep -q 'ip route get 10.0.0.9' "$fa"
+  grep -q 'ip route get 10.0.0.8' "$fb"
+  # ... and neither carries the other node's, which is what a node-agnostic
+  # cache key produces: both files served whichever node was reached first.
+  if grep -q 'POD tenant/healthy-b' "$fa" || grep -q 'POD tenant/healthy-a' "$fb"; then
+    echo "a baseline crossed nodes:"
+    grep -H 'POD tenant/healthy' "$fa" "$fb"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "a partially answered pod list is not called unanswered by the baseline" {
+  # The absence branch fires on "read failed AND no eligible pod", which is what
+  # a partial answer produces: rows arrive, none of them can serve -- the
+  # affected pod is not Ready, the hostNetwork pod is excluded -- and the list
+  # then dies mid-stream. Saying it never answered would assert what the run did
+  # not observe. It did not FINISH, which is true either way.
+  #
+  # With one snapshot this is the only way to reach that branch at all: a list
+  # that answered nothing leaves no affected pods, so no pod file is written.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods)
+      echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'
+      echo 'cozy-cilium|cilium-xyz|10.0.0.5|node-a|True|Running|true|eol'
+      exit 1 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  [ -f "$d/out/pod-tenant-test-wedged.txt" ]
+  grep -q 'REFERENCE (Ready) pod on node=node-a: unknown' "$d/out/pod-tenant-test-wedged.txt"
+  grep -q 'the pod list did not finish' "$d/out/pod-tenant-test-wedged.txt"
+  rm -rf "$d"
+}
+
+@test "a node whose snapshot holds no eligible pod says none found" {
+  # The other side of the same branch, and the reason it needs two wordings: a
+  # complete list with nothing eligible on the node is an answer, not a gap.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods)
+      echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'
+      echo 'cozy-cilium|cilium-xyz|10.0.0.5|node-a|True|Running|true|eol'
+      exit 0 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  grep -q 'none found -- no baseline available' "$d/out/pod-tenant-test-wedged.txt"
+  if grep -q 'did not finish' "$d/out/pod-tenant-test-wedged.txt"; then
+    echo "a complete list was reported as unfinished:"
+    cat "$d/out/pod-tenant-test-wedged.txt"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "an affected pod is never offered as a healthy baseline" {
+  # Now true by construction rather than by exclusion: candidates come from the
+  # same rows the affected set came from, and one row cannot be both Ready and
+  # not-Ready. The test stays because the property is what matters, not the
+  # mechanism -- a future change that reads the node separately would reopen it.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods)
+      echo 'tenant-test|wedged-a|10.0.0.1|node-a|False|Running||eol'
+      echo 'tenant-test|wedged-b|10.0.0.2|node-a|False|Running||eol'
+      exit 0 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 120 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  [ -f "$d/out/pod-tenant-test-wedged-a.txt" ]
+  [ -f "$d/out/pod-tenant-test-wedged-b.txt" ]
+  for f in "$d"/out/pod-tenant-test-wedged-a.txt "$d"/out/pod-tenant-test-wedged-b.txt; do
+    if grep 'REFERENCE' "$f" | grep -q 'tenant-test/wedged'; then
+      echo "a pod under investigation was used as the healthy baseline in $(basename "$f"):"
+      grep '^# POD' "$f"
+      exit 1
+    fi
+  done
+  grep -q 'none found -- no baseline available' "$d/out/pod-tenant-test-wedged-b.txt"
+  rm -rf "$d"
+}
+
 @test "a memo hit reports the same answer as the miss that filled it" {
   # The status has to survive the memo. Every caller reads pod_on_node through a
   # command substitution, so a status kept in a variable dies with that subshell
@@ -776,7 +1312,7 @@ STUB
 #!/bin/sh
 for a in "$@"; do
   case $a in
-    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
     svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
   esac
@@ -826,7 +1362,7 @@ STUB
 #!/bin/sh
 for a in "$@"; do
   case $a in
-    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running'; exit 0 ;;
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
     svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
   esac

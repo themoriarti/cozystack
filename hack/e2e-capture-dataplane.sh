@@ -9,7 +9,8 @@
 # snapshot dir so the output lands in the uploaded cozyreport artifact, and both
 # wrap this script in a wall-clock backstop -- but not the same one (600s and
 # 300s respectively), so a change sized against one caller can still overrun the
-# other. The MAX_LBS note below carries that arithmetic.
+# other. The MAX_LBS and MAX_PODS notes below carry that arithmetic, one per
+# fan-out cap.
 #
 # Why this exists: a recurrent install failure is a CNI host->local-pod
 # data-plane transient -- kubelet on a node reaches a *local* pod's
@@ -39,6 +40,16 @@
 #     kernel-path misforward / missing route / wrong rule / unresolved neighbor
 #     -- the actual mechanism behind host->local-pod "connection refused" on the
 #     legacy-routing path (the crux of the transient).
+#   - Address attribution for a podIP that turns out to be a LOCAL address of
+#     the host netns instead of reachable via ovn0 (a route to nowhere-in-
+#     particular is not enough to name the owner): the same host netns above
+#     also gets `ip -o addr show` (every interface) and `ip route show table
+#     local`, and one Ready, Running, non-hostNetwork pod on the same node that
+#     has an address gets the route and conntrack half of the per-pod capture
+#     below as an in-run healthy-pod control, since this collector otherwise
+#     inspects NotReady pods only and had no same-window baseline. hostNetwork
+#     is excluded because its podIP IS the node's own address, so it would show
+#     the same local-route fingerprint as the fault for an unrelated reason.
 #   - OVS/OVN on the node: `ovs-ofctl dump-flows br-int`, and the OVN
 #     Port_Binding / Logical_Switch_Port for the pod (LSP name = <pod>.<ns> in
 #     kube-ovn) plus a bounded `ovn-sbctl lflow-list`.
@@ -94,9 +105,9 @@
 #     In-guest capture INSIDE the worker VMI (tenant `cilium-dbg bpf lb list` /
 #     `tcpdump eth0`) is the one hop this cannot reach from the host; it is left
 #     as a documented stretch at the call site (it needs a tenant
-#     kubeconfig/virtctl that neither caller of this diagnostic has). The host-side
-#     ANNOUNCER/ENDPOINT split is the deliverable and already localises the
-#     failing hop to host-cilium vs kube-ovn delivery.
+#     kubeconfig/virtctl that neither caller of this diagnostic has). The
+#     host-side ANNOUNCER/ENDPOINT split is the deliverable and already
+#     localises the failing hop to host-cilium vs kube-ovn delivery.
 #
 # Robustness contract (matches docs/agents/e2e-testing.md): pure diagnostics,
 # no retries, no behavior change, no traps. Every live capture is time-boxed,
@@ -134,13 +145,24 @@ set -u
 # Service. Dropping it loses nothing a reader needs -- the read's own note
 # already says the list did not finish.
 #
-# What a field count cannot catch: a cut inside the LAST field still delivers
-# every separator, so `...|30080|Clus` counts seven and passes, and nothing
-# in-band separates a truncated final value from a short one. Here the last
-# column is display-only. In the two filters below it is a decision column
-# (`phase`, `ready`), where a truncated value matches neither state being
-# excluded and the row is kept -- over-capturing rather than dropping evidence,
-# and the read's own cut-off note is what tells the reader the list ended early.
+# What a field count cannot catch on its own: a cut inside the LAST field
+# still delivers every separator, so `...|30080|Clus` counts seven and passes,
+# and nothing in-band separates a truncated final value from a short one. Here
+# the last column is display-only, so it costs nothing.
+# `lb_first_ready_endpoint` decides on its own last column (`ready`) as a
+# deny-list against the single value `false`, so a truncated value matches
+# nothing it excludes and the row is kept -- over-capturing rather than
+# dropping evidence, the safe direction for a diagnostic.
+#
+# The two pod filters do not rely on that reasoning at all. Their jsonpath
+# ends in a constant `eol` column, and both require it present and intact, so
+# a cut anywhere in a row either drops the field count or corrupts the
+# sentinel. That matters for `pod_first_ready` specifically: it decides on
+# `hostNetwork`, and a cut landing exactly on the preceding separator leaves
+# that column EMPTY, which is byte-identical to the omitempty-false the filter
+# must accept. No test of the value itself can tell those apart -- only a
+# marker after it can. Either way the read's own cut-off note is what tells
+# the reader the list ended early.
 lb_filter_services() {
   awk -F'|' 'NF == 7 && $3 == "LoadBalancer" && $4 != "" { print }'
 }
@@ -247,19 +269,69 @@ lb_budget_ok() {
 }
 
 # pod_filter_affected: stdin =
-# `namespace|name|podIP|nodeName|ready|phase` rows. Keep scheduled, non-terminal
-# pods whose Ready condition is not True. podIP is deliberately NOT a gate: the
-# cilium endpointManager leak this collector diagnoses can strand a pod before
-# an IP is assigned, and the node-global Cilium/OVN state plus pod events remain
-# useful in that state. IP-specific commands are gated later at their call sites.
+# `namespace|name|podIP|nodeName|ready|phase|hostNetwork` rows. Keep scheduled,
+# non-terminal pods whose Ready condition is not True. podIP is deliberately
+# NOT a gate: the cilium endpointManager leak this collector diagnoses can
+# strand a pod before an IP is assigned, and the node-global Cilium/OVN state
+# plus pod events remain useful in that state. IP-specific commands are gated
+# later at their call sites.
 #
-# NF == 6 for the reason lb_filter_services carries NF == 7: a list cut
-# mid-record leaves a fragment whose remaining columns still read as values, and
-# a cut landing inside the nodeName column produces a half-parsed node this
-# capture would then open a node-<name>.txt for. Six fields per record is what
-# the jsonpath emits.
+# NF == 8 for the reason lb_filter_services carries its own count, though the
+# counts differ because the jsonpaths do. A list cut mid-record leaves a
+# fragment whose remaining columns still read as values, and a cut landing
+# inside the nodeName column produces a half-parsed node this capture would then
+# open a node-<name>.txt for. Eight fields per record is what the jsonpath
+# emits: six this filter reads, then hostNetwork for the baseline filter below,
+# then a constant `eol` whose only job is to be the thing a truncation destroys.
+# Both are checked here even though neither is read, because that is what makes
+# a cut anywhere in the row detectable.
 pod_filter_affected() {
-  awk -F'|' 'NF == 6 && $4 != "" && $5 != "True" && $6 != "Succeeded" && $6 != "Failed"'
+  awk -F'|' 'NF == 8 && $8 == "eol" && $4 != "" && $5 != "True" && $6 != "Succeeded" && $6 != "Failed"'
+}
+
+# pod_first_ready <node>: stdin = the cluster-wide
+# `namespace|name|podIP|nodeName|ready|phase|hostNetwork` rows, unfiltered.
+# Emits `namespace|name|podIP` for the first pod ON <node> that is Ready=True,
+# Running, addressed and NOT hostNetwork -- the healthy-pod baseline for that
+# node -- then stops, or nothing when the node has no eligible pod.
+#
+# It scopes itself rather than being handed a per-node list, and that is the
+# design rather than a convenience. The rows are the same snapshot the affected
+# set was computed from, so an affected pod cannot be selected here:
+# pod_filter_affected keeps rows whose $5 is not True, this one requires $5 to
+# be True, and a row cannot be both. Reading the node separately would need an
+# exclusion list instead, because a pod that recovered between the two reads
+# reports Ready in the later one and could be offered as the baseline for its
+# own failure.
+#
+# hostNetwork is excluded because such a pod's podIP IS the node's own address,
+# and cilium-agent / kube-ovn-cni / ovs-ovn run hostNetwork on every node. A
+# baseline picked from those would resolve `ip route get <ip>` to `local <ip>
+# dev lo table local` for an entirely ordinary reason -- the exact fingerprint
+# the address-attribution capture above exists to recognise -- so the
+# comparison would defeat itself. A blank hostNetwork column counts as NOT
+# hostNetwork, since the API omits the field when it is false.
+#
+# The test is written as an allow-list -- empty or the literal "false" -- rather
+# than as `!= "true"`, which rejects a value cut mid-token: `tru` carries every
+# field and passes every other gate, and because this filter stops at the row it
+# takes, a deny-list would seat a hostNetwork pod as the baseline. That alone
+# is not enough, though: a cut landing on the separator BEFORE hostNetwork
+# leaves the column empty and indistinguishable from a genuine false. That case
+# is caught by the constant `eol` column instead -- the row loses the sentinel
+# with its tail. The two guards cover different cuts and neither replaces the
+# other.
+#
+# An addressless pod is skipped for the same `exit`-at-first-match reason: a
+# Ready pod that has no podIP yet would become the baseline and then carry none
+# of the route or conntrack evidence the comparison exists for.
+#
+# NF == 8 and an intact `eol` for the reason the filters above carry their own
+# counts: a list cut mid-record leaves a fragment whose remaining columns still
+# read as values, and a fragment here would name a pod that does not exist as
+# the baseline every reading of the affected pod gets compared against.
+pod_first_ready() {
+  awk -F'|' -v node="$1" 'NF == 8 && $8 == "eol" && $4 == node && $3 != "" && $5 == "True" && $6 == "Running" && ($7 == "" || $7 == "false") { print $1 "|" $2 "|" $3; exit }'
 }
 
 # How a cutoff should be described, mirroring prevlog_cutoff_desc in the sibling
@@ -315,8 +387,52 @@ CILIUM_NS="${COZY_CILIUM_NS:-cozy-cilium}"
 KUBEOVN_NS="${COZY_KUBEOVN_NS:-cozy-kubeovn}"
 # Cap how many pods we inspect so a fully-wedged cluster cannot explode the
 # runtime; the per-command timeouts and the call-site wall-clock wrapper are the
-# other two bounds. Node-global captures are deduped per node, so the effective
-# work is closer to (#affected-nodes) than (#affected-pods).
+# other two bounds. Node-global captures are deduped per node, and so is the
+# healthy-pod baseline, so the total is (#affected-pods) per-pod captures plus
+# (#affected-nodes) baselines and node-global captures -- not two per pod.
+#
+# The header asks for this arithmetic against the tighter caller rather than
+# only the roomier one, so here it is. Every term counts the OUTER bound of
+# each call and adds the bounded lookups that call makes; a nested inner
+# timeout is not a second wait. The terms are the whole path before
+# capture_lb_datapath, not only the per-pod ones: the preamble is 82s of the
+# total, and a sum that omits it reports a margin roomy enough for another
+# collector where the real one has no room at all.
+#  - preamble, once per run: 82s -- the cluster pod list at 28s+2s, the
+#    ovn-central lookup at 20s+2s, and the 30s ovn-sbctl lflow-list;
+#  - a node capture bounds at 288s: 222s of execs (the `cilium-dbg monitor`
+#    leg counts its outer 12s, not the inner 8s it wraps) plus three 22s
+#    pod_on_node lookups, memo misses the first time a node is seen;
+#  - an affected pod's capture bounds at 179s: 135s of execs plus two 20s
+#    reads with their 2s kill graces;
+#  - the baseline adds 30s per affected node: it runs at route-only scope, so
+#    the route and the conntrack and nothing else, and it issues no read of
+#    its own.
+#
+# One affected pod on one node therefore bounds at 579s, inside the 600s the
+# cozytest.sh trap allows and still past the 300s the Chainsaw catch shares
+# with its snapshot leg. That margin is 21 seconds, so the next collector
+# added to this path does not fit and the number has to be recomputed rather
+# than assumed. Read the 21s as what this path leaves the rest of the run, not
+# as headroom the run has: capture_lb_datapath executes unconditionally after
+# it and inside the same backstop, and the MAX_LBS note above says that section
+# bounds work rather than wall clock, with each heavy capture costing tens of
+# seconds.
+#
+# The 579s holds only WHILE the lookup memo exists. When mktemp has failed and
+# _POD_MEMO is empty every pod_on_node is live again, each capture pays for
+# its own, and the same case bounds at 667s -- outside both backstops. The
+# guarantee is conditional and this is the condition.
+#
+# Route-only scope is what buys it. At full scope the baseline costs 179s
+# instead of 30s, the single-pod case bounds at 728s, and it would lose a
+# backstop it clears at the merge base (519s there). The three blocks that
+# scope drops describe how a pod was programmed, and a pod chosen for being
+# healthy is programmed correctly by definition -- they compare nothing.
+#
+# What the numbers do say is that this cap counts pods while the ceiling is
+# measured in seconds, and past one affected pod the two stop meeting: raising
+# MAX_PODS buys nothing the envelope can pay for.
 MAX_PODS="${COZY_DATAPLANE_MAX_PODS:-12}"
 
 # LoadBalancer-datapath section tunables (see the header block and the
@@ -411,9 +527,18 @@ log() {
 # Failed pods (completed Jobs, hook pods) are Ready!=True too but are not either
 # symptom, so they are excluded to keep the MAX_PODS budget on actual wedges.
 # jsonpath keeps this dependency-free (no jq / go-template reassignment).
+#
+# hostNetwork rides along on this one read even though only the healthy-pod
+# baseline consults it, and only for nodes that turn out to have an affected
+# pod. Asking per node instead would be a second read of the same objects, and
+# the two answers could then disagree: a pod that recovered in between reports
+# Ready in the later one and could be offered as the baseline for its own
+# failure. One snapshot makes that impossible rather than guarded -- the
+# affected set and the baseline candidates are the same rows -- and the extra
+# column costs one boolean per pod on a list this script already takes.
 # shellcheck disable=SC2086  # empty DP_LIST_BOUND must vanish, not become ""
 _pods_raw=$($DP_LIST_BOUND kubectl get pods -A \
-  -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.status.podIP}{"|"}{.spec.nodeName}{"|"}{.status.conditions[?(@.type=="Ready")].status}{"|"}{.status.phase}{"\n"}{end}' \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.status.podIP}{"|"}{.spec.nodeName}{"|"}{.status.conditions[?(@.type=="Ready")].status}{"|"}{.status.phase}{"|"}{.spec.hostNetwork}{"|eol"}{"\n"}{end}' \
   2>"${DP_ERR:-/dev/null}")
 _pods_rc=$?
 if [ "$_pods_rc" -ne 0 ]; then
@@ -497,6 +622,11 @@ mark_node() { _SEEN_NODES="$_SEEN_NODES$1 "; }
 # be paid for again in the sections that follow. Empty when mktemp fails, which
 # only costs the memo.
 _POD_MEMO=$(mktemp "${TMPDIR:-/tmp}/dataplane-podmemo.XXXXXX" 2>/dev/null) || _POD_MEMO=""
+# Cache for the per-node healthy-pod baseline, one file per node, for the same
+# reason and with the same subshell constraint as the memo above. Empty when
+# mktemp fails, which costs the saving and not the evidence: the baseline is
+# then captured per pod, the way it was before the cache existed.
+_REF_CACHE=$(mktemp -d "${TMPDIR:-/tmp}/dataplane-refcache.XXXXXX" 2>/dev/null) || _REF_CACHE=""
 # The stored row carries the read's status beside its value. A hit that dropped
 # it would hand a later caller an empty answer with no way to tell "there is no
 # such pod" from "the read never said", which is the distinction the callers
@@ -613,6 +743,23 @@ capture_node() {
       echo "=== host netns: ip addr show ovn0 ==="
       timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
         ip addr show ovn0 2>&1 || true
+
+      echo
+      echo "=== host netns: ip -o addr show, all interfaces (address attribution) ==="
+      # ovn0 alone cannot name the owner when a podIP turns out to be a LOCAL
+      # address instead: the interface actually holding it might be anything on
+      # the host (see the header block). This is the same info scoped to every
+      # interface, not just ovn0.
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
+        ip -o addr show 2>&1 || true
+
+      echo
+      echo "=== host netns: ip route show table local (address attribution) ==="
+      # A podIP resolving to `local <ip> dev lo table local` here is the
+      # fingerprint from the header block: it wins over the ovn0 route in
+      # `main` because table local is consulted first (see `ip rule` above).
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
+        ip route show table local 2>&1 || true
     else
       echo
       if [ "$_cni_ok" -eq 0 ]; then
@@ -622,6 +769,210 @@ capture_node() {
       fi
     fi
   } >> "$nf" 2>&1 || true
+}
+
+# capture_pod_dataplane <ns> <pod> <podip> <node> <label> [scope] -- the
+# pod-specific captures for ONE pod on <node>.
+#
+# scope is `full` (default) or `route-only`. Full takes everything: Ready
+# conditions and events, cilium CT, the host route, kernel conntrack, the OVN
+# port binding and the OVS ovn-installed flag. route-only takes the route and
+# the conntrack and nothing else, and the healthy-pod baseline asks for it.
+# Three of the four blocks it drops -- cilium CT, the OVN port binding, the OVS
+# ovn-installed flag -- describe how a pod was PROGRAMMED, and a pod chosen for
+# being healthy is correctly programmed by definition; they compare nothing and
+# cost 105s of the 135s of exec bounds, on the leg most likely to be cut. The
+# fourth is the Ready-conditions and events pair, which a pod selected for
+# reporting Ready=True and Running has already answered, and dropping it is what
+# leaves the baseline with no read of its own -- the 30s the MAX_PODS note above
+# spends on it, against 179s at full scope. What a baseline is read for is the
+# route and the conntrack beside the wedged pod's own. <label> is
+# stamped in the section header and says which role the pod plays: the affected
+# pod under investigation, or the Ready pod captured beside it as a baseline.
+# Writes to stdout; the caller redirects into the pod's output file. $central
+# (the ovn-central pod, or empty) is read from the caller's scope rather than
+# threaded as a parameter, matching how the rest of this script shares
+# node-global lookups.
+capture_pod_dataplane() {
+  _cpd_ns=$1; _cpd_pod=$2; _cpd_ip=$3; _cpd_node=$4; _cpd_label=$5; _cpd_scope=${6:-full}
+
+  # Banner first, then the lookups: pod_on_node writes its failure note to
+  # stderr, and this whole function is redirected into the pod's file, so a
+  # lookup resolved above the banner puts that note on line 1 and pushes the
+  # header down. The note still reaches capture-notes.txt either way.
+  echo "################################################################"
+  echo "# POD $_cpd_ns/$_cpd_pod  podIP=${_cpd_ip:-<none>}  node=$_cpd_node  ($_cpd_label)"
+  echo "# node-global captures are in node-$_cpd_node.txt"
+  echo "################################################################"
+
+  # Only the cni-server is needed at route-only scope; resolving the other two
+  # there would cost a live lookup each whenever the memo is unavailable, for
+  # blocks that scope does not take.
+  _cpd_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_cpd_node")
+  _cpd_agent=""
+  _cpd_ovs=""
+  if [ "$_cpd_scope" = full ]; then
+    _cpd_agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$_cpd_node")
+    _cpd_ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$_cpd_node")
+  else
+    echo
+    echo "=== scope: route and conntrack only ==="
+    echo "This is a reference pod, so the cilium CT, OVN Port_Binding and OVS"
+    echo "ovn-installed blocks are deliberately NOT taken: they describe how a"
+    echo "pod was programmed, and this one was chosen for being healthy. Its"
+    echo "Ready conditions and events go for the same reason: reporting Ready"
+    echo "and Running is what selected it."
+    echo "Their absence below is a decision, not a lookup that came back empty."
+  fi
+
+  if [ "$_cpd_scope" = full ]; then
+    echo
+    echo "=== pod Ready conditions + recent probe events ==="
+    # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
+    $DP_BOUND kubectl get pod -n "$_cpd_ns" "$_cpd_pod" \
+      -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' 2>&1 \
+      || echo "(reading this pod's Ready conditions $(dp_read_outcome "$?" "$DP_READ_TIMEOUT" "$DP_BOUND"))"
+    # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
+    $DP_BOUND kubectl get events -n "$_cpd_ns" --field-selector "involvedObject.name=$_cpd_pod" \
+      -o jsonpath='{range .items[*]}{.lastTimestamp}{" "}{.reason}{": "}{.message}{"\n"}{end}' 2>&1 \
+      || echo "(reading this pod's events $(dp_read_outcome "$?" "$DP_READ_TIMEOUT" "$DP_BOUND"))"
+  fi
+
+  if [ -z "$_cpd_ip" ]; then
+    echo
+    echo "=== pod has no podIP; IP-specific route/conntrack capture skipped ==="
+    echo "Node-global Cilium/OVN state and pod allocation events remain captured."
+  fi
+
+  if [ "$_cpd_scope" = full ] && [ -n "$_cpd_ip" ] && [ -n "$_cpd_agent" ]; then
+    echo
+    echo "=== cilium-dbg bpf ct list global | grep $_cpd_ip (node=$_cpd_node agent=$_cpd_agent) ==="
+    timeout 25 kubectl exec -n "$CILIUM_NS" "$_cpd_agent" -c cilium-agent -- \
+      sh -c "cilium-dbg bpf ct list global 2>/dev/null | grep -F '$_cpd_ip' || echo 'no CT entries for $_cpd_ip'" 2>&1 || true
+  fi
+
+  if [ -n "$_cpd_ip" ] && [ -n "$_cpd_cni" ]; then
+    echo
+    echo "=== host netns: ip route get $_cpd_ip (via kube-ovn cni-server) ==="
+    timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cpd_cni" -c cni-server -- \
+      ip route get "$_cpd_ip" 2>&1 || true
+
+    echo
+    echo "=== host netns: kernel conntrack for $_cpd_ip ==="
+    # Under enable-host-legacy-routing the host->local-pod path is in the
+    # kernel netfilter conntrack table, NOT cilium BPF -- this is the
+    # authoritative table for the transient. Prefer the conntrack CLI; fall
+    # back to /proc/net/nf_conntrack when it is absent from the image.
+    timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cpd_cni" -c cni-server -- \
+      sh -c "if command -v conntrack >/dev/null 2>&1; then conntrack -L 2>/dev/null | grep -F '$_cpd_ip' || echo 'no conntrack entries for $_cpd_ip'; else grep -F '$_cpd_ip' /proc/net/nf_conntrack 2>/dev/null || echo 'no conntrack CLI; no /proc/net/nf_conntrack match for $_cpd_ip'; fi" 2>&1 || true
+  fi
+
+  if [ "$_cpd_scope" = full ] && [ -n "$central" ]; then
+    echo
+    echo "=== OVN Port_Binding / Logical_Switch_Port for $_cpd_pod.$_cpd_ns ==="
+    # kube-ovn names the OVN logical port <pod>.<namespace>.
+    timeout 20 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
+      ovn-sbctl --no-leader-only find port_binding "logical_port=$_cpd_pod.$_cpd_ns" 2>&1 || true
+    timeout 20 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
+      ovn-nbctl --no-leader-only find logical_switch_port "name=$_cpd_pod.$_cpd_ns" 2>&1 || true
+  fi
+
+  if [ "$_cpd_scope" = full ] && [ -n "$_cpd_ovs" ]; then
+    echo
+    echo "=== OVS interface ovn-installed flag + ts for iface-id=$_cpd_pod.$_cpd_ns (ovs pod $_cpd_ovs) ==="
+    # kube-ovn stamps external_ids:ovn-installed (+ -ts) on the pod's OVS
+    # interface once ovn-controller reports the port programmed -- this is
+    # the barrier the CNI waits on. The OVS interface name is opaque, so
+    # look it up by iface-id (<pod>.<ns>), then read the flag + timestamp.
+    # An ovn-installed-ts set early (before physical_flow_output installed
+    # the local-delivery flow, see node-$node.txt) is the I-P-lag signature.
+    _cpd_ovsif=$(timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_cpd_ovs" -c openvswitch -- \
+      ovs-vsctl --no-heading --columns=name find interface "external_ids:iface-id=$_cpd_pod.$_cpd_ns" 2>/dev/null \
+      | head -n 1 | tr -d '" ')
+    if [ -n "$_cpd_ovsif" ]; then
+      echo "ovs interface = $_cpd_ovsif"
+      timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_cpd_ovs" -c openvswitch -- \
+        ovs-vsctl get interface "$_cpd_ovsif" external_ids:ovn-installed external_ids:ovn-installed-ts 2>&1 || true
+    else
+      echo "no OVS interface with external_ids:iface-id=$_cpd_pod.$_cpd_ns"
+    fi
+  fi
+}
+
+# capture_pod_reference <node> <outfile> -- the healthy-pod baseline for a
+# NODE, appended to <outfile>. This collector otherwise inspects NotReady pods
+# only, so a run has nothing to compare a suspicious route or conntrack state
+# against from the same node in the same window. Picks one Ready, Running,
+# non-hostNetwork pod on <node> that this run is not already investigating, and
+# runs the route-only half of the per-pod capture against it -- the route and
+# the conntrack, which is what a baseline is read for.
+#
+# The baseline belongs to the node, not to any one affected pod, and nothing
+# about it depends on which pod asked: the candidates are the rows of the one
+# snapshot, and pod_first_ready keeps only the Ready=True ones, which every
+# affected pod fails by definition. That is what keeps the answer a function of
+# the node alone, and that is the precondition for the cache below. Had
+# eligibility been decided by excluding the asking pod instead, one node would
+# yield a different baseline for each caller, and a shared cache would then hand
+# one pod's answer to another -- including to the pod the answer names. Hence
+# the signature: a node, and a file to append to.
+#
+# The absence is recorded rather than left silent, and so is the difference
+# between the two ways of having none: a node with no eligible pod is not a
+# read that never answered, and the artifact says which one happened.
+capture_pod_reference() {
+  _cpr_node=$1; _cpr_of=$2
+
+  # Captured once per NODE, then folded into every affected pod's file from a
+  # cache. The pod is a function of the node and nothing else, so several
+  # affected pods on one node -- the ordinary shape of a wedged host->local-pod
+  # datapath rather than an edge -- would otherwise each pay for a second full
+  # per-pod capture of the same healthy pod. The cache is about that capture,
+  # not about any read: the candidates come from the cluster-wide pod list this
+  # script has already taken.
+  _cpr_cache="${_REF_CACHE:+$_REF_CACHE/$_cpr_node}"
+  if [ -n "$_cpr_cache" ] && [ -f "$_cpr_cache" ]; then
+    cat "$_cpr_cache" >> "$_cpr_of" 2>/dev/null || true
+    return 0
+  fi
+  # With no cache directory the capture still happens, once per pod as before.
+  _cpr_sink="${_cpr_cache:-$_cpr_of}"
+
+  # Picked out of the SAME snapshot the affected set came from, which is what
+  # makes an affected pod ineligible by construction rather than by exclusion:
+  # pod_filter_affected keeps rows whose Ready is not True, pod_first_ready
+  # requires Ready True, and one row cannot satisfy both. A second read would
+  # reopen that -- a pod recovering between the two reports Ready in the later
+  # one, and could be offered as the baseline for its own failure.
+  _cpr_ref=$(printf '%s\n' "$_pods_raw" | pod_first_ready "$_cpr_node")
+
+  if [ -z "$_cpr_ref" ]; then
+    {
+      echo
+      echo "################################################################"
+      if [ "$_pods_rc" -eq 0 ]; then
+        echo "# REFERENCE (Ready) pod on node=$_cpr_node: none found -- no baseline available"
+      else
+        echo "# REFERENCE (Ready) pod on node=$_cpr_node: unknown -- the pod list did not finish, so whether a baseline exists was never established"
+      fi
+      echo "################################################################"
+    } >> "$_cpr_sink" 2>&1 || true
+    if [ -n "$_cpr_cache" ]; then
+      cat "$_cpr_cache" >> "$_cpr_of" 2>/dev/null || true
+    fi
+    return 0
+  fi
+
+  _cpr_refns=$(printf '%s' "$_cpr_ref" | cut -d'|' -f1)
+  _cpr_refpod=$(printf '%s' "$_cpr_ref" | cut -d'|' -f2)
+  _cpr_refip=$(printf '%s' "$_cpr_ref" | cut -d'|' -f3)
+  {
+    echo
+    capture_pod_dataplane "$_cpr_refns" "$_cpr_refpod" "$_cpr_refip" "$_cpr_node" "REFERENCE (Ready) on node=$_cpr_node" route-only
+  } >> "$_cpr_sink" 2>&1 || true
+  if [ -n "$_cpr_cache" ]; then
+    cat "$_cpr_cache" >> "$_cpr_of" 2>/dev/null || true
+  fi
 }
 
 if [ -z "$affected" ] && [ "$_pods_rc" -ne 0 ]; then
@@ -671,7 +1022,7 @@ else
 
   i=0
   printf '%s\n' "$affected" | {
-  while IFS='|' read -r ns pod podip node _ready _phase; do
+  while IFS='|' read -r ns pod podip node _ready _phase _hostnet _eol; do
     [ -n "$ns" ] && [ -n "$pod" ] && [ -n "$node" ] || continue
     i=$((i + 1))
     if [ "$i" -gt "$MAX_PODS" ]; then
@@ -683,88 +1034,10 @@ else
     # ip rule, ovn0 addr) -- captured once per node.
     capture_node "$node"
 
-    # Pod-specific state.
+    # Pod-specific state, plus a healthy pod on the same node as a baseline.
     pf="$OUT/pod-$ns-$pod.txt"
-    agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$node")
-    ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$node")
-    {
-      echo "################################################################"
-      echo "# POD $ns/$pod  podIP=${podip:-<none>}  node=$node  (Ready=$_ready)"
-      echo "# node-global captures are in node-$node.txt"
-      echo "################################################################"
-
-      echo
-      echo "=== pod Ready conditions + recent probe events ==="
-      # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
-      $DP_BOUND kubectl get pod -n "$ns" "$pod" \
-        -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' 2>&1 \
-        || echo "(reading this pod's Ready conditions $(dp_read_outcome "$?" "$DP_READ_TIMEOUT" "$DP_BOUND"))"
-      # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
-      $DP_BOUND kubectl get events -n "$ns" --field-selector "involvedObject.name=$pod" \
-        -o jsonpath='{range .items[*]}{.lastTimestamp}{" "}{.reason}{": "}{.message}{"\n"}{end}' 2>&1 \
-        || echo "(reading this pod's events $(dp_read_outcome "$?" "$DP_READ_TIMEOUT" "$DP_BOUND"))"
-
-      if [ -z "$podip" ]; then
-        echo
-        echo "=== pod has no podIP; IP-specific route/conntrack capture skipped ==="
-        echo "Node-global Cilium/OVN state and pod allocation events remain captured."
-      fi
-
-      if [ -n "$podip" ] && [ -n "$agent" ]; then
-        echo
-        echo "=== cilium-dbg bpf ct list global | grep $podip (node=$node agent=$agent) ==="
-        timeout 25 kubectl exec -n "$CILIUM_NS" "$agent" -c cilium-agent -- \
-          sh -c "cilium-dbg bpf ct list global 2>/dev/null | grep -F '$podip' || echo 'no CT entries for $podip'" 2>&1 || true
-      fi
-
-      cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$node")
-      if [ -n "$podip" ] && [ -n "$cni" ]; then
-        echo
-        echo "=== host netns: ip route get $podip (via kube-ovn cni-server) ==="
-        timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
-          ip route get "$podip" 2>&1 || true
-
-        echo
-        echo "=== host netns: kernel conntrack for $podip ==="
-        # Under enable-host-legacy-routing the host->local-pod path is in the
-        # kernel netfilter conntrack table, NOT cilium BPF -- this is the
-        # authoritative table for the transient. Prefer the conntrack CLI; fall
-        # back to /proc/net/nf_conntrack when it is absent from the image.
-        timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
-          sh -c "if command -v conntrack >/dev/null 2>&1; then conntrack -L 2>/dev/null | grep -F '$podip' || echo 'no conntrack entries for $podip'; else grep -F '$podip' /proc/net/nf_conntrack 2>/dev/null || echo 'no conntrack CLI; no /proc/net/nf_conntrack match for $podip'; fi" 2>&1 || true
-      fi
-
-      if [ -n "$central" ]; then
-        echo
-        echo "=== OVN Port_Binding / Logical_Switch_Port for $pod.$ns ==="
-        # kube-ovn names the OVN logical port <pod>.<namespace>.
-        timeout 20 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
-          ovn-sbctl --no-leader-only find port_binding "logical_port=$pod.$ns" 2>&1 || true
-        timeout 20 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
-          ovn-nbctl --no-leader-only find logical_switch_port "name=$pod.$ns" 2>&1 || true
-      fi
-
-      if [ -n "$ovs" ]; then
-        echo
-        echo "=== OVS interface ovn-installed flag + ts for iface-id=$pod.$ns (ovs pod $ovs) ==="
-        # kube-ovn stamps external_ids:ovn-installed (+ -ts) on the pod's OVS
-        # interface once ovn-controller reports the port programmed -- this is
-        # the barrier the CNI waits on. The OVS interface name is opaque, so
-        # look it up by iface-id (<pod>.<ns>), then read the flag + timestamp.
-        # An ovn-installed-ts set early (before physical_flow_output installed
-        # the local-delivery flow, see node-$node.txt) is the I-P-lag signature.
-        ovsif=$(timeout 20 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
-          ovs-vsctl --no-heading --columns=name find interface "external_ids:iface-id=$pod.$ns" 2>/dev/null \
-          | head -n 1 | tr -d '" ')
-        if [ -n "$ovsif" ]; then
-          echo "ovs interface = $ovsif"
-          timeout 20 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
-            ovs-vsctl get interface "$ovsif" external_ids:ovn-installed external_ids:ovn-installed-ts 2>&1 || true
-        else
-          echo "no OVS interface with external_ids:iface-id=$pod.$ns"
-        fi
-      fi
-    } > "$pf" 2>&1 || true
+    capture_pod_dataplane "$ns" "$pod" "$podip" "$node" "NotReady, Ready=$_ready" > "$pf" 2>&1 || true
+    capture_pod_reference "$node" "$pf"
   done
   log "host->pod data-plane capture complete"
   }
@@ -1209,5 +1482,6 @@ capture_lb_datapath
 # TMPDIR.
 [ -n "$DP_ERR" ] && rm -f "$DP_ERR"
 [ -n "$_POD_MEMO" ] && rm -f "$_POD_MEMO"
+[ -n "$_REF_CACHE" ] && rm -rf "$_REF_CACHE"
 
 exit 0
