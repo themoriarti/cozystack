@@ -28,14 +28,14 @@ spec:
   # Global failure handler: on any test error, capture a crust-gather snapshot of
   # the HOST cluster BEFORE Chainsaw's cleanup deletes the test's resources. This
   # is the Chainsaw analog of the per-failed-test EXIT-trap host snapshot in
-  # hack/cozytest.sh (which only covers the BATS install/openapi tests) — without
-  # it the Chainsaw app suite uploads a cozyreport.tgz with zero per-test
-  # snapshots. Combines additively with the per-test events/describe catches in
-  # each suite; the nested-tenant snapshot for the kubernetes-* tests is captured
-  # separately by hack/e2e-chainsaw/_lib/run-kubernetes.sh while its LB is alive.
-  # The snapshot lands under the _out/cozyreport/snapshots/<test>/ tree that
-  # hack/cozyreport.sh folds into the uploaded artifact, so each failed test
-  # keeps its own `crust-gather serve`-able cluster state.
+  # hack/cozytest.sh (which covers the BATS prepare-cluster, install and openapi
+  # tests) — without it the Chainsaw app suite uploads a cozyreport.tgz with zero
+  # per-test snapshots. Combines additively with the per-test events/describe
+  # catches in each suite; the nested-tenant snapshot for the kubernetes-* tests
+  # is captured separately by hack/e2e-chainsaw/_lib/run-kubernetes.sh while its
+  # LB is alive. The snapshot lands under the _out/cozyreport/snapshots/<test>/
+  # tree that hack/cozyreport.sh folds into the uploaded artifact, so each failed
+  # test keeps its own `crust-gather serve`-able cluster state.
   #
   # Every catch script below carries an explicit `timeout:`. A Chainsaw script
   # op is bounded by `timeouts.exec` (5m above) unless it overrides it, and the
