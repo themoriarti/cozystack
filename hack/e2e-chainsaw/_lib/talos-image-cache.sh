@@ -144,18 +144,38 @@ _talos_image_cache_reachable_from_tenant() {
   _talos_image_cache_probe_succeeded "$out"
 }
 
+# _talos_image_cache_deploy_state: answer "is the mirror Deployment there?" as
+# exactly one of present, absent or unknown.
+#
+# NOT IMPLEMENTED — this placeholder always claims present. The caller below is
+# wired to it so the distinction has one place to live, but until the body is
+# real it gets an answer that was never asked for.
+_talos_image_cache_deploy_state() {
+  printf 'present'
+}
+
 # resolve_talos_image_factory_url: print the imageFactoryURL to use, or an empty
-# string to signal "use the chart default". The decision is resolved once (with a
+# string to signal "use the chart default". A decision that was actually reached
+# — the mirror is there, or it demonstrably is not — is taken once (with a
 # bounded wait for the mirror to finish seeding) and cached in a /tmp file that
 # persists across bats files (they all exec in the same sandbox container), so
-# only the first tenant Kubernetes test pays the readiness wait.
+# only the first tenant Kubernetes test pays the readiness wait. A lookup that
+# never got an answer decides nothing and caches nothing; the next tenant test
+# asks again.
 resolve_talos_image_factory_url() {
   if [ -f "$_TALOS_IMAGE_FACTORY_DECISION_FILE" ]; then
     cat "$_TALOS_IMAGE_FACTORY_DECISION_FILE"
     return 0
   fi
-  local url=""
-  if kubectl -n kube-system get deploy talos-image-cache >/dev/null 2>&1; then
+  local url="" state
+  state=$(_talos_image_cache_deploy_state)
+  if [ "$state" = unknown ]; then
+    # Nothing was established, so nothing is cached: this caller falls back for
+    # itself and the next tenant test asks again.
+    echo "WARNING: could not determine whether the talos-image-cache mirror is deployed (the lookup's own account of why is above) — this test falls back to public factory.talos.dev; nothing is cached, so the next tenant test asks again" >&2
+    return 0
+  fi
+  if [ "$state" = present ]; then
     # Available only after the seed initContainer has fully fetched the image, so
     # this is the signal that the mirror is warm.
     if kubectl -n kube-system rollout status deploy/talos-image-cache --timeout=12m >/dev/null 2>&1; then
