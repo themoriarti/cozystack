@@ -158,15 +158,19 @@ escalate_to_full_suite() {
 # selecting the one suite that covers it (#3665). The round-trip is pinned by a
 # test rather than left to review.
 #
-# Mapping optimistically is safe: a name that is not a suite is dropped by the
-# intersection at the bottom of the script.
+# Mapping optimistically is safe: a name that is not a suite is dropped by
+# intersect_suites() downstream.
+#
+# Only names the two general arms get wrong are listed. `postgres-application`
+# and `external-dns` used to sit here and no longer do: the first is what
+# stripping the suffix already produces, and the second is what carrying the
+# source name through already produces, so both said the rule twice and made
+# this list read as longer than the set of real exceptions.
 src_to_suites() {
   case "$1" in
-    postgres-application) echo postgres ;;
     vm-instance-application) echo vminstance ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
     securitygroup-controller) echo securitygroup ;;
-    external-dns) echo external-dns ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
   esac
@@ -189,8 +193,8 @@ build_owners_index() {
 # Without this filter, postgres-operator -> keycloak -> cozystack-engine -> EVERY
 # app, defeating test-impact analysis. Dropping the engine reverse edges keeps
 # the engine reachable but stops it propagating selection downstream. A change to
-# the engine itself still triggers the full suite via the no-app-descendants
-# safety-net at the bottom of this script.
+# the engine itself still triggers the full suite: its group reaches no suite, so
+# the per-path escalation below fires on it.
 build_reverse_deps() {
   yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "" and . != "cozystack.cozystack-engine") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
 }
@@ -219,7 +223,7 @@ REVERSE=$(printf '%s\n' "$REVERSE" | sort -u)
 
 trigger_full=0
 trigger_any=0
-selected_sources=""
+selected_groups=""
 selected_apps=""
 
 # `|| [ -n "$file" ]` is what makes the classification below total. POSIX read
@@ -293,7 +297,12 @@ while IFS= read -r file || [ -n "$file" ]; do
   if [ -n "$rel" ]; then
     src=$(echo "$OWNERS" | awk -v p="$rel" -F'\t' '$1==p {print $2}')
     if [ -n "$src" ]; then
-      selected_sources="$selected_sources $src"
+      # Keep this path's owning sources together as one comma-joined group. The
+      # unit coverage is decided over is the changed PATH, not the single
+      # source: system/postgres-operator belongs to two PackageSources, one of
+      # which reaches no suite, and deciding per source would escalate on that
+      # half and run everything for every change to it.
+      selected_groups="$selected_groups $(echo "$src" | paste -sd , -)"
       trigger_any=1
     else
       # Inside packages/ but no graph entry — be conservative.
@@ -318,42 +327,85 @@ if [ "$trigger_any" = 0 ]; then
   exit 0  # nothing to run
 fi
 
-# Transitive closure: walk reverse-deps from each selected source.
-all_sources="$selected_sources"
-while :; do
-  new=""
-  for s in $all_sources; do
-    deps=$(echo "$REVERSE" | awk -v src="$s" -F'\t' '$1==src {print $2}')
-    for d in $deps; do
-      case " $all_sources " in *" $d "*) ;; *) new="$new $d";; esac
+# Deduplicate a space-separated suite list; keep only names that are suites.
+intersect_suites() {
+  echo "$1" | tr ' ' '\n' | sort -u | grep -v '^$' | while read -r app; do
+    if echo "$all_apps" | grep -Fxq "$app"; then
+      echo "$app"
+    fi
+  done | paste -sd ' ' -
+}
+
+# Transitive closure over reverse-deps from the given PackageSource names, every
+# reached source mapped through src_to_suites. Emits candidate suite names, not
+# yet filtered — pass the result through intersect_suites.
+#
+# POSIX sh has no `local`, so this scribbles on all_sources/new/final. Its one
+# call site invokes it inside $( ), which contains the damage; a direct call
+# would clobber the caller's variables. A test pins that there is still exactly
+# one call.
+resolve_suites() {
+  all_sources="$*"
+  while :; do
+    new=""
+    for s in $all_sources; do
+      deps=$(echo "$REVERSE" | awk -v src="$s" -F'\t' '$1==src {print $2}')
+      for d in $deps; do
+        case " $all_sources " in *" $d "*) ;; *) new="$new $d";; esac
+      done
     done
+    [ -z "$new" ] && break
+    all_sources="$all_sources $new"
   done
-  [ -z "$new" ] && break
-  all_sources="$all_sources $new"
-done
 
-# Map every reached source to its Chainsaw suite names. Restricting this to
-# *-application names plus external-dns is what left cozystack.kuberture and
-# cozystack.securitygroup-controller walked to and then discarded, so their
-# suites were unreachable from their own packages (#3665).
-final=""
-for s in $all_sources; do
-  final="$final $(src_to_suites "${s#cozystack.}")"
-done
+  final=""
+  for s in $all_sources; do
+    final="$final $(src_to_suites "${s#cozystack.}")"
+  done
+  echo "$final"
+}
 
-# Add directly-selected suites from per-suite edits.
-final="$final $selected_apps"
-
-# Deduplicate; intersect with available Chainsaw suites.
-final_apps=$(echo "$final" | tr ' ' '\n' | sort -u | grep -v '^$' | while read -r app; do
-  if echo "$all_apps" | grep -Fxq "$app"; then
-    echo "$app"
+# Escalation is a property of the changed path, not of the whole diff. A path
+# that reaches no runnable suite is covered by nothing and forces the full run
+# on its own account, whatever the rest of the diff selected.
+#
+# Reading that off an empty FINAL selection instead — which is what the old
+# safety net at the bottom did, and still does as a backstop — let any other
+# changed path that contributed a suite name swallow the escalation, with
+# nothing in the output to record that it happened (#3330). The shape that hits
+# it is ordinary rather than exotic: change a platform component, adjust the
+# Chainsaw test next to it, and the component's escalation disappears behind
+# that one suite.
+group_suites=""
+for g in $(echo "$selected_groups" | tr ' ' '\n' | sort -u); do
+  s=$(intersect_suites "$(resolve_suites "$(echo "$g" | tr ',' ' ')")")
+  if [ -z "$s" ]; then
+    # Say which changed path bought the full run. Every other escalation here
+    # names its cause on stderr, and this one is the common case rather than the
+    # rare one — most packages reach no suite of their own — so without a line
+    # "why did this pull request run everything" has no answer in the log. The
+    # sources are printed rather than the path because they are what the walk
+    # started from; the path that owns them is the one this group came from in
+    # the classification loop above.
+    echo "select-e2e: no runnable suite covers $(echo "$g" | tr ',' ' ') — escalating to the full suite" >&2
+    escalate_to_full_suite
   fi
-done | paste -sd ' ' -)
+  group_suites="$group_suites $s"
+done
 
-# Safety net: a system source with no *-application descendants would otherwise
-# silently skip E2E. Fall back to full suite so a path inside the graph is
-# never silently dropped.
+# Union of the graph-selected suites and the directly-selected ones from
+# per-suite edits. Walking the graph once per group rather than once over all of
+# them costs an extra walk per changed path and buys the escalation above; the
+# answer is unchanged, because reverse reachability distributes over union, so
+# the union of the per-group results is the set the single walk produced.
+final_apps=$(intersect_suites "$group_suites $selected_apps")
+
+# Backstop. Every graph path above either escalates or contributes a suite that
+# exists, so what still reaches this is a per-suite edit naming a directory that
+# holds no chainsaw-test.yaml — shared material beside _lib/, or a suite nested
+# deeper than the depth-2 scan looks. Selecting nothing for those would skip
+# E2E outright, so failing towards the full suite is the only safe way to be
+# wrong here.
 if [ -z "$final_apps" ]; then
   escalate_to_full_suite
 fi
