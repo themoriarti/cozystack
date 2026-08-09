@@ -147,11 +147,97 @@ _talos_image_cache_reachable_from_tenant() {
 # _talos_image_cache_deploy_state: answer "is the mirror Deployment there?" as
 # exactly one of present, absent or unknown.
 #
-# NOT IMPLEMENTED — this placeholder always claims present. The caller below is
-# wired to it so the distinction has one place to live, but until the body is
-# real it gets an answer that was never asked for.
+# --ignore-not-found is what makes a three-way answer possible: a genuine absence
+# becomes exit 0 with no output, which leaves a non-zero exit meaning only "the
+# question was never answered" — connection refused, Unauthorized, timed out.
+# A plain `get` collapses those two into one exit code, and the caller below then
+# reads a blip as an absence, caches it, and sends every tenant worker in the
+# suite to the public factory over the live egress the mirror exists to avoid.
+# Same idiom as the teardown poll in hack/e2e-chainsaw/_lib/etcd-cleanup.sh.
+#
+# talos_image_cache_diagnose asks the same question and answers it its own way,
+# and the two are separate on purpose. That one runs on the node-join failure
+# path under a phase budget, where re-asking spends what the crust-gather
+# snapshot after it needs, and it gives up after one attempt. This one runs on
+# the happy path, where a re-ask costs a suite nothing and buys it the mirror.
+#
+# The re-ask is small, and each attempt has to be bounded twice over for the
+# re-ask to be worth anything. kubectl's --request-timeout defaults to 0 — no
+# deadline on the request at all — and the case this loop exists for is a
+# connection that establishes and then stalls, which client-go's dial timeout
+# does not bound. The flag on its own is still not a wall-clock bound: against
+# an unreachable apiserver kubectl retries discovery several times before it
+# gives up, so a call carrying only the flag costs a multiple of it, which
+# hack/e2e-chainsaw/_lib/pod-label-census.sh measured and sized its caller's op
+# timeout around. Asking three times would inherit that multiple, inside a
+# Chainsaw op the rest of the tenant test has to fit in. So each attempt takes
+# both bounds, the pairing the reads in run-kubernetes.sh use and explain beside
+# its pod list: --request-timeout bounds the HTTP request, timeout bounds the
+# client retrying against a wedged apiserver. A kill by timeout exits non-zero
+# and is simply another attempt that did not answer. Past that, an apiserver
+# that is down does not become reachable by asking longer, and a run whose
+# apiserver is down has bigger problems than which factory it pulls from. A
+# real absence answers on the first try and waits for nothing.
+#
+# The wrapper is skipped rather than depended on when `timeout` is not installed,
+# for the reason _talos_image_cache_bounded_read gives below and one more that is
+# specific to a loop: its exit 127 would otherwise count as an attempt that did
+# not answer, three times over, and a missing local binary would pin the whole
+# suite to the public factory while every message blamed the apiserver.
+#
+# The outer bound sits ABOVE the inner one rather than level with it, and that
+# gap is the whole reason kubectl ever gets to explain itself. Measured against a
+# stub apiserver, the three ways this call fails are not alike. A refused port
+# answers in under a second and names the refusal. One that completes TCP but
+# stalls in TLS gets kubectl's own handshake deadline, which is shorter than
+# either bound and fires twice inside the window, so there is text even though
+# the wrapper ends up killing the call. A blackholed address — SYN dropped, no
+# RST, which is what a wedged node or a netpol looks like — produces nothing at
+# all until some deadline expires, and with the two bounds equal the expiry that
+# arrives is the wall-clock kill, at the same instant as the request deadline it
+# beats to it. `--request-timeout` then cannot fire in any of the three, which
+# makes it decoration. Ten seconds of headroom hands that case back to kubectl:
+# the request deadline ends the attempt and says why, and the wrapper stays as
+# the backstop for a client that overruns its own deadline. The cost is ten more
+# seconds per attempt on a path where the apiserver is already unreachable,
+# against a 50m op.
+#
+# kubectl's stderr is therefore deliberately not swallowed: it is the only thing
+# that separates refused from unauthorized from stalled, and suppressing it would
+# replace one silent failure with another. It is still not guaranteed — a kill
+# can always land before the client has said anything — so the last attempt's
+# exit status is named too, in the vocabulary the diagnostic reads below use for
+# 124 and 137. Between the two the caller's warning always has something real to
+# point at.
+_TALOS_IMAGE_CACHE_QUERY_TRIES="${_TALOS_IMAGE_CACHE_QUERY_TRIES:-3}"
+_TALOS_IMAGE_CACHE_QUERY_DELAY="${_TALOS_IMAGE_CACHE_QUERY_DELAY:-5}"
 _talos_image_cache_deploy_state() {
-  printf 'present'
+  local out rc try=1
+  while :; do
+    rc=0
+    if command -v timeout >/dev/null 2>&1; then
+      out=$(timeout -k 5 40 kubectl -n kube-system get deploy talos-image-cache \
+        --request-timeout=30s --ignore-not-found -o name) || rc=$?
+    else
+      out=$(kubectl -n kube-system get deploy talos-image-cache \
+        --request-timeout=30s --ignore-not-found -o name) || rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
+      if [ -n "$out" ]; then
+        printf 'present'
+      else
+        printf 'absent'
+      fi
+      return 0
+    fi
+    if [ "$try" -ge "$_TALOS_IMAGE_CACHE_QUERY_TRIES" ]; then
+      echo "WARNING: the talos-image-cache lookup gave up after ${_TALOS_IMAGE_CACHE_QUERY_TRIES} attempts; the last one exited ${rc} (124 = cut off at the wall-clock bound, 137 = SIGKILL after it, and both of those print nothing of their own; any other status is kubectl's, and its message is above)" >&2
+      printf 'unknown'
+      return 0
+    fi
+    try=$((try + 1))
+    sleep "$_TALOS_IMAGE_CACHE_QUERY_DELAY"
+  done
 }
 
 # resolve_talos_image_factory_url: print the imageFactoryURL to use, or an empty
