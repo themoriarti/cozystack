@@ -125,7 +125,11 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'mirrors:'
-        documentIndex: 6
+        # Selected by kind, not by position: a negative assert that addresses the
+        # wrong document passes silently, so it must not depend on document order.
+        documentSelector:
+          path: kind
+          value: Job
 
   - it: talos.registryMirrors renders machine.registries.mirrors into the worker TalosConfigTemplate
     templates:
