@@ -28,6 +28,7 @@ spec:
         #   node-join diagnostics reads
         #   serial-console family (~5m50s at worst, ~3m30s at the pool's minimum)
         #   guest Talos capture
+        #   ghcr-mirror state + access log dump
         #   talos-image-cache diagnosis
         # and then, after the phase rather than inside it, the in-process tenant
         # crust-gather snapshot.

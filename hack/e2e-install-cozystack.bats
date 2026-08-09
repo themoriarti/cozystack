@@ -69,6 +69,32 @@
   fi
 }
 
+@test "Deploy ghcr.io pull-through mirror (best-effort e2e mirror)" {
+  # Tenant Kubernetes worker Talos nodes pull ghcr.io/siderolabs/kubelet straight
+  # from public ghcr.io. That egress is intermittently rate-limited from the CI
+  # runner, the pull dies on a TLS handshake timeout, the kubelet service never
+  # starts and no tenant node joins (cozystack/cozystack#3513). This Deployment
+  # caches ghcr.io locally; tenant CRs point spec.talos.registryMirrors at its
+  # Service. Readiness is gated at point-of-use in
+  # hack/e2e-chainsaw/_lib/ghcr-mirror.sh, which falls back to direct pulls.
+  #
+  # Its own @test, not folded into the Talos image factory cache above: that step
+  # returns early when it cannot read talos.schematicID/version, and this manifest
+  # substitutes no placeholders and needs neither value. Sharing a block would let
+  # a values.yaml restructure silently stop deploying this mirror.
+  #
+  # The CiliumClusterwideNetworkPolicy in the manifest is deferred to point-of-use
+  # for the same reason as above: Cilium's CRDs do not exist until Cozystack is
+  # installed.
+  yq 'select(.kind != "CiliumClusterwideNetworkPolicy")' hack/e2e-ghcr-mirror.yaml \
+    | kubectl apply -f - || echo "WARNING: failed to apply ghcr-mirror (fallback to direct ghcr.io pulls)"
+  if kubectl -n kube-system get deploy ghcr-mirror >/dev/null 2>&1; then
+    echo "ghcr-mirror Deployment created (pull-through cache for ghcr.io)"
+  else
+    echo "WARNING: ghcr-mirror Deployment NOT created — tenant workers will pull ghcr.io directly"
+  fi
+}
+
 @test "Required installer chart exists" {
   if [ ! -f packages/core/installer/Chart.yaml ]; then
     echo "Missing: packages/core/installer/Chart.yaml" >&2
