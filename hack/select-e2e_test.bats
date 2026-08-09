@@ -93,30 +93,38 @@ assert_full_suite() {
 }
 
 @test "a CNI change selects every suite the graph can reach" {
-    # Named for what it measures rather than for the full suite it used to claim.
+    # Named for what it measures rather than for the full suite it once claimed.
     # `packages/system/cilium` is owned by cozystack.networking and resolves
-    # through the dependency graph, not through full_suite_pattern, so the
-    # selection is "every suite reachable from networking" — which is 19 of the
-    # 21 that exist, not all of them.
+    # through the dependency graph, not through full_suite_pattern, so what this
+    # measures is "every suite reachable from networking".
     #
-    # The two it cannot reach are kuberture and securitygroup. select-e2e.sh maps
-    # a source to suites only for *-application names, plus external-dns by
-    # name; cozystack.kuberture and cozystack.securitygroup-controller are
-    # neither, so the walk reaches them and the filter drops them. Both declare
-    # cozystack.networking as a dependency, so this is the selector under-
-    # selecting, not the graph being right — a CNI change that breaks either
-    # controller runs neither of their suites. Tracked in #3665. Subtracted here
-    # rather than papered over: closing that gap turns this test red, which is
-    # the correct moment to notice — the two names below are a measurement of
-    # today's selector, not a typo. The previous `wc -w -gt 5` assert passed on
-    # 19 and said nothing.
+    # That used to be 19 of the 21 suites, subtracted here by name: the mapping
+    # covered *-application sources plus external-dns, so the walk reached
+    # cozystack.kuberture and cozystack.securitygroup-controller and the filter
+    # dropped them again — a CNI change ran neither of the two controller suites
+    # most likely to regress from it. With the mapping no longer restricted to
+    # app-shaped names, both round-trip and the reachable set is the whole tree.
+    # The subtraction is gone rather than inverted: leaving it as an exclusion
+    # list would keep the assertion green if the walk stopped reaching them for
+    # some unrelated reason.
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
+    script="$PWD/hack/select-e2e.sh"
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/cilium/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    reachable=$(full_suite_list | tr ' ' '\n' | grep -vxE 'kuberture|securitygroup' | paste -sd ' ' -)
-    assert_selection "expected every graph-reachable suite" "$output" "$reachable"
+    assert_selection "expected every graph-reachable suite" "$output" "$(full_suite_list)"
+    # Reachable and full now agree, so the equality above can no longer tell a
+    # walk that reached everything from an escalation that printed everything.
+    # Re-run against a tree holding one suite networking reaches and one no
+    # source names at all: only a real walk leaves the second out, and an
+    # escalation prints both.
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/kuberture" "$tmp/tree/hack/e2e-chainsaw/zz-no-source"
+    touch "$tmp/tree/hack/e2e-chainsaw/kuberture/chainsaw-test.yaml" \
+          "$tmp/tree/hack/e2e-chainsaw/zz-no-source/chainsaw-test.yaml"
+    scoped=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources")
+    assert_selection "a CNI change must reach kuberture through the graph, not by escalating" \
+        "$scoped" "kuberture"
 }
 
 @test "library change triggers full suite" {
@@ -496,4 +504,49 @@ assert_full_suite() {
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
     rm -rf "$tmp"
+}
+
+@test "a suite owned by a non-application source is reachable from its package" {
+    # kuberture and securitygroup stand on sources named neither *-application
+    # nor after the suite, and external-dns on one that carries the suite name
+    # itself. All three map through src_to_suites, so a change to their package
+    # selects that suite instead of escalating the whole run (#3665).
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/kuberture/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "kuberture" ]
+    echo "packages/system/securitygroup-controller/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "securitygroup" ]
+    echo "packages/system/external-dns/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "external-dns" ]
+    rm -rf "$tmp"
+}
+
+@test "every suite round-trips between the two mapping tables" {
+    # select-install.sh maps a suite to the PackageSource that installs it, and
+    # select-e2e.sh must map that source back to the suite. A suite that does
+    # not round-trip is unreachable from its own package, so every change to it
+    # escalates to the full run — which is how the kuberture and securitygroup
+    # entries came to be missing in the first place. Pinning the property rather
+    # than those two names is what stops the next off-convention source
+    # repeating it silently.
+    eval "$(sed -n '/^src_to_suites()/,/^}/p' hack/select-e2e.sh)"
+    eval "$(sed -n '/^suite_to_source()/,/^}/p' hack/select-install.sh)"
+    # suite_to_source falls back to probing the graph for a source of that name,
+    # and reads it from NODES, which its own script builds before calling it.
+    NODES=$(yq -rN '.metadata.name' packages/core/platform/sources/*.yaml | sort -u)
+    for suite in $(full_suite_list | tr ' ' '\n'); do
+        src=$(suite_to_source "$suite")
+        if [ -z "$src" ]; then
+            echo "suite '$suite' has no source in select-install.sh's suite_to_source" >&2
+            exit 1
+        fi
+        if ! src_to_suites "${src#cozystack.}" | tr ' ' '\n' | grep -Fxq "$suite"; then
+            echo "suite '$suite' maps to $src, which select-e2e.sh maps back to '$(src_to_suites "${src#cozystack.}")'" >&2
+            exit 1
+        fi
+    done
 }

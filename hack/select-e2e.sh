@@ -13,8 +13,8 @@
 #                   inert_config_pattern for repo meta and agent config
 #   - <suite names> selected per the PackageSource dependency graph
 #   - full list     any path that affects all tests, OR an unrecognised
-#                   packages/* path, OR a per-app source whose graph has
-#                   no *-application descendants, OR a path matching NEITHER
+#                   packages/* path, OR a changed package that reaches no
+#                   runnable suite through the graph, OR a path matching NEITHER
 #                   the full-suite nor the inert list, OR a yq that failed to
 #                   build the dependency graph (conservative fallbacks)
 #   - nothing, and  the suite list itself is unavailable: find failed, or
@@ -148,12 +148,24 @@ escalate_to_full_suite() {
 }
 
 # PackageSource name -> Chainsaw suite name(s). Most *-application sources map
-# by stripping the suffix; explicit overrides for the few that don't.
+# by stripping the suffix, a source that is not an app carries its own name
+# (cozystack.kuberture owns the kuberture suite), and the few that match neither
+# are listed explicitly.
+#
+# This is the inverse of select-install.sh's suite_to_source() and has to stay
+# in step with it — a suite that does not round-trip is unreachable from its own
+# package, so every change to that package escalates to the full run instead of
+# selecting the one suite that covers it (#3665). The round-trip is pinned by a
+# test rather than left to review.
+#
+# Mapping optimistically is safe: a name that is not a suite is dropped by the
+# intersection at the bottom of the script.
 src_to_suites() {
   case "$1" in
     postgres-application) echo postgres ;;
     vm-instance-application) echo vminstance ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
+    securitygroup-controller) echo securitygroup ;;
     external-dns) echo external-dns ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
@@ -320,14 +332,13 @@ while :; do
   all_sources="$all_sources $new"
 done
 
-# Filter to *-application sources, then map to Chainsaw suite names.
+# Map every reached source to its Chainsaw suite names. Restricting this to
+# *-application names plus external-dns is what left cozystack.kuberture and
+# cozystack.securitygroup-controller walked to and then discarded, so their
+# suites were unreachable from their own packages (#3665).
 final=""
 for s in $all_sources; do
-  app=${s#cozystack.}
-  case "$app" in
-    *-application) final="$final $(src_to_suites "$app")" ;;
-    external-dns) final="$final external-dns" ;;
-  esac
+  final="$final $(src_to_suites "${s#cozystack.}")"
 done
 
 # Add directly-selected suites from per-suite edits.

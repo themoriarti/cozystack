@@ -78,6 +78,8 @@ A parent HelmRelease that hit its wait timeout, uninstalled, and reinstalled is 
 
 When adding a new app package, confirm `select-e2e.sh` maps it correctly (it has a unit test, `hack/select-e2e_test.bats`). A new app whose suite directory does not yet exist will not be selected — add `hack/e2e-chainsaw/<app>/chainsaw-test.yaml` first.
 
+`src_to_suites()` maps a PackageSource name to the suites it owns and is the inverse of `select-install.sh`'s `suite_to_source()`. A test walks every suite through both tables, so a source whose name fits neither convention — not `<suite>-application`, not the suite name itself — fails there rather than quietly making its own suite unreachable, which turns every change to that package into a full run (#3665).
+
 #### What TIA does and does not do
 
 Be precise about TIA's scope — it is narrower than "skip E2E for unrelated PRs," and the wiring has consequences worth knowing before you rely on it or change it.
