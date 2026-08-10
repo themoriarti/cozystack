@@ -516,7 +516,7 @@ assert_file_contains() {
   assert_file_contains '(b) in-guest Talos dmesg + kubelet logs: not collected' "$tmp/out"
   assert_file_contains 're-probe talos-image-cache ClusterIP + cacher debug bundle: not collected' "$tmp/out"
   assert_file_contains '(d) tenant worker CPU throttling: not collected' "$tmp/out"
-  assert_file_contains 'ghcr-mirror state + access log: not collected' "$tmp/out"
+  assert_file_contains 'ghcr-mirror state, access log and warm-up Job: not collected' "$tmp/out"
   rm -rf "$tmp"
 }
 

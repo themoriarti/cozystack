@@ -1908,8 +1908,8 @@ cozy_report_node_join_failure() {
   # and this one waits, whichever of them is cheaper. Cheaper than the
   # talos-image-cache re-probe below, which creates a Pod and waits on curl
   # retries, so it goes ahead of it.
-  if cozy_diag_phase_has_time 'ghcr-mirror state + access log'; then
-    echo "--- ghcr-mirror state + access log ---"
+  if cozy_diag_phase_has_time 'ghcr-mirror state, access log and warm-up Job'; then
+    echo "--- ghcr-mirror state, access log and warm-up Job ---"
     ghcr_mirror_diagnose || true
   fi
 
