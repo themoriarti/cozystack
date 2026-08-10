@@ -353,6 +353,8 @@ The fix (PR #2584): both job `if:` blocks gate on `github.event.pull_request.bas
 
 ### When the bot fails
 
+If the run triggered by the merge dies without opening a backport PR, look for a run of this workflow that has not finished before retrying — `gh run list --workflow backport.yaml --branch <the PR's head branch>` — and clear it, because the retry queues behind it rather than replacing it. Do not filter by status: a run whose jobs are waiting for a runner, or which is held behind the concurrency group, is not `in_progress`, and filtering it out is how you conclude nothing is running. `--branch` narrows the list but does not identify the PR, since head branch names are not unique across forks and `gh run list` has no PR filter, so confirm which PR a run belongs to before cancelling it or you cancel someone else's backport. If cancelling does not clear the run it holds the group until GitHub retires it and the retry keeps queueing; that case has not been exercised here. A run whose jobs have all finished can still sit `in_progress`, which looks the same from the PR as a run that died. Then remove whichever backport label the PR already carries and add it back: a label event is the only other trigger, and it qualifies on the label it carries, so re-applying it is what starts a fresh attempt.
+
 Conflicting cherry-picks produce a draft PR via `conflict_resolution: draft_commit_conflicts`. Look for the bot's comment with the merge-conflict diff. You either:
 
 - Resolve in the draft branch and undraft, or
