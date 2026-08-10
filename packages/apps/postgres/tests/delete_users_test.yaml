@@ -28,7 +28,7 @@ tests:
     asserts:
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: "MANAGED_USERS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT r.rolname FROM pg_roles r JOIN pg_shdescription s ON s.objoid = r.oid AND s.classoid = 'pg_authid'::regclass WHERE s.description = 'user managed by helm'\"\\)"
+          pattern: "MANAGED_USERS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT r.rolname FROM pg_roles r JOIN pg_shdescription s ON s.objoid = r.oid AND s.classoid = 'pg_authid'::regclass WHERE s.description = 'user managed by helm' AND r.oid IN \\(SELECT m.member FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed'\\)\"\\)"
       - notMatchRegex:
           path: stringData["init.sh"]
           pattern: 'du\+'
