@@ -268,11 +268,15 @@ while IFS= read -r file || [ -n "$file" ]; do
       trigger_any=1
       continue ;;
     examples/backups/*/*)
-      # The etcd and postgres backup round-trip tests execute the example
-      # scripts under examples/backups/<app>/ as their harness, so an edit
-      # there must run that app's suite. A dir with no matching suite is a
-      # docs-only demo and stays ignored (adding it to selected_apps would
-      # empty the final intersection and trip the full-suite safety net).
+      # The etcd, postgres, mariadb and clickhouse backup round-trip tests
+      # execute the example scripts under examples/backups/<app>/ as their
+      # harness, so an edit there must run that app's suite. This mapping is
+      # also why a round-trip Test belongs in its app's own suite dir: put it
+      # in a dir whose name does not match examples/backups/<app>/ and an edit
+      # to the harness selects a suite that cannot exercise it. A dir with no
+      # matching suite is a docs-only demo and stays ignored (adding it to
+      # selected_apps would empty the final intersection and trip the
+      # full-suite safety net).
       app=$(echo "$file" | sed -nE 's,^examples/backups/([^/]+)/.*,\1,p')
       if echo "$all_apps" | grep -Fxq "$app"; then
         selected_apps="$selected_apps $app"
