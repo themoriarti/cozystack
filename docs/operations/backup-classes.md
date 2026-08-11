@@ -89,6 +89,8 @@ spec:
 
 The chart declares that storage as `s3-storage`, which the `cozy-default-mongodb` strategy names (`storageName: s3-storage`, `type: logical`). The driver then drives on-demand backups and restores through the unified `BackupJob` / `RestoreJob` / `Plan` interface on top of the operator's storage config — adding restore-to-differently-named instances (via `PerconaServerMongoDBRestore.spec.backupSource`) and point-in-time recovery that the raw scheduled-task / `mongodump` paths do not offer. When a target cluster has backups disabled, the driver surfaces a clear `Ready=False` precondition on the BackupJob/RestoreJob rather than hanging until the deadline.
 
+For a to-copy restore the operator reads the dump from the **source** backup's bucket/endpoint, but authenticates with the **target** cluster's own S3 credentials (the source release's Secret dies with it in a DR scenario). So the target application's credentials must be able to read the source bucket — the common case where both share the one platform `cozy-backups` bucket. A target whose credentials are scoped to a different S3 account or bucket cannot read the source archive, and the restore fails loudly with `AccessDenied` (RestoreJob `Failed`) rather than silently restoring nothing.
+
 A full, scripted example (write a marker document, back up, restore to a copy, assert the round-trip while the source stays untouched) is in [`examples/backups/mongodb/`](../../examples/backups/mongodb/) — driven by `run-all.sh`.
 
 ### Point-in-time recovery (MongoDB)
