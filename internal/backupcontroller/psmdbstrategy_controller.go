@@ -4,6 +4,7 @@ package backupcontroller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -613,6 +614,14 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 	// persisted on the Cozystack Backup so a reaped operator CR still restores.
 	source, err := r.resolveMongoDBBackupSource(ctx, backup)
 	if err != nil {
+		// A read error on the live operator Backup CR is retryable (cache not
+		// yet synced, apiserver hiccup); requeue rather than fail the
+		// RestoreJob, matching the backup path's handling of the symmetric
+		// read error. Only a genuinely unresolvable source (no destination)
+		// is terminal.
+		if errors.Is(err, errTransientRestoreSource) {
+			return ctrl.Result{}, err
+		}
 		return r.markRestoreJobFailed(ctx, restoreJob, err.Error())
 	}
 
@@ -725,11 +734,20 @@ func (r *RestoreJobReconciler) requeueMongoDBRestoreWaiting(ctx context.Context,
 	return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
 }
 
+// errTransientRestoreSource marks a backup-source resolution failure that a
+// retry can clear — an API read error (cache not yet synced, apiserver hiccup)
+// on the live operator Backup CR — as opposed to a terminal one (no restorable
+// destination). The RestoreJob reconciler requeues on it rather than failing
+// the job, mirroring the backup path, which requeues the symmetric live-CR read
+// error (return ctrl.Result{}, err) instead of failing the BackupJob.
+var errTransientRestoreSource = errors.New("transient backup-source resolution error")
+
 // resolveMongoDBBackupSource builds the restore backupSource from the freshest
 // available source: the live operator Backup CR's status when it still exists,
 // otherwise the snapshot persisted on the Cozystack Backup at backup time.
 // Fails terminally when neither yields a destination — without one there is
-// nothing to restore from.
+// nothing to restore from. A transient read error on the live Backup CR is
+// wrapped in errTransientRestoreSource so the caller can requeue instead.
 func (r *RestoreJobReconciler) resolveMongoDBBackupSource(ctx context.Context, backup *backupsv1alpha1.Backup) (*psmdbtypes.BackupSource, error) {
 	// Live operator Backup CR (same namespace as the Cozystack Backup).
 	sourceBackupName := backup.Spec.DriverMetadata[psmdbBackupNameKey]
@@ -746,7 +764,7 @@ func (r *RestoreJobReconciler) resolveMongoDBBackupSource(ctx context.Context, b
 				}, nil
 			}
 		} else if !apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("get source PerconaServerMongoDBBackup %s/%s: %w", backup.Namespace, sourceBackupName, err)
+			return nil, fmt.Errorf("%w: get source PerconaServerMongoDBBackup %s/%s: %v", errTransientRestoreSource, backup.Namespace, sourceBackupName, err)
 		}
 	}
 

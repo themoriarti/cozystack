@@ -3,16 +3,19 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -564,6 +567,46 @@ func TestResolveMongoDBBackupSource_NoDestinationFails(t *testing.T) {
 	r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 	if _, err := r.resolveMongoDBBackupSource(context.Background(), cozyBackup); err == nil {
 		t.Fatal("expected an error when no destination is resolvable")
+	}
+}
+
+// A non-NotFound read error on the live operator Backup CR is transient (cache
+// not yet synced, apiserver hiccup): resolveMongoDBBackupSource must wrap it in
+// errTransientRestoreSource so the reconciler requeues instead of failing the
+// RestoreJob — matching the backup path, which requeues the symmetric read
+// error. A terminal snapshot fallback (no destination) must NOT carry the
+// sentinel; TestResolveMongoDBBackupSource_NoDestinationFails pins that side.
+func TestResolveMongoDBBackupSource_TransientLiveReadRequeues(t *testing.T) {
+	cozyBackup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cozy-bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			DriverMetadata: map[string]string{psmdbBackupNameKey: "op-backup"},
+		},
+	}
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = strategyv1alpha1.AddToScheme(s)
+	_ = psmdbtypes.AddToScheme(s)
+	_ = mongodbapp.AddToScheme(s)
+	c := clientfake.NewClientBuilder().
+		WithScheme(s).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*psmdbtypes.PerconaServerMongoDBBackup); ok {
+					return apierrors.NewServiceUnavailable("apiserver hiccup")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	_, err := r.resolveMongoDBBackupSource(context.Background(), cozyBackup)
+	if err == nil {
+		t.Fatal("expected a transient error from the live-CR read, got nil")
+	}
+	if !errors.Is(err, errTransientRestoreSource) {
+		t.Errorf("expected errTransientRestoreSource so the caller requeues, got %v", err)
 	}
 }
 
