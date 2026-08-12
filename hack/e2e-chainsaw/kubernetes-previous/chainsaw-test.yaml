@@ -26,6 +26,7 @@ spec:
         # so that a budget running out drops the collectors that cost minutes rather
         # than the reads that discriminate between failure modes:
         #   node-join diagnostics reads
+        #   worker CPU throttling counters
         #   serial-console family (~5m50s at worst, ~3m30s at the pool's minimum)
         #   guest Talos capture
         #   ghcr-mirror state + access log dump
