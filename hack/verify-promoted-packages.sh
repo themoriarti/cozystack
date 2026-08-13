@@ -77,10 +77,23 @@ printf '%s\n' "$rc_source_ref" | grep -Eq "$PACKAGES_DIGEST_REF_PATTERN" \
 # not merely in git. Keep the match scoped to image-reference positions so an
 # unrelated dependency version or historical prose cannot abort a release.
 stable_esc="$(printf '%s' "$STABLE_VERSION" | sed 's/\./\\./g')"
+scan_err="$tmp/rc-scan-err"
 leftovers="$(find "$artifact" -type f ! -path '*/charts/*' ! -name '*.md' \
   -exec grep -lE -- \
   "(image|repository|tag)[\"']?:[^#]*${stable_esc}-rc\.[0-9]+|${stable_esc}-rc\.[0-9]+@sha256:" \
-  {} + 2>/dev/null || true)"
+  {} + 2>"$scan_err" || true)"
+# An unreadable file is NOT "a file with no match" — the silent-skip shape
+# hack/promote-rewrite-tags.sh refuses by name, and the `|| true` here has to
+# stay because `-exec … +` reports the legitimate "nothing matched" as failure
+# too. That leaves grep's own diagnostics as the only signal that a file went
+# unscanned, so treat any of them as a failed scan. Defence in depth: the
+# per-file `cmp` below would catch a leftover rc string anyway, since the
+# release tree has none. Cheap enough to not depend on that.
+if [ -s "$scan_err" ]; then
+  echo "::error::could not scan the promoted artifact for rc image references:" >&2
+  cat "$scan_err" >&2
+  exit 1
+fi
 if [ -n "$leftovers" ]; then
   echo "::error::promoted packages artifact still carries rc image references:" >&2
   printf '%s\n' "$leftovers" >&2
@@ -162,7 +175,23 @@ fi
 # shellcheck source=hack/lib/image-refs.sh
 . "$(dirname "$0")/lib/image-refs.sh"
 normalized_refs() {
-  collect_image_refs "$1" | while IFS= read -r raw; do
+  # Collect into a file rather than piping straight into the loop. As the head
+  # of a pipeline the collector's exit status is thrown away — the pipeline
+  # reports `sort -u`'s, POSIX sh has no `pipefail` and this script has to stay
+  # POSIX — so `set -e` never sees it and a failed or truncated collection
+  # becomes a smaller set that the comparison below happily matches. Same
+  # fail-open class as the rc-reference scan above, on the one guard that is
+  # supposed to prove the container bytes did not move across promotion.
+  _nr_raw="$tmp/refs-raw"
+  collect_image_refs "$1" > "$_nr_raw"
+  # A collection that comes back empty is that same failure wearing a zero exit
+  # status: two empty sets compare equal, so the proof passes having examined
+  # nothing at all. Every packages tree carries image references — none means
+  # the collector understood nothing it was given, not that there was nothing
+  # to find.
+  [ -s "$_nr_raw" ] \
+    || { echo "::error::collected no image references from '$1'; cannot prove the container digests are unchanged" >&2; exit 1; }
+  while IFS= read -r raw; do
     [ -n "$raw" ] || continue
     without_digest="${raw%@*}"
     digest="${raw##*@}"
@@ -176,7 +205,7 @@ normalized_refs() {
       */cozystack-packages) continue ;;
     esac
     printf '%s@%s\n' "$repo" "$digest"
-  done | LC_ALL=C sort -u
+  done < "$_nr_raw" | LC_ALL=C sort -u
 }
 rc_artifact="$tmp/rc-artifact"
 mkdir -p "$rc_artifact"

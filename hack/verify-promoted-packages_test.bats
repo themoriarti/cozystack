@@ -108,6 +108,30 @@ EOF
   grep -q 'still carries rc image references' "$tmp/err"
 }
 
+# The threat this whole job exists for: someone edits packages/ on the release
+# PR after promotion published the candidate, so the artifact the installer
+# resolves is no longer the tree that was reviewed and tagged. A file present on
+# BOTH sides with different bytes is the shape that takes, and only the per-file
+# comparison catches it — the file-set compare sees the same names, the installer
+# compare reads one file, and the rc-refs compare never looks at the release tree
+# at all. The edit here is deliberately not an image reference, so no other leg
+# can fire and claim the credit.
+@test "rejects a file whose content changed on only one side" {
+  tmp="$(_test_workspace)/fixture"
+  _make_verify_fixture "$tmp"
+  printf '  replicas: 3\n' >> "$tmp/release/system/dashboard/values.yaml"
+
+  rc=0
+  MOCK_ARTIFACT="$tmp/artifact" MOCK_RC_ARTIFACT="$tmp/rc-artifact" MOCK_FLUX_LOG="$tmp/flux.log" \
+    VERIFY_PACKAGES_WORKDIR="$tmp/work" \
+    PATH="$tmp/bin:$PATH" \
+    hack/verify-promoted-packages.sh 9.9.9 "$tmp/release" \
+    > "$tmp/out" 2> "$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  grep -q 'promoted artifact file differs from release tree: system/dashboard/values.yaml' "$tmp/err"
+}
+
 @test "rejects package content changed after the candidate was published" {
   tmp="$(_test_workspace)/fixture"
   _make_verify_fixture "$tmp"
@@ -216,6 +240,62 @@ EOF
 
   [ "$rc" -ne 0 ]
   grep -q 'installer values differ beyond their self-reference' "$tmp/err"
+}
+
+# Run the verifier from a copy whose sibling lib/ is ours. That is already how
+# the workflows invoke it — `.release-tooling/hack/verify-promoted-packages.sh`,
+# with its libraries resolved next to the script — so replacing one library is
+# the faithful way to reach a failure inside it rather than a contrived one.
+_tooling_with_collector() {
+  mkdir -p "$1/lib"
+  cp hack/verify-promoted-packages.sh "$1/"
+  cp hack/lib/promoted-packages.sh "$1/lib/"
+  cat > "$1/lib/image-refs.sh" <<EOF
+collect_image_refs() {
+$2
+}
+EOF
+}
+
+# The digest-set comparison is the only thing standing behind "no container
+# bytes changed". Both tests below make it compare two empty sets, which
+# succeeds, so without the fix the verifier reports that proof as passed having
+# examined nothing.
+@test "refuses when image-reference collection fails" {
+  tmp="$(_test_workspace)/fixture"
+  _make_verify_fixture "$tmp"
+  _tooling_with_collector "$tmp/tooling" '  echo "collector exploded" >&2
+  return 3'
+
+  rc=0
+  MOCK_ARTIFACT="$tmp/artifact" MOCK_RC_ARTIFACT="$tmp/rc-artifact" MOCK_FLUX_LOG="$tmp/flux.log" \
+    VERIFY_PACKAGES_WORKDIR="$tmp/work" \
+    PATH="$tmp/bin:$PATH" \
+    "$tmp/tooling/verify-promoted-packages.sh" 9.9.9 "$tmp/release" \
+    > "$tmp/out" 2> "$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  grep -q 'collector exploded' "$tmp/err"
+  # …and it did not also claim the proof it never completed. Counted rather
+  # than negated with `!`, which suppresses errexit and would pass regardless.
+  count="$(grep -c 'identical package tree' "$tmp/out" || true)"
+  [ "${count:-0}" -eq 0 ]
+}
+
+@test "refuses when the collector reports no image references at all" {
+  tmp="$(_test_workspace)/fixture"
+  _make_verify_fixture "$tmp"
+  _tooling_with_collector "$tmp/tooling" '  return 0'
+
+  rc=0
+  MOCK_ARTIFACT="$tmp/artifact" MOCK_RC_ARTIFACT="$tmp/rc-artifact" MOCK_FLUX_LOG="$tmp/flux.log" \
+    VERIFY_PACKAGES_WORKDIR="$tmp/work" \
+    PATH="$tmp/bin:$PATH" \
+    "$tmp/tooling/verify-promoted-packages.sh" 9.9.9 "$tmp/release" \
+    > "$tmp/out" 2> "$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  grep -q 'collected no image references' "$tmp/err"
 }
 
 @test "rejects a changed container digest even when candidate and merge tree match" {

@@ -154,6 +154,16 @@ step_line() {
   printf '%s\n' "$report" | code_lines | grep -qF '"verify-release-candidate"'
   printf '%s\n' "$report" | code_lines | grep -qF "IS_RELEASE === 'true' && CANDIDATE_RESULT !== 'success'"
 
+  # `e2e` is the other consumer, and the one that RUNS the suite. Reporting a
+  # red is a lesser guarantee than not running a full-e2e promotion suite
+  # against a candidate that did not verify, so pin both halves: the dependency
+  # and the clause on the release arm. Removing them together left every other
+  # assertion in this file green.
+  e2e="$(job_block e2e "$PULL_REQUESTS")"
+  [ -n "$e2e" ]
+  printf '%s\n' "$e2e" | code_lines | grep -qF '"verify-release-candidate"'
+  printf '%s\n' "$e2e" | code_lines | grep -qF 'needs.verify-release-candidate.result == '"'"'success'"'"''
+
   # gh applies --label after opening a PR. The release label event must replace
   # the initial run and publish a fresh status that includes candidate verify.
   grep -qF "github.event.label.name != 'release'" "$PULL_REQUESTS"
