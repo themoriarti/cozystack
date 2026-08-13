@@ -478,7 +478,15 @@ run_capture() {
   # copy of it and falsifies silently; a cap the code carries as a literal can
   # be pinned against the code itself, which is what this does.
   lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  fn=$(awk '/^cozy_capture_tenant_worker_cpu_throttle\(\)/,/^}/' "$lib")
+  # The walk and the read moved into the body this capture now shares with the
+  # network counters, so the subject of these assertions is the code the
+  # collector runs rather than the function that carries its name -- which is
+  # now a six-line call. Reading only the named function would leave every
+  # assertion below vacuously true against a body it no longer contains.
+  fn=$(awk '/^cozy_capture_tenant_worker_cpu_throttle\(\)/,/^}/' "$lib"
+      awk '/^_cozy_capture_worker_cadvisor\(\)/,/^}/' "$lib"
+      awk '/^_cozy_cadvisor_node_stream\(\)/,/^}/' "$lib"
+      awk '/^_cozy_cadvisor_worker_nodes\(\)/,/^}/' "$lib")
   case "$fn" in
     *'max_nodes=3'*) ;;
     *) echo "expected the collector to cap the walk at the 3 nodes the comments state" >&2; return 1 ;;
@@ -1085,7 +1093,7 @@ container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-
   # Both empty-capture arms open with "the kubelet answered", so the line above
   # cannot tell them apart on its own. This one is about a node carrying nothing
   # of the namespace, and the sibling arm's wording is what it must not be.
-  assert_file_contains 'no CPU series for a tenant-test container' "$capture"
+  assert_file_contains 'no CPU series for a tenant-test worker' "$capture"
   assert_file_lacks_pattern 'none of them from a worker Pod' "$capture"
   rm -rf "$tmp"
 }

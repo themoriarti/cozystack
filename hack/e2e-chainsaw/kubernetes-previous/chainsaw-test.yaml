@@ -13,7 +13,7 @@ spec:
   - name: tenant-kubernetes-previous-version
     try:
     - script:
-        # The on-failure diagnostics phase carries its own 8m wall-clock budget
+        # The on-failure diagnostics phase carries its own 7m wall-clock budget
         # (COZY_DIAG_PHASE_BUDGET in _lib/run-kubernetes.sh): once it is spent, the
         # collectors that have not started are declined out loud rather than
         # attempted, so the in-process tenant crust-gather snapshot, the one the
@@ -27,6 +27,7 @@ spec:
         # than the reads that discriminate between failure modes:
         #   node-join diagnostics reads
         #   worker CPU throttling counters
+        #   worker network counters
         #   serial-console family (~5m50s at worst, ~3m30s at the pool's minimum)
         #   guest Talos capture
         #   ghcr-mirror state, access log and warm-up Job

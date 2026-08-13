@@ -152,8 +152,8 @@ use_temp_report_dir() {
   export COZY_REPORT_DIR="$1/report"
 }
 
-# The block calls six collectors that have their own suites and their own
-# bounds. Four of them are stubbed here; the other two are stubbed only where
+# The block calls seven collectors that have their own suites and their own
+# bounds. Four of them are stubbed here; the other three are stubbed only where
 # the test is about the budget rather than the reads, for the reason given
 # under stub_gated_collectors below. Stubbed after sourcing so these tests are
 # about the block's own reads; left un-stubbed they would drag a Certificate, a
@@ -165,23 +165,25 @@ stub_collectors() {
   talos_image_cache_diagnose() { printf 'image-cache-stub\n'; }
 }
 
-# The two collectors below are deliberately NOT in stub_collectors, and that is
+# The collectors below are deliberately NOT in stub_collectors, and that is
 # load-bearing rather than an omission. The block-level audit above --
 # "no node join diagnostic read escapes a wall clock bound" -- works by letting
 # the real collectors run against the kubectl mock and failing on any read that
 # reached it outside a `timeout` wrapper. Stubbing a collector there does not
 # make that test pass more easily; it removes the collector from the audit
 # entirely, and the test stays green because there is nothing left to audit.
-# Both of these carry reads the audit is the only instrument that sees:
-# ghcr_mirror_diagnose issues five, and the throttle capture issues its Pod
-# listing. Their own suites substitute a grep over the source, which by
-# construction cannot see a read that was added without a bound.
+# Each of them carries reads the audit is the only instrument that sees:
+# ghcr_mirror_diagnose issues five, and the two cadvisor captures issue a Pod
+# listing and a node read apiece. Their own suites substitute a grep over the
+# source, which by construction cannot see a read that was added without a
+# bound.
 #
 # They are stubbed only where the test is about the phase budget rather than
 # about the reads, which is the one place their real bodies would drown the
 # signal.
 stub_gated_collectors() {
   cozy_capture_tenant_worker_cpu_throttle() { printf 'cpu-throttle-stub\n'; }
+  cozy_capture_tenant_worker_network_counters() { printf 'network-counters-stub\n'; }
   ghcr_mirror_diagnose() { printf 'ghcr-mirror-stub\n'; }
 }
 
@@ -220,20 +222,36 @@ assert_file_contains() {
   # And the block did read: without this the check above passes just as well on
   # an implementation that reads nothing at all.
   [ "$(grep -c . "$kubectl_calls")" -ge 11 ]
-  # Named reads, not just a count. The two gated collectors below are the ones
-  # this audit is the only instrument for, and both are one line away from
-  # vanishing from it: moving their stubs into stub_collectors takes them out
-  # of the run entirely, and every suite stays green because the audit has
-  # nothing left to look at. A count cannot notice that -- eleven other reads
-  # keep it satisfied -- so each is pinned by a read only it issues.
+  # Named collectors, not just a count. The gated collectors below are the ones
+  # this audit is the only instrument for, and each is one line away from
+  # vanishing from it: moving its stub into stub_collectors takes it out of the
+  # run entirely, and every suite stays green because the audit has nothing left
+  # to look at. A count cannot notice that -- the other reads keep it satisfied
+  # -- so each collector is pinned individually.
+  #
+  # Pinned by the report directory each capture writes, not by a read only it
+  # issues. The two cAdvisor captures run one shared body, so their Pod listing
+  # and node read are byte-identical and neither has a read of its own: a
+  # listing-keyed pin is satisfied by whichever of them ran, and stays green
+  # with the other absent from the audit entirely. The directory is the one
+  # thing each produces alone.
   if ! grep -q 'get deploy ghcr-mirror' "$kubectl_calls"; then
     echo "FAIL: ghcr_mirror_diagnose did not run, so its reads were not audited" >&2
     false
   fi
-  if ! grep -q 'kubevirt.io=virt-launcher.*spec.nodeName' "$kubectl_calls"; then
-    echo "FAIL: the CPU throttling capture did not run, so its listing was not audited" >&2
-    false
-  fi
+  # Keyed on the directory having CONTENT, not on the directory existing. Each
+  # capture mkdir -p's its report directory before it lists anything, so an
+  # empty one is exactly what a capture that issued no read leaves behind -- and
+  # that is the state this pin has to reject, since a capture missing from the
+  # audit is a capture whose reads nobody bounded.
+  for subdir in tenant-cpu-throttle tenant-network-counters; do
+    dir="$COZY_REPORT_DIR/snapshots/kubernetes/$subdir"
+    if [ -z "$(find "$dir" -type f 2>/dev/null | head -n 1)" ]; then
+      echo "FAIL: $subdir produced no file, so that capture issued no read and its reads were not audited" >&2
+      ls -la "$COZY_REPORT_DIR/snapshots/kubernetes" >&2 || true
+      false
+    fi
+  done
   rm -rf "$tmp"
 }
 
@@ -489,13 +507,13 @@ assert_file_contains() {
     cat "$kubectl_calls" >&2
     false
   fi
-  # The five gates whose collectors are stubbed here are the mechanism, not a
+  # The six gates whose collectors are stubbed here are the mechanism, not a
   # detail: declining the heaviest guest-Talos capture is what the budget
   # derivation is for, and a stub issues no kubectl, so the check above cannot
   # see it run. That is the whole reason the count is over the stubbed ones and
   # not over every gate in the block -- the importer listing is gated too, and
   # it reads for real, so the check above already covers it. Each stub prints a
-  # marker; none of the five may appear, and each must have said why. The count
+  # marker; none of the six may appear, and each must have said why. The count
   # is load-bearing rather than descriptive -- a stubbed gate added without a
   # line here is a collector that may run past the deadline while this test
   # stays green, which is exactly what the empty-kubectl_calls check above
@@ -506,16 +524,18 @@ assert_file_contains() {
   # the bound audit at the top of this file, which needs it to run for real.
   # A rule written for additions does not catch a removal, so both directions
   # are named here.
-  for marker in serial-console-stub talos-stub image-cache-stub cpu-throttle-stub ghcr-mirror-stub; do
+  for marker in serial-console-stub talos-stub image-cache-stub cpu-throttle-stub \
+    network-counters-stub ghcr-mirror-stub; do
     if grep -q "$marker" "$tmp/out"; then
       echo "FAIL: $marker ran after the phase ran out of budget" >&2
       false
     fi
   done
   assert_file_contains '(b1) tenant worker guest serial console: not collected' "$tmp/out"
-  assert_file_contains '(b) in-guest Talos dmesg + kubelet logs: not collected' "$tmp/out"
+  assert_file_contains '(b) in-guest Talos dmesg + kubelet logs + service states + links: not collected' "$tmp/out"
   assert_file_contains 're-probe talos-image-cache ClusterIP + cacher debug bundle: not collected' "$tmp/out"
   assert_file_contains '(d) tenant worker CPU throttling: not collected' "$tmp/out"
+  assert_file_contains '(d2) tenant worker network counters: not collected' "$tmp/out"
   assert_file_contains 'ghcr-mirror state, access log and warm-up Job: not collected' "$tmp/out"
   rm -rf "$tmp"
 }
@@ -667,6 +687,7 @@ assert_file_contains() {
       cozy_capture_tenant_talos() { :; }
       talos_image_cache_diagnose() { :; }
       cozy_capture_tenant_worker_cpu_throttle() { :; }
+      cozy_capture_tenant_worker_network_counters() { :; }
       ghcr_mirror_diagnose() { :; }
       kubectl() { :; }
       cozy_report_node_join_failure test-latest-version
@@ -732,6 +753,7 @@ assert_file_contains() {
     cozy_capture_tenant_talos() { :; }
     talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
+    cozy_capture_tenant_worker_network_counters() { :; }
     ghcr_mirror_diagnose() { :; }
     kubectl() { printf "KUBECTL_RAN\n" >&2; }
     PATH='"$tmp"'/bin
@@ -788,6 +810,7 @@ assert_file_contains() {
     cozy_capture_tenant_talos() { :; }
     talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
+    cozy_capture_tenant_worker_network_counters() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
@@ -819,6 +842,7 @@ assert_file_contains() {
     cozy_capture_tenant_talos() { :; }
     talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
+    cozy_capture_tenant_worker_network_counters() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
@@ -906,6 +930,266 @@ assert_file_contains() {
   fi
 }
 
+@test "the byte-path counters run with the cheap reads, ahead of everything that costs minutes" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # Where this collector sits is a decision, not a placement, and the phase
+  # budget is what makes it one: admission gates when a collector may START, so
+  # what runs last is what gets declined, and a collector's position is its
+  # priority.
+  #
+  # It goes with the cheap reads for the same two reasons the CPU counters
+  # beside it do. It costs four bounded reads rather than the minutes the
+  # console walk and the guest capture can spend between them, and its answer
+  # exists nowhere else in the artifact: the bytes that arrived at the Pod, set
+  # against the progress the guest reported, separate a pull that kept
+  # restarting from a slow link, and no other collector here separates those
+  # two. Which of the Pod's four interfaces carries that number, and which one
+  # is the dummy that reads zero, is stated where the collector is gated. Placed
+  # after the guest captures it would be the first thing declined on exactly the
+  # slow runs that produce this failure.
+  #
+  # It goes AFTER the CPU counters rather than before them, and that ordering is
+  # the weaker of the two claims: both are four bounded reads of the same
+  # endpoint, so the pair could be swapped without changing what a tight run
+  # collects. What decides it is that the CPU capture's placement was argued on
+  # its own terms and this one has no argument for displacing it -- and "the
+  # last red run made the network question look more urgent" is not one, since
+  # the next red run picks a different subsystem and the order would follow it
+  # around.
+  cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle || true' "$lib" | head -n 1 | cut -d: -f1)
+  net=$(grep -n 'cozy_capture_tenant_worker_network_counters || true' "$lib" | head -n 1 | cut -d: -f1)
+  console=$(grep -n 'cozy_capture_tenant_serial_console || true' "$lib" | head -n 1 | cut -d: -f1)
+  talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
+  mirror=$(grep -n 'ghcr_mirror_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
+  cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
+  for v in cpu net console talos mirror cache; do
+    eval "n=\$$v"
+    if [ -z "$n" ]; then
+      echo "expected to locate $v in $lib" >&2
+      exit 1
+    fi
+  done
+  if [ "$cpu" -ge "$net" ]; then
+    echo "the CPU counters (line $cpu) keep their argued place ahead of the network counters ($net)" >&2
+    exit 1
+  fi
+  for later in console talos mirror cache; do
+    eval "n=\$$later"
+    if [ "$net" -ge "$n" ]; then
+      echo "the network counters (line $net) must precede $later (line $n), or a tight run declines them" >&2
+      exit 1
+    fi
+  done
+}
+
+@test "every collector that survives a missing timeout is named in the warning that says so" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # The warning an operator reads when `timeout` is absent splits the collectors
+  # into the ones that then exit 127 and collect nothing and the ones that run
+  # unbounded instead, and it names the second group. An enumeration is only
+  # true until the next collector joins the group, and a reader who trusts a
+  # stale one draws the opposite conclusion about whichever collector is
+  # missing from it. So the list is derived here rather than restated: every
+  # function that guards its bounded call with `command -v timeout` has to
+  # appear in that sentence.
+  warn=$(grep -n 'timeout is not on PATH' "$lib" | head -n 1 | cut -d: -f1)
+  if [ -z "$warn" ]; then
+    echo "expected the phase to still warn when timeout is missing" >&2
+    exit 1
+  fi
+  line=$(sed -n "${warn}p" "$lib")
+  # The guarded collectors, found by walking the source: a `command -v timeout`
+  # test inside a function body puts that function in the group. awk tracks the
+  # enclosing definition so the name reported is the function's, not the line's.
+  #
+  # Over the sourced libraries as well as this file, and the list of them is
+  # read from the source rather than written out here. Two of the four captures
+  # the sentence names -- the ghcr-mirror and talos-image-cache diagnoses --
+  # live in libraries this file sources, so a scan of this file alone finds
+  # neither, and their arms in the table below sat unreachable while reading as
+  # coverage. A guarded read added to any sourced library is what this has to
+  # see, and hardcoding today's two would put the next library outside the scan
+  # in exactly the same silent way.
+  libs="$lib $(awk '/^\. hack\/e2e-chainsaw\/_lib\/[a-z-]+\.sh$/ { print $2 }' "$lib")"
+  for f in $libs; do
+    if [ ! -f "$f" ]; then
+      echo "the scan was pointed at $f, which does not exist" >&2
+      exit 1
+    fi
+  done
+  # Two directions, because the sentence goes stale two ways.
+  #
+  # `guarded` is the set of functions that carry the guard, read off the source.
+  # The `^}` reset matters: without it a guard appearing at top level after a
+  # definition is filed under the preceding function, which is a wrong name in
+  # the group rather than a missing one.
+  #
+  # What is deliberately NOT here is a call-graph closure from each capture down
+  # to a guarded read. Deriving one from shell text means matching callee names
+  # inside bodies that also contain comments and strings, and a matcher loose
+  # enough to find the calls reports functions that make none -- green while
+  # naming nothing. A guard that has to parse shell to be right is a guard that
+  # will be wrong; the explicit table below says the same thing in a form that
+  # cannot drift silently, because every name in it must appear in `guarded` or
+  # the test fails.
+  guarded=$(awk '
+    /^[a-z_]+\(\) *[({] *$/ { fn = $0; sub(/\(\).*/, "", fn); next }
+    /^[})]$/ { fn = ""; next }
+    /command -v timeout >\/dev\/null 2>&1; then/ { if (fn != "") print fn }
+  ' $libs | sort -u)
+  if [ -z "$guarded" ]; then
+    echo "found no function carrying the timeout guard, so this test checked nothing" >&2
+    exit 1
+  fi
+  # Direction one: for each capture the sentence names, the functions whose
+  # guard is what makes that sentence true of it. The two cAdvisor captures do
+  # not carry the guard themselves -- it lives in the body they share -- and
+  # naming that body here is what the closure was trying and failing to derive.
+  # A helper renamed or a guard removed drops it out of `guarded`, and this
+  # fails; a capture dropped from the warning fails on the phrase check below.
+  for entry in \
+    'cozy_capture_tenant_worker_cpu_throttle:CPU throttling:_cozy_cadvisor_node_stream _cozy_cadvisor_worker_nodes' \
+    'cozy_capture_tenant_worker_network_counters:network counter:_cozy_cadvisor_node_stream _cozy_cadvisor_worker_nodes' \
+    'ghcr_mirror_diagnose:ghcr-mirror:ghcr_mirror_diagnose _ghcr_mirror_bounded_read' \
+    'talos_image_cache_diagnose:talos-image-cache:talos_image_cache_diagnose _talos_image_cache_bounded_read'; do
+    fn=${entry%%:*}
+    rest=${entry#*:}
+    phrase=${rest%%:*}
+    carriers=${rest#*:}
+    for carrier in $carriers; do
+      case "
+${guarded}
+" in
+        *"
+${carrier}
+"*) ;;
+        *)
+          echo "$fn is named in the warning as surviving a missing timeout, but $carrier carries no command -v guard; the sentence is claiming behaviour the code no longer has" >&2
+          exit 1
+          ;;
+      esac
+    done
+    case "$line" in
+      *"$phrase"*) ;;
+      *)
+        echo "the warning does not name $fn (expected the phrase: $phrase)" >&2
+        exit 1
+        ;;
+    esac
+  done
+  # Direction two: every function carrying the guard is either one of those
+  # captures or exempt for a stated reason. One with no entry here fails rather
+  # than being skipped, because a silent skip is how the enumeration went stale.
+  for fn in $guarded; do
+    case "$fn" in
+      cozy_capture_tenant_worker_cpu_throttle) phrase='CPU throttling' ;;
+      cozy_capture_tenant_worker_network_counters) phrase='network counter' ;;
+      ghcr_mirror_diagnose) phrase='ghcr-mirror' ;;
+      talos_image_cache_diagnose) phrase='talos-image-cache' ;;
+      # The sentence enumerates the CAPTURES. Two other kinds of function guard
+      # the same way and are deliberately not in it, each exempt for a stated
+      # reason rather than by omission: the shared bounded-read helpers, and the
+      # individual reads belonging to a capture the sentence already names.
+      # Both are covered by the comment directly above the warning, and putting
+      # them in the sentence too would be a second copy of that claim to keep in
+      # step. A function that is neither still fails below, which is what makes
+      # this a list of exemptions rather than a list of everything.
+      cozy_diag_read | _ghcr_mirror_bounded_read | _talos_image_cache_bounded_read) continue ;;
+      _cozy_cadvisor_node_stream | _cozy_cadvisor_worker_nodes) continue ;;
+      cozy_report_node_join_failure | _talos_image_cache_deploy_state) continue ;;
+      *)
+        echo "$fn guards its call with command -v but this test has no phrase for it; add one here and to the warning" >&2
+        exit 1
+        ;;
+    esac
+    case "$line" in
+      *"$phrase"*) ;;
+      *)
+        echo "the warning does not name $fn (expected the phrase: $phrase)" >&2
+        exit 1
+        ;;
+    esac
+  done
+}
+
+@test "the spend order both chainsaw suites document matches the order the block runs" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # Those comments are where a reader checks what the phase budget covers and in
+  # what order it is spent, which makes them the one place a collector added to
+  # the phase is most useful and most easily forgotten -- the ceiling line four
+  # lines above gets edited because a test compares it, and the list below it
+  # did not because nothing did. This is that nothing.
+  #
+  # Position, not just presence. The list's whole subject is the ORDER, since
+  # what a spent budget declines is whatever has not started; a presence check
+  # would accept the new collector appended at the bottom next to the two
+  # collectors it is deliberately ahead of, and the comment would then describe
+  # the opposite of what the block does.
+  #
+  # Both sides are derived. The call order comes from the source, and each
+  # collector with no entry in the phrase table fails here rather than being
+  # skipped, which is how the list went stale in the first place.
+  #
+  # Keyed on the `|| true` call suffix rather than on cozy_diag_phase_has_time,
+  # and the two sets are not identical: cozy_report_guest_console_wedge is
+  # called that way and is NOT behind the gate, which is why it needs an arm of
+  # its own below. The call suffix is what this test can order; the gate is a
+  # separate line from the call it guards.
+  gated=$(grep -nE '^ *(cozy_(capture|report)_[a-z_]+|[a-z_]+_diagnose) [^|]*\|\| true|^ *(cozy_(capture|report)_[a-z_]+|[a-z_]+_diagnose) \|\| true' "$lib" \
+    | sed -E 's/:[[:space:]]*/:/; s/(:[a-z_]+) .*/\1/; s/\|\|.*//')
+  if [ -z "$gated" ]; then
+    echo "found no gated collector at all, so this test checked nothing" >&2
+    exit 1
+  fi
+  expected=
+  for entry in $gated; do
+    fn=${entry#*:}
+    case "$fn" in
+      cozy_capture_tenant_worker_cpu_throttle) phrase='worker CPU throttling counters' ;;
+      cozy_capture_tenant_worker_network_counters) phrase='worker network counters' ;;
+      cozy_capture_tenant_serial_console) phrase='serial-console family' ;;
+      cozy_capture_tenant_talos) phrase='guest Talos capture' ;;
+      ghcr_mirror_diagnose) phrase='ghcr-mirror state' ;;
+      talos_image_cache_diagnose) phrase='talos-image-cache diagnosis' ;;
+      # Called with the same suffix but not behind the phase gate: it runs ahead
+      # of the headline so the console experiment's own failure is named before
+      # the wording that matches the bug it studies, and it is not part of what
+      # the budget covers.
+      cozy_report_guest_console_wedge) continue ;;
+      *)
+        echo "$fn runs in the diagnostics block but this test has no phrase for it; add one here and to both chainsaw comments" >&2
+        exit 1
+        ;;
+    esac
+    expected="${expected}${phrase}
+"
+  done
+  for f in hack/e2e-chainsaw/kubernetes-latest/chainsaw-test.yaml \
+    hack/e2e-chainsaw/kubernetes-previous/chainsaw-test.yaml; do
+    actual=
+    while IFS= read -r phrase; do
+      [ -n "$phrase" ] || continue
+      line=$(grep -n "$phrase" "$f" | head -n 1 | cut -d: -f1)
+      if [ -z "$line" ]; then
+        echo "$f does not list the spend-order entry: $phrase" >&2
+        exit 1
+      fi
+      actual="${actual}${line} ${phrase}
+"
+    done <<EOF
+$expected
+EOF
+    # Sorting the located lines numerically must reproduce the call order. A
+    # mismatch means the comment and the block disagree about which collector
+    # the budget gives up first, which is the only thing this list is read for.
+    if [ "$(printf '%s' "$actual" | sort -n | sed -E 's/^[0-9]+ //')" != "$(printf '%s' "$actual" | sed -E 's/^[0-9]+ //')" ]; then
+      echo "$f lists the collectors in a different order than the block runs them" >&2
+      printf '%s\n' "$actual" >&2
+      exit 1
+    fi
+  done
+}
+
 @test "the declined path leaves no shell error in the diagnostics log" {
   # The chainsaw script that calls this runs under `set -eu`, and the declined
   # path is where a variable assigned only inside the phase gate gets read
@@ -938,6 +1222,7 @@ assert_file_contains() {
     cozy_capture_tenant_talos() { :; }
     talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
+    cozy_capture_tenant_worker_network_counters() { :; }
     ghcr_mirror_diagnose() { :; }
     kubectl() { :; }
     COZY_DIAG_PHASE_BUDGET=0
@@ -981,7 +1266,15 @@ assert_file_contains() {
   # nothing makes one move it. Those are the residuals, and the first two exist
   # today rather than hypothetically. All are tracked in cozystack/cozystack#3666.
   bringup=1500
-  largest=620
+  # 620 was this figure while the guest-Talos walk ran two commands per worker.
+  # It now runs four: the service list and the link table were added at a 10s
+  # bound with the usual 5s kill grace, which is 2 x 2 x 15 = 60 more seconds
+  # across the two-worker minimum pool. Derived as a delta on the previous
+  # number rather than recomputed from the walk, deliberately: a fresh
+  # enumeration that missed a step would LOWER this term and loosen the guard
+  # while looking like it had tightened it, and the delta is the part this
+  # change is answerable for.
+  largest=680
   lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
   # Read from the named default rather than from the `:-` expansion: the defaults are
   # declared once as constants, so that is where the number lives now.
