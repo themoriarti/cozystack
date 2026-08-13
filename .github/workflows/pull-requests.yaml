@@ -203,6 +203,10 @@ jobs:
   verify-release-candidate:
     name: Verify release packages candidate
     runs-on: ubuntu-latest
+    # Matching `checks` and `finalize`. Without a ceiling the job inherits the
+    # 6-hour default, and a stalled `flux pull artifact` would hold the required
+    # `E2E Tests` status pending for all of it, since e2e-report needs this job.
+    timeout-minutes: 30
     if: |
       contains(github.event.pull_request.labels.*.name, 'release')
       && github.event.pull_request.user.login == 'cozystack-ci[bot]'
@@ -228,9 +232,20 @@ jobs:
           sparse-checkout: hack
           persist-credentials: false
 
+      # Both tools are version-pinned. This job decides whether a stable release
+      # may be created, so what it runs has to be a fixed input: `latest/download`
+      # resolves to whatever mikefarah shipped this morning, and a yq that changed
+      # how it emits or compares a value turns a release gate into a moving one.
+      # The version tracks packages/core/testing/images/e2e-sandbox/Dockerfile.
+      # yq is additionally pinned by content; the Flux installer is not, because
+      # it checksums the binary it fetches and the mutable part is its own
+      # bootstrap script. promote-rc.yaml's copy of this step carries the full
+      # reasoning for both.
       - name: Set up promotion toolchain (flux, yq)
         env:
           FLUX_VERSION: "2.8.6"
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
           if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
             install_script="$(mktemp)"
@@ -238,8 +253,14 @@ jobs:
             sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
             rm -f "$install_script"
           fi
-          command -v yq >/dev/null \
-            || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
 
       - name: Login to registry (GHCR)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

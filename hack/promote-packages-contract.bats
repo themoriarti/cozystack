@@ -69,6 +69,44 @@ step_line() {
   printf '%s\n' "$prepare" | code_lines | grep -qF 'DOCKER_CONFIG: ${{ runner.temp }}/.docker'
 }
 
+@test "every promotion toolchain install pins its tools" {
+  # A release gate whose tooling comes from `releases/latest/download` is not a
+  # fixed input: the bytes that decide whether vX.Y.Z may be created, and the
+  # yq that rewrites the installer pin, change whenever upstream publishes.
+  # Pinned by version, and pinned to STAY pinned — the unpinned one-liner is
+  # still the idiom in the workflows outside this pipeline, so it comes back by
+  # copy-paste rather than by anyone deciding to unpin a release step.
+  for step_and_file in \
+    "Set up toolchain (flux, yq)|$PROMOTE" \
+    "Set up promotion toolchain (flux, yq)|$PULL_REQUESTS" \
+    "Set up promotion toolchain (flux, skopeo, yq, helm)|$FINALIZE"; do
+    block="$(step_block "${step_and_file%%|*}" "${step_and_file#*|}")"
+    [ -n "$block" ]
+    printf '%s\n' "$block" | code_lines | grep -qF 'FLUX_VERSION: "'
+    printf '%s\n' "$block" | code_lines | grep -qF 'YQ_VERSION: "'
+    count="$(printf '%s\n' "$block" | code_lines | grep -c 'releases/latest/download' || true)"
+    [ "${count:-0}" -eq 0 ]
+
+    # yq is pinned by content as well as by version: it is the one downloaded
+    # binary that WRITES what a release contains, stamping the candidate digest
+    # into installer values and platformVersion into the chart. A version
+    # variable authenticates nothing about the bytes it names.
+    printf '%s\n' "$block" | code_lines | grep -qF 'YQ_SHA256: "'
+    printf '%s\n' "$block" | code_lines | grep -qF 'sha256sum -c -'
+  done
+
+  # One version AND one checksum across all three, so the yq that writes the
+  # candidate's installer values is the yq that reads them back out of the
+  # artifact — and so bumping the version in one file without its checksum, or
+  # either without the other two, cannot pass.
+  for key in YQ_VERSION YQ_SHA256; do
+    values="$(cat "$PROMOTE" "$PULL_REQUESTS" "$FINALIZE" | code_lines \
+      | grep -o "$key: \"[0-9a-f.]*\"" | sort -u)"
+    [ -n "$values" ]
+    [ "$(printf '%s\n' "$values" | wc -l | tr -d ' ')" -eq 1 ]
+  done
+}
+
 @test "finalize verifies the pinned candidate before the first stable tag" {
   verify="$(step_line 'Verify stable packages candidate' "$FINALIZE")"
   create="$(step_line 'Create tag on merge commit (write-once)' "$FINALIZE")"

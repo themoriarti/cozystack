@@ -108,10 +108,22 @@ jobs:
       # the tag-rewritten tree; this guard pulls it by the committed digest and
       # proves it still matches the merge commit (apart from its impossible
       # self-reference) and still pins the rc-tested container digests.
+      #
+      # flux and yq are version-pinned: they are what this job verifies the
+      # candidate with and what stamps the stable chart, so `latest/download`
+      # would make an irreversible step depend on whatever mikefarah shipped
+      # this morning. The version tracks
+      # packages/core/testing/images/e2e-sandbox/Dockerfile. yq is additionally
+      # pinned by content — it stamps the chart's platformVersion, and this step
+      # is the last one before write-once names exist. The Flux installer is not,
+      # because it checksums the binary it fetches and the mutable part is its
+      # own bootstrap script. promote-rc.yaml's copy carries the full reasoning.
       - name: Set up promotion toolchain (flux, skopeo, yq, helm)
         if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
         env:
           FLUX_VERSION: "2.8.6"
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
           if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
             install_script="$(mktemp)"
@@ -119,8 +131,14 @@ jobs:
             sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
             rm -f "$install_script"
           fi
-          command -v yq >/dev/null \
-            || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
           command -v skopeo >/dev/null \
             || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
           command -v helm >/dev/null \

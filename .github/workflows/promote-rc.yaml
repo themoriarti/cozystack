@@ -393,9 +393,38 @@ jobs:
 
       # Promotion publishes one non-consumer-visible packages candidate. Stable
       # image/chart tags are still deferred to post-merge finalize.
+      #
+      # Both tools are version-pinned. This step arms the only registry write
+      # the dispatch performs, so what performs it has to be a fixed input:
+      # `latest/download` resolves to whatever mikefarah shipped this morning,
+      # and a yq that changed how it emits or compares a value would rewrite
+      # installer values differently between two promotions of the same rc. The
+      # version tracks packages/core/testing/images/e2e-sandbox/Dockerfile.
+      #
+      # yq is additionally pinned BY CONTENT, which nothing else in this repo
+      # does. It earns the exception by being the one downloaded binary with
+      # write authority over what a release contains: it is what stamps the
+      # candidate digest into installer values. skopeo, helm and oras only move
+      # bytes that are already digest-addressed, so a substituted one is caught
+      # downstream; a substituted yq writes the wrong pin and everything after
+      # it verifies that pin faithfully. A committed SHA-256 is trust-on-first-
+      # use — it fixes the bytes to what a human checked when the version was
+      # chosen (against this release's own published checksums list) and makes
+      # any later substitution loud. Bump the version and this together.
+      #
+      # The Flux installer is deliberately NOT pinned by content. It verifies
+      # the flux binary it fetches against flux_${FLUX_VERSION}_checksums.txt
+      # from the pinned release, so the binary is not the exposure — the ~6 KB
+      # bootstrap script from fluxcd.io is, and it is mutable by design and
+      # fetched the same way in ten other workflows here. Pinning its bytes in
+      # this file alone would break on the next regeneration of a script the
+      # project does not control, while leaving the identical fetch unpinned
+      # everywhere else. Named rather than half-fixed.
       - name: Set up toolchain (flux, yq)
         env:
           FLUX_VERSION: "2.8.6"
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
           if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
             install_script="$(mktemp)"
@@ -403,8 +432,14 @@ jobs:
             sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
             rm -f "$install_script"
           fi
-          command -v yq >/dev/null \
-            || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
 
       - name: Login to registry (GHCR)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
