@@ -1,0 +1,24 @@
+{{/*
+  cozy-default MongoDB strategy. Unlike the MariaDB / CNPG / Altinity
+  defaults, this Strategy carries NO bucket coordinates or credentials: the
+  Percona psmdb operator resolves the on-demand backup's storageName against
+  the source PerconaServerMongoDB CR's spec.backup.storages, so the S3 target
+  lives on the MongoDB application (declared by the chart as "s3-storage" when
+  backup.enabled=true), not here. That makes this template independent of the
+  COSI BucketClaim, so it renders unconditionally — there is nothing to gate on
+  a populated $bucketName.
+
+  Precondition (surfaced by the driver as a clear Ready=False, not a silent
+  hang): the MongoDB application must be deployed with backup.enabled=true so
+  the percona-backup-mongodb agents run and the "s3-storage" entry exists. See
+  docs/operations/backup-classes.md.
+*/}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: MongoDB
+metadata:
+  name: cozy-default-mongodb
+spec:
+  template:
+    storageName: s3-storage
+    type: logical
+    compressionType: gzip
