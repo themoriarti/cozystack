@@ -16,7 +16,11 @@ set -eu
 
 STABLE_VERSION="${1:?usage: verify-promoted-packages.sh <stable-version> [root]}"
 ROOT="${2:-packages}"
-EXPECTED_PACKAGES_REPOSITORY="${EXPECTED_PACKAGES_REPOSITORY:-oci://ghcr.io/cozystack/cozystack/cozystack-packages}"
+
+# EXPECTED_PACKAGES_REPOSITORY and PACKAGES_DIGEST_REF_PATTERN, shared with the
+# publisher so its dispatch-time preflight cannot drift from this guard.
+# shellcheck source=hack/lib/promoted-packages.sh
+. "$(dirname "$0")/lib/promoted-packages.sh"
 
 printf '%s\n' "$STABLE_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
   || { echo "stable-version '$STABLE_VERSION' must match X.Y.Z" >&2; exit 1; }
@@ -33,7 +37,7 @@ source_url="$(yq -e -r '.cozystackOperator.platformSourceUrl' "$VALUES")"
 source_ref="$(yq -e -r '.cozystackOperator.platformSourceRef' "$VALUES")"
 [ "$source_url" = "$EXPECTED_PACKAGES_REPOSITORY" ] \
   || { echo "platformSourceUrl '$source_url' must equal trusted repository '$EXPECTED_PACKAGES_REPOSITORY'" >&2; exit 1; }
-printf '%s\n' "$source_ref" | grep -Eq '^digest=sha256:[0-9a-f]{64}$' \
+printf '%s\n' "$source_ref" | grep -Eq "$PACKAGES_DIGEST_REF_PATTERN" \
   || { echo "platformSourceRef '$source_ref' is not an immutable digest" >&2; exit 1; }
 
 if [ -n "${VERIFY_PACKAGES_WORKDIR:-}" ]; then
@@ -66,7 +70,7 @@ rc_source_url="$(yq -e -r '.cozystackOperator.platformSourceUrl' "$ARTIFACT_VALU
 rc_source_ref="$(yq -e -r '.cozystackOperator.platformSourceRef' "$ARTIFACT_VALUES")"
 [ "$rc_source_url" = "$EXPECTED_PACKAGES_REPOSITORY" ] \
   || { echo "candidate's original platformSourceUrl '$rc_source_url' must equal trusted repository '$EXPECTED_PACKAGES_REPOSITORY'" >&2; exit 1; }
-printf '%s\n' "$rc_source_ref" | grep -Eq '^digest=sha256:[0-9a-f]{64}$' \
+printf '%s\n' "$rc_source_ref" | grep -Eq "$PACKAGES_DIGEST_REF_PATTERN" \
   || { echo "candidate's original platformSourceRef '$rc_source_ref' is not an immutable digest" >&2; exit 1; }
 
 # Promotion must have rewritten every version-line image tag in the artifact,

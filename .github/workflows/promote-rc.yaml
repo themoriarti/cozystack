@@ -317,9 +317,15 @@ jobs:
             // A maintenance branch created before the candidate pipeline landed
             // would execute its old pull_request workflows after merge. Refuse
             // before the first registry write unless the actual target base has
-            // both trusted verification gates and their helper. Backport this
+            // both trusted verification gates and their helpers. Backport this
             // change to an existing release-X.Y line before promoting its next
             // patch; the rc-derived head does not need to carry the tooling.
+            //
+            // Every file the base-checked-out verifier reaches for belongs in
+            // the list below, its own sourced libraries included: those are
+            // resolved relative to the verifier at run time, so a base carrying
+            // the script without them fails at the PR gate and at finalize —
+            // after the candidate, the staging branch and the draft exist.
             const line = '${{ needs.parse.outputs.line }}';
             let baseBranch = 'main';
             try {
@@ -336,6 +342,7 @@ jobs:
               ['.github/workflows/pull-requests-release.yaml', 'Verify stable packages candidate'],
               ['hack/verify-promoted-packages.sh', 'EXPECTED_PACKAGES_REPOSITORY'],
               ['hack/lib/image-refs.sh', 'collect_image_refs()'],
+              ['hack/lib/promoted-packages.sh', 'PACKAGES_DIGEST_REF_PATTERN'],
             ];
             for (const [path, marker] of requiredBaseFiles) {
               let file;

@@ -93,6 +93,9 @@ step_line() {
   printf '%s\n' "$validate" | code_lines | grep -qF "['.github/workflows/pull-requests.yaml', 'verify-release-candidate:']"
   printf '%s\n' "$validate" | code_lines | grep -qF "['.github/workflows/pull-requests-release.yaml', 'Verify stable packages candidate']"
   printf '%s\n' "$validate" | code_lines | grep -qF "['hack/verify-promoted-packages.sh', 'EXPECTED_PACKAGES_REPOSITORY']"
+  # The verifier resolves its libraries relative to itself at run time, so a
+  # base carrying the script without them fails the gate it is meant to be.
+  printf '%s\n' "$validate" | code_lines | grep -qF "['hack/lib/promoted-packages.sh', 'PACKAGES_DIGEST_REF_PATTERN']"
   printf '%s\n' "$validate" | code_lines | grep -qF "core.setOutput('base_branch', baseBranch)"
 
   open_pr="$(step_block 'Open promote (release) PR' "$PROMOTE")"
