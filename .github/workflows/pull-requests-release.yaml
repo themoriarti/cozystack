@@ -143,6 +143,14 @@ jobs:
             || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
           command -v helm >/dev/null \
             || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          # Not installed here, only required: `flux pull artifact` reads its
+          # registry credentials from ~/.docker/config.json, which is why the
+          # login step below runs `docker login` as well as skopeo's and helm's.
+          # This job's runner class is not one of the docker-using build ones, so
+          # say what is missing here rather than letting the login step fail with
+          # a bare "command not found" in the middle of the release path.
+          command -v docker >/dev/null \
+            || { echo "::error::docker is required on this runner: flux reads registry credentials from ~/.docker/config.json"; exit 1; }
 
       - name: Login to registry (GHCR)
         if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}

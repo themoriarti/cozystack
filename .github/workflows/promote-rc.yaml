@@ -7,17 +7,23 @@ name: Promote RC
 # declarative packages artifact is re-serialized after its rc tag strings are
 # rewritten to stable, then verified before any stable name is created.
 #
-# Promotion is TRANSACTIONAL at every consumer-visible name. This dispatch
-# re-serializes the tag-rewritten packages tree under a temporary `promotion-*`
-# tag, pins its digest in the release-X.Y.Z staging branch, drafts the stable
-# release with restamped assets, and opens the release-X.Y.Z PR. It does not
-# create a stable tag, move :latest, or publish the stable installer. The rc's
+# Promotion CREATES NO STABLE NAME before merge. This is weaker than the "no
+# registry mutation at dispatch" this workflow used to promise, and the
+# difference is deliberate rather than a slip: the dispatch does now write to
+# the registry, publishing one `promotion-*` packages candidate, and that tag is
+# real and publicly listable. What it is not is a name anything resolves — no
+# vX.Y.Z, no :latest, no stable installer chart. Say it that way round; the
+# older phrasing only reads as true if you already know which writes are meant.
+#
+# So the dispatch re-serializes the tag-rewritten packages tree under that
+# temporary tag, pins its digest in the release-X.Y.Z staging branch, drafts the
+# stable release with restamped assets, and opens the release-X.Y.Z PR. The rc's
 # mandatory full e2e is verified before staging; the promote PR does not repeat
 # it by default. Finalize verifies the pinned candidate against the merged tree
 # before performing any stable-named registry or git side effect. An abandoned
 # promotion therefore leaves only an overwritable draft + branch and a
-# temporary artifact: retention protects it while the PR is open and can prune
-# it after that reference disappears.
+# temporary artifact, which retention protects until it is retagged stable and
+# can prune once nothing references it.
 #
 # Triggered manually once an rc has gone green. The stable git tag is never
 # pushed by a human and never force-moved — it is created only at PR merge,

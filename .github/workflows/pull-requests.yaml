@@ -197,9 +197,17 @@ jobs:
           fi
 
   # Promotion publishes the rewritten packages artifact before opening its PR.
-  # Verify the exact prospective merge tree here, so a packages edit on the PR
-  # or its base fails the required E2E Tests status before merge. Finalize repeats
-  # the same check before creating the write-once stable tag.
+  # Verify GitHub's prospective merge tree here, so a `packages/` edit pushed to
+  # this PR fails the required E2E Tests status before it can merge.
+  #
+  # Checking the MERGE tree rather than the head is what makes base drift
+  # visible when this job runs — but nothing re-runs it when the base moves:
+  # GitHub does not fire `pull_request` on the base branch advancing, it only
+  # recomputes refs/pull/N/merge. So a `packages/` change landing on the base
+  # after this went green is never re-verified here, and the PR stays mergeable
+  # on the stale result. Finalize repeats the check against the real merge
+  # commit before creating the write-once stable tag, which is where that case
+  # is actually caught — loudly, and before any stable name exists.
   verify-release-candidate:
     name: Verify release packages candidate
     runs-on: ubuntu-latest

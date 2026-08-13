@@ -106,6 +106,15 @@ fi
 # an ignored build nonce generated only by the rc image-packages target; it is
 # not consumed at runtime. The installer values are compared separately below
 # after normalizing the one impossible self-reference.
+#
+# This list is a RESTATEMENT of flux's built-in `excludeOCI` set, not a
+# derivation of it — the CLI does not expose it — so it is coupled to a flux
+# version. That version is pinned as FLUX_VERSION (2.8.6) in all three workflow
+# steps that install the toolchain, and the promote-packages contract test pins
+# that they agree. If flux ever changes the set, the symptom is a "contain
+# different files" failure naming the newly included or excluded class, which
+# is loud and lands before any stable name exists; the fix is to update this
+# list and FLUX_VERSION together, in that order.
 artifact_entries() {
   (
     cd "$1"
