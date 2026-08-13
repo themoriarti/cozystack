@@ -34,8 +34,21 @@ on:
 # erase the failure. Cancelling also means opting into the full suite costs one
 # suite rather than two, and a second label landing afterwards cannot cancel the
 # full-e2e run, because it is no longer in the same group as it.
+#
+# `release` publishes on the SAME-REPO lane only, hence the fork term. A promote
+# PR is opened same-repo by the release bot, so the label on a fork PR is always
+# a mislabel — and on that lane it would be a destructive one. e2e-fork.yaml's
+# `resolve` decides "this run built nothing, so it is not a verdict" by asking
+# whether `Plan build` skipped; a fork run that gets past `plan` then fails
+# closed on the pr-patch artifact its own `release` label gated off, posting red
+# on a suite that was never going to run, with no `unlabeled` trigger to undo
+# it. Excluding forks keeps the label as inert on that lane as it was before
+# promotion started using it. The term appears in both this key and `plan`'s
+# guard because the two must stay exact complements: NOT(A OR B OR (C AND NOT
+# F)) is (NOT A) AND (NOT B) AND (NOT C OR F), and for a same-repo PR F is false
+# and both sides reduce to exactly what they were.
 concurrency:
-  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-e2e' && github.event.label.name != 'release') && '-label' || '' }}
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-e2e' && (github.event.label.name != 'release' || github.event.pull_request.head.repo.fork)) && '-label' || '' }}
   cancel-in-progress: true
 
 # Top-level token defaults to read-only. A job-level block replaces this one
@@ -52,7 +65,9 @@ jobs:
   plan:
     name: Plan build
     runs-on: ubuntu-latest
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || github.event.label.name == 'release'
+    # Exact complement of the concurrency key above; see the reasoning there,
+    # including why `release` is admitted for same-repo PRs only.
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork)
     permissions:
       contents: read
       # For the opening `E2E Tests` status below; e2e-report writes the terminal
@@ -687,9 +702,20 @@ jobs:
   resolve_assets:
     name: "Resolve assets"
     runs-on: ubuntu-latest
+    # In lockstep with `plan`, fork term included: this job is on `e2e`'s
+    # release arm, so a label event `plan` runs for and this job skips for
+    # leaves `e2e` with both arms false while `e2e-report` still runs. On a
+    # promote PR already carrying full-e2e that reaches the final `else` — the
+    # "e2e not repeated" branch is bypassed by full-e2e — and posts `E2E Tests`
+    # = failure over a green one, unclearable without a push because
+    # `unlabeled` is not a trigger. The fork term keeps a `release` label on a
+    # fork PR as inert as it was before promotion used the label: without it
+    # this job runs there and fails resolving a draft release for a branch that
+    # is not `release-X.Y.Z`. It short-circuits on `action != 'labeled'`, so the
+    # pre-existing behaviour on a push to such a PR is unchanged.
     if: |
       contains(github.event.pull_request.labels.*.name, 'release')
-      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e')
+      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork))
     outputs:
       disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
