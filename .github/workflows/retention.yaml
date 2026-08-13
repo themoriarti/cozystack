@@ -1,4 +1,4 @@
-name: Nightly Retention
+name: Artifact Retention
 
 # Prune old nightly artifacts from GHCR: keep the newest KEEP dated versions of
 # each cozystack package, delete older ones. Nightlies are GHCR OCI tags
@@ -12,6 +12,14 @@ name: Nightly Retention
 # carries the floating `nightly` tag (the newest) or any release tag (vX.Y.Z,
 # latest, rc, main) is never touched, so stable/rc/main artifacts can never be
 # pruned.
+#
+# Promotion also creates one temporary cozystack-packages tag of the form
+# promotion-vX.Y.Z-from-vX.Y.Z-rc.N-run-ID-ATTEMPT. Every dispatch gets a unique
+# tag, so a retry never moves one and leaves an untagged manifest behind. A
+# successful promotion adds a stable tag to the same manifest, which makes it
+# ineligible below. A candidate stays protected while an open bot-authored
+# release PR pins its digest; otherwise it becomes eligible after
+# PROMOTION_TTL_DAYS only when ALL its tags are still temporary.
 #
 # Dry-run by default; flip the input or the RETENTION_APPLY repo variable to
 # actually delete. Deletion is irreversible.
@@ -37,18 +45,20 @@ permissions:
 env:
   ORG: cozystack
   KEEP: '14'
+  PROMOTION_TTL_DAYS: '30'
 
 concurrency:
-  group: nightly-retention
+  group: artifact-retention
   cancel-in-progress: false
 
 jobs:
   prune:
-    name: Prune old GHCR nightlies
+    name: Prune old GHCR temporary artifacts
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      pull-requests: read
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -64,8 +74,43 @@ jobs:
           # workflow_dispatch input wins; otherwise the repo variable; else dry-run.
           APPLY: ${{ github.event.inputs.apply || vars.RETENTION_APPLY || 'false' }}
         run: |
-          set -eu
+          set -euo pipefail
           if [ "$APPLY" = "true" ]; then echo "MODE: APPLY (deleting)"; else echo "MODE: dry-run"; fi
+
+          # Protect the immutable packages digest pinned by every open promotion
+          # PR. Age alone does not imply abandonment: an approved release PR can
+          # legitimately remain open longer than the TTL. Resolve only trusted,
+          # same-repository release branches authored by the release bot; fail
+          # closed before any deletion if their installer pin cannot be read.
+          release_pr_shas="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100" \
+            | jq -s -r --arg repo "$GITHUB_REPOSITORY" 'add[]
+              | select(.user.login == "cozystack-ci[bot]")
+              | select(.head.repo.full_name == $repo)
+              | select(.head.ref | test("^release-[0-9]+\\.[0-9]+\\.[0-9]+$"))
+              | select(any(.labels[]?; .name == "release"))
+              | .head.sha')"
+          protected_promotion_digests=""
+          for sha in $release_pr_shas; do
+            values="$(gh api \
+              -H 'Accept: application/vnd.github.raw+json' \
+              "/repos/${GITHUB_REPOSITORY}/contents/packages/core/installer/values.yaml?ref=${sha}")"
+            candidate_ref="$(printf '%s\n' "$values" | awk '
+              /^[[:space:]]*platformSourceRef:[[:space:]]*/ {
+                sub(/^[[:space:]]*platformSourceRef:[[:space:]]*/, "")
+                gsub(/^[\047"]|[\047"][[:space:]]*$/, "")
+                print
+              }')"
+            ref_lines="$(printf '%s\n' "$candidate_ref" | wc -l | tr -d ' ')"
+            if ! printf '%s\n' "$candidate_ref" | grep -Eq '^digest=sha256:[0-9a-f]{64}$' \
+              || [ "$ref_lines" -ne 1 ]; then
+              echo "::error::Open release PR at ${sha} has no single immutable platformSourceRef; refusing retention."
+              exit 1
+            fi
+            candidate_digest="${candidate_ref#digest=}"
+            protected_promotion_digests="${protected_promotion_digests:+${protected_promotion_digests} }${candidate_digest}"
+          done
+          protected_count="$(printf '%s\n' "$protected_promotion_digests" | awk '{print NF}')"
+          echo "Protecting ${protected_count} promotion candidate digest(s) referenced by open release PRs."
 
           # All container packages under the org that live in the cozystack/
           # registry namespace (ghcr.io/cozystack/cozystack/<name>).
@@ -106,5 +151,34 @@ jobs:
                 echo "  • would delete ${pkg} version ${id}"
               fi
             done
+          done
+
+          # A promoted manifest acquires vX.Y.Z (and possibly latest) in addition
+          # to its temporary tag, so the all(tags match promotion-*) predicate is
+          # the safety boundary: published bytes are never eligible. An open PR's
+          # pinned digest is excluded separately. Only the cozystack-packages
+          # repository receives these candidate tags.
+          pkg='cozystack/cozystack-packages'
+          enc="$(jq -rn --arg p "$pkg" '$p|@uri')"
+          cutoff="$(date -u -d "${PROMOTION_TTL_DAYS} days ago" '+%Y-%m-%dT%H:%M:%SZ')"
+          promotion_ids="$(gh api --paginate "/orgs/${ORG}/packages/container/${enc}/versions" \
+            | jq -s --arg cutoff "$cutoff" --arg protected "$protected_promotion_digests" '[add[]
+              | .name as $digest
+              | select((.metadata.container.tags | length) > 0)
+              | select(.metadata.container.tags | all(test("^promotion-v[0-9]+\\.[0-9]+\\.[0-9]+-from-v[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[0-9]+-run-[0-9]+-[0-9]+$")))
+              | select(.updated_at < $cutoff)
+              | select(($protected | split(" ") | index($digest)) == null)
+              | .id]')"
+          promotion_total="$(printf '%s' "$promotion_ids" | jq 'length')"
+          echo "── ${pkg}: ${promotion_total} abandoned promotion candidate(s) older than ${PROMOTION_TTL_DAYS} days"
+          printf '%s' "$promotion_ids" | jq -r '.[]' | while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            if [ "$APPLY" = "true" ]; then
+              echo "  ✗ deleting ${pkg} promotion candidate version ${id}"
+              gh api -X DELETE "/orgs/${ORG}/packages/container/${enc}/versions/${id}" >/dev/null \
+                || echo "::warning::failed to delete ${pkg} version ${id} (permissions?)"
+            else
+              echo "  • would delete ${pkg} promotion candidate version ${id}"
+            fi
           done
           echo "Done."
