@@ -126,8 +126,15 @@ while IFS= read -r rel; do
     echo "::error::promoted artifact file differs from release tree: $rel" >&2
     exit 1
   fi
-  if { [ -x "$artifact_file" ] && [ ! -x "$release_file" ] \
-      || [ ! -x "$artifact_file" ] && [ -x "$release_file" ]; }; then
+  # Resolve each side to a value first. Written as one `&&`/`||` chain this
+  # reads like a symmetric difference and is not one: POSIX gives the two
+  # operators equal precedence and left associativity, so `A && B || C && D`
+  # groups as `((A && B) || C) && D` and the candidate-executable direction —
+  # the one that makes content executable inside the artifact the operator
+  # installs — is accepted silently.
+  if [ -x "$artifact_file" ]; then artifact_exec=1; else artifact_exec=0; fi
+  if [ -x "$release_file" ]; then release_exec=1; else release_exec=0; fi
+  if [ "$artifact_exec" -ne "$release_exec" ]; then
     echo "::error::promoted artifact executable bit differs from release tree: $rel" >&2
     exit 1
   fi

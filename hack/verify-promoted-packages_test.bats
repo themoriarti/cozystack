@@ -161,6 +161,46 @@ EOF
   grep -q "candidate's original platformSourceUrl.*must equal trusted repository" "$tmp/err"
 }
 
+# The mode check has to catch BOTH directions, and only one of them is the
+# dangerous one. A candidate whose file is executable where the release tree's
+# is not is content the merge reviewer never saw made runnable inside the
+# artifact the operator installs — cmp(1) compares bytes and says nothing about
+# it. The mirror case is the benign one, and it was the only one an earlier
+# `&&`/`||` chain actually rejected: POSIX gives the two operators equal
+# precedence and left associativity, so the guard grouped as
+# `((A && B) || C) && D` and quietly accepted a candidate-only executable bit.
+@test "rejects an executable bit set only in the candidate" {
+  tmp="$(_test_workspace)/fixture"
+  _make_verify_fixture "$tmp"
+  chmod +x "$tmp/artifact/system/dashboard/values.yaml"
+
+  rc=0
+  MOCK_ARTIFACT="$tmp/artifact" MOCK_RC_ARTIFACT="$tmp/rc-artifact" MOCK_FLUX_LOG="$tmp/flux.log" \
+    VERIFY_PACKAGES_WORKDIR="$tmp/work" \
+    PATH="$tmp/bin:$PATH" \
+    hack/verify-promoted-packages.sh 9.9.9 "$tmp/release" \
+    > "$tmp/out" 2> "$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  grep -q 'executable bit differs from release tree' "$tmp/err"
+}
+
+@test "rejects an executable bit set only in the release tree" {
+  tmp="$(_test_workspace)/fixture"
+  _make_verify_fixture "$tmp"
+  chmod +x "$tmp/release/system/dashboard/values.yaml"
+
+  rc=0
+  MOCK_ARTIFACT="$tmp/artifact" MOCK_RC_ARTIFACT="$tmp/rc-artifact" MOCK_FLUX_LOG="$tmp/flux.log" \
+    VERIFY_PACKAGES_WORKDIR="$tmp/work" \
+    PATH="$tmp/bin:$PATH" \
+    hack/verify-promoted-packages.sh 9.9.9 "$tmp/release" \
+    > "$tmp/out" 2> "$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  grep -q 'executable bit differs from release tree' "$tmp/err"
+}
+
 @test "rejects installer drift beyond the self-reference" {
   tmp="$(_test_workspace)/fixture"
   _make_verify_fixture "$tmp"
