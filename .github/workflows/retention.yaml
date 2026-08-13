@@ -77,11 +77,33 @@ jobs:
           set -euo pipefail
           if [ "$APPLY" = "true" ]; then echo "MODE: APPLY (deleting)"; else echo "MODE: dry-run"; fi
 
-          # Protect the immutable packages digest pinned by every open promotion
-          # PR. Age alone does not imply abandonment: an approved release PR can
-          # legitimately remain open longer than the TTL. Resolve only trusted,
-          # same-repository release branches authored by the release bot; fail
-          # closed before any deletion if their installer pin cannot be read.
+          # Protect every immutable packages digest a live promotion still
+          # depends on. Age alone does not imply abandonment: an approved
+          # release PR can legitimately stay open longer than the TTL.
+          #
+          # A candidate becomes permanently safe only when finalize's retag adds
+          # the stable tag to its manifest, because that is what makes the
+          # all(promotion-*) predicate at the bottom stop matching it. Finalize
+          # runs post-merge, so an open-PR-only protection has a hole exactly
+          # where a half-finished release sits: finalize creates the write-once
+          # stable git tag, then dies before the retag, and the digest is now
+          # pinned by a merge commit and a tag nobody can move, referenced by no
+          # open PR, on a manifest carrying only its temporary tag. Deleting it
+          # leaves a release that can be finished only by hand.
+          #
+          # Two sources, therefore, read differently on purpose. A failure in
+          # either blocks the promotion sweep at the bottom and nothing else —
+          # the nightly sweep in between shares no state with it and must not
+          # be held hostage to a bad pin on a release branch.
+          promotion_retention_blocked=0
+          protected_promotion_digests=""
+          protect_digest() {
+            protected_promotion_digests="${protected_promotion_digests:+${protected_promotion_digests} }$1"
+          }
+
+          # Source 1 — open, trusted, same-repository promote PRs opened by the
+          # release bot. Their head is SUPPOSED to carry exactly one candidate
+          # pin, so anything else is an anomaly: block rather than skip.
           release_pr_shas="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100" \
             | jq -s -r --arg repo "$GITHUB_REPOSITORY" 'add[]
               | select(.user.login == "cozystack-ci[bot]")
@@ -89,11 +111,14 @@ jobs:
               | select(.head.ref | test("^release-[0-9]+\\.[0-9]+\\.[0-9]+$"))
               | select(any(.labels[]?; .name == "release"))
               | .head.sha')"
-          protected_promotion_digests=""
           for sha in $release_pr_shas; do
             values="$(gh api \
               -H 'Accept: application/vnd.github.raw+json' \
-              "/repos/${GITHUB_REPOSITORY}/contents/packages/core/installer/values.yaml?ref=${sha}")"
+              "/repos/${GITHUB_REPOSITORY}/contents/packages/core/installer/values.yaml?ref=${sha}")" || {
+              echo "::error::Open release PR at ${sha} has unreadable installer values; refusing retention of promotion candidates."
+              promotion_retention_blocked=1
+              continue
+            }
             candidate_ref="$(printf '%s\n' "$values" | awk '
               /^[[:space:]]*platformSourceRef:[[:space:]]*/ {
                 sub(/^[[:space:]]*platformSourceRef:[[:space:]]*/, "")
@@ -103,14 +128,40 @@ jobs:
             ref_lines="$(printf '%s\n' "$candidate_ref" | wc -l | tr -d ' ')"
             if ! printf '%s\n' "$candidate_ref" | grep -Eq '^digest=sha256:[0-9a-f]{64}$' \
               || [ "$ref_lines" -ne 1 ]; then
-              echo "::error::Open release PR at ${sha} has no single immutable platformSourceRef; refusing retention."
-              exit 1
+              echo "::error::Open release PR at ${sha} has no single immutable platformSourceRef; refusing retention of promotion candidates."
+              promotion_retention_blocked=1
+              continue
             fi
-            candidate_digest="${candidate_ref#digest=}"
-            protected_promotion_digests="${protected_promotion_digests:+${protected_promotion_digests} }${candidate_digest}"
+            protect_digest "${candidate_ref#digest=}"
           done
+
+          # Source 2 — the tips of the branches a promote PR can merge into.
+          # This is what covers the window between merge and retag. Read
+          # permissively, the opposite of source 1: protect every digest pin
+          # found and treat a branch without one as contributing nothing. A
+          # maintenance line cut before this pipeline existed cannot pin a
+          # promotion candidate, because none existed when it was cut, so its
+          # missing or tag-form pin is not an anomaly and must not wedge the
+          # sweep forever. Reading permissively can only ever protect more.
+          base_branches="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/branches?per_page=100" \
+            | jq -s -r 'add[] | .name
+              | select(. == "main" or test("^release-[0-9]+\\.[0-9]+$"))')"
+          for branch in $base_branches; do
+            values="$(gh api \
+              -H 'Accept: application/vnd.github.raw+json' \
+              "/repos/${GITHUB_REPOSITORY}/contents/packages/core/installer/values.yaml?ref=${branch}" 2>/dev/null)" || {
+              echo "  ${branch}: no readable installer values; nothing to protect"
+              continue
+            }
+            branch_digests="$(printf '%s\n' "$values" \
+              | grep -oE 'digest=sha256:[0-9a-f]{64}' | sed 's/^digest=//' | sort -u || true)"
+            for digest in $branch_digests; do
+              protect_digest "$digest"
+            done
+          done
+
           protected_count="$(printf '%s\n' "$protected_promotion_digests" | awk '{print NF}')"
-          echo "Protecting ${protected_count} promotion candidate digest(s) referenced by open release PRs."
+          echo "Protecting ${protected_count} promotion candidate digest(s) named by an open release PR or a base-branch tip."
 
           # All container packages under the org that live in the cozystack/
           # registry namespace (ghcr.io/cozystack/cozystack/<name>).
@@ -153,11 +204,22 @@ jobs:
             done
           done
 
+          # Anything unresolved above means the protected set is incomplete, so
+          # no candidate can be called abandoned. Skip this sweep entirely and
+          # fail the job. Deliberately here and not at the point of failure: the
+          # nightly sweep above is unrelated work that had no reason to be
+          # cancelled by a bad pin on a release branch, and it has already run.
+          if [ "$promotion_retention_blocked" -eq 1 ]; then
+            echo "::error::promotion candidate protection could not be resolved; skipping the promotion sweep."
+            exit 1
+          fi
+
           # A promoted manifest acquires vX.Y.Z (and possibly latest) in addition
           # to its temporary tag, so the all(tags match promotion-*) predicate is
-          # the safety boundary: published bytes are never eligible. An open PR's
-          # pinned digest is excluded separately. Only the cozystack-packages
-          # repository receives these candidate tags.
+          # the safety boundary: published bytes are never eligible. Digests
+          # named by an open promote PR or by a base-branch tip are excluded
+          # separately, which is what covers a candidate between merge and
+          # retag. Only cozystack-packages receives these candidate tags.
           pkg='cozystack/cozystack-packages'
           enc="$(jq -rn --arg p "$pkg" '$p|@uri')"
           cutoff="$(date -u -d "${PROMOTION_TTL_DAYS} days ago" '+%Y-%m-%dT%H:%M:%SZ')"
