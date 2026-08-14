@@ -133,6 +133,11 @@ step_line() {
   printf '%s\n' "$validate" | code_lines | grep -qF "['hack/verify-promoted-packages.sh', 'EXPECTED_PACKAGES_REPOSITORY']"
   # The verifier resolves its libraries relative to itself at run time, so a
   # base carrying the script without them fails the gate it is meant to be.
+  # BOTH of them: the shared image-reference enumeration is sourced through the
+  # same `dirname $0` as the promoted-packages library, so a base missing it
+  # fails in the same place. Pinned per entry rather than only as a block —
+  # dropping any single pair used to leave every assertion here green.
+  printf '%s\n' "$validate" | code_lines | grep -qF "['hack/lib/image-refs.sh', 'collect_image_refs()']"
   printf '%s\n' "$validate" | code_lines | grep -qF "['hack/lib/promoted-packages.sh', 'PACKAGES_DIGEST_REF_PATTERN']"
   printf '%s\n' "$validate" | code_lines | grep -qF "core.setOutput('base_branch', baseBranch)"
 
