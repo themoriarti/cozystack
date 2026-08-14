@@ -108,6 +108,55 @@ EOF
   grep -q 'still carries rc image references' "$tmp/err"
 }
 
+# The scan's `|| true` is not optional — `find … -exec … +` reports the
+# legitimate "nothing matched" as a failure too — which leaves grep's own
+# diagnostics as the only remaining signal that a file went unscanned. Produce
+# that signal the way an unreadable file produces it, without depending on the
+# runner's uid: root reads a chmod 000 fixture anyway, so a permissions-based
+# test would quietly stop testing anything wherever the suite runs as root.
+# A grep on PATH answering the scan's invocation the way the real one answers a
+# file it cannot open is the same injection idiom as _tooling_with_collector
+# below, one dependency further out.
+_grep_failing_the_rc_scan() {
+  real_grep="$(command -v grep)"
+  cat > "$1/grep" <<EOF
+#!/bin/sh
+# Only the scan, which find invokes as: grep -lE -- <pattern> <files...>. Every
+# other grep in the verifier, and in the collector it sources, must behave.
+if [ "\$1" = "-lE" ]; then
+  for _a in "\$@"; do _last="\$_a"; done
+  echo "grep: \$_last: Permission denied" >&2
+  exit 2
+fi
+exec $real_grep "\$@"
+EOF
+  chmod +x "$1/grep"
+}
+
+@test "refuses when the rc-reference scan could not read a file" {
+  tmp="$(_test_workspace)/fixture"
+  _make_verify_fixture "$tmp"
+  _grep_failing_the_rc_scan "$tmp/bin"
+
+  rc=0
+  MOCK_ARTIFACT="$tmp/artifact" MOCK_RC_ARTIFACT="$tmp/rc-artifact" MOCK_FLUX_LOG="$tmp/flux.log" \
+    VERIFY_PACKAGES_WORKDIR="$tmp/work" \
+    PATH="$tmp/bin:$PATH" \
+    hack/verify-promoted-packages.sh 9.9.9 "$tmp/release" \
+    > "$tmp/out" 2> "$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  grep -q 'could not scan the promoted artifact for rc image references' "$tmp/err"
+  # The diagnostic itself has to reach the log, or the failure names no file and
+  # nobody can tell which one went unscanned.
+  grep -q 'Permission denied' "$tmp/err"
+  # …and the verifier did not go on to report a proof it skipped part of.
+  # Counted rather than negated with `!`, which suppresses errexit and would
+  # pass regardless.
+  count="$(grep -c 'identical package tree' "$tmp/out" || true)"
+  [ "${count:-0}" -eq 0 ]
+}
+
 # The threat this whole job exists for: someone edits packages/ on the release
 # PR after promotion published the candidate, so the artifact the installer
 # resolves is no longer the tree that was reviewed and tagged. A file present on
