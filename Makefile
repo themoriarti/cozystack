@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test test-controllers preflight
 
 include hack/common-envs.mk
 
