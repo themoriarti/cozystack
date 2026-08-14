@@ -81,6 +81,8 @@ and asserts the sentinel round-tripped through S3 into the restored copy while
 the source is left untouched. Set `SKIP_RESTORE=1` to stop after a successful
 backup.
 
+The to-copy restore currently ends with the target holding the source cluster's system users, so the target's own credentials stop authenticating and that last assertion fails; #3832 tracks it, and `SKIP_RESTORE=1` stops before that step.
+
 Same-namespace flows are the supported path. Cross-tenant restores (target in
 `tenant-test`, source's seaweedfs in `tenant-root`) are blocked by the per-tenant
 Cilium egress policy and stay a manual / dev-cluster flow.
@@ -93,3 +95,5 @@ Analysis whenever the mongodb app or the suite changes, and on every release
 cut. It runs in `tenant-root` against the in-cluster seaweedfs endpoint — the
 isolated e2e tenant cannot reach it across the Cilium egress policy, and the
 external ingress endpoint is an unroutable placeholder in the sandbox.
+
+It drives `run-all.sh` with `SKIP_RESTORE=1` and stops once the BackupJob succeeds, so the restore steps are not covered by CI while #3832 is open: a to-copy restore replays the source cluster's system users into the target, after which the target's own credentials no longer authenticate and the sentinel cannot be read back.
