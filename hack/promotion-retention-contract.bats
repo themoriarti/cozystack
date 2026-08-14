@@ -79,3 +79,37 @@ step_block() {
   [ "$nightly" -lt "$guard" ]
   [ "$guard" -lt "$sweep" ]
 }
+
+@test "a listing failure defers to that guard instead of aborting the job" {
+  # The deferred guard above is only worth having if nothing between it and the
+  # protection sources can exit first. Both sources open with a `gh api
+  # --paginate` listing that sits ABOVE the nightly sweep, and the step runs
+  # under `set -euo pipefail`: unhandled, a transient /pulls or /branches blip
+  # exits the step and takes unrelated GHCR nightly pruning down with it.
+  block="$(step_block 'Prune' "$RETENTION")"
+  [ -n "$block" ]
+
+  printf '%s\n' "$block" | code_lines | grep -qF 'set -euo pipefail'
+
+  # Each listing must carry its own handler, which has to do both things: raise
+  # the blocked flag, so deletion stays fail-closed, and empty the list, because
+  # a half-paginated list left in place is a smaller protected set and a smaller
+  # protected set is the one shape that can authorise a delete.
+  #
+  # Asserted within a short window after the listing rather than anywhere in the
+  # step, so a handler belonging to a different failure path cannot satisfy it.
+  # The window is why an edit that grows one of these jq filters has to move its
+  # handler along with it.
+  for pair in 'pulls?state=open&per_page=100|release_pr_shas' \
+              'branches?per_page=100|base_branches'; do
+    endpoint="${pair%%|*}"
+    var="${pair#*|}"
+    listing="$(printf '%s\n' "$block" | code_lines \
+      | grep -nF "$endpoint" | awk -F: 'NR == 1 { print $1 }')"
+    [ -n "$listing" ]
+    window="$(printf '%s\n' "$block" | code_lines \
+      | awk -v start="$listing" 'NR >= start && NR <= start + 11')"
+    printf '%s\n' "$window" | grep -qF 'promotion_retention_blocked=1'
+    printf '%s\n' "$window" | grep -qF "${var}=\"\""
+  done
+}
