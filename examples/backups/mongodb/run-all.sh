@@ -90,6 +90,8 @@ BACKUP_NAME=$(kubectl -n "$NAMESPACE" get backupjobs.backups.cozystack.io "$BACK
 log_success "Backup artefact: ${BACKUP_NAME}"
 
 if [[ "${SKIP_RESTORE:-0}" == "1" ]]; then
+    # hack/e2e-chainsaw/mongodb/ asserts this line to prove the skip really
+    # happened, so rewording it reds that suite with a bare match failure.
     log_warning "SKIP_RESTORE=1: stopping after a successful backup."
     exit 0
 fi
