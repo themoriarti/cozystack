@@ -50,12 +50,17 @@ tests:
       - hasDocuments:
           count: 0
         template: templates/strategy-altinity-default.yaml
-      # MongoDB is the exception: its Strategy carries no bucket coordinates
-      # (the S3 target lives on the MongoDB application's spec.backup, the
-      # driver only names the storage), so it renders unconditionally — there
-      # is nothing to gate on a resolved $bucketName.
+      # MongoDB is gated like every sibling, and this count is the assertion
+      # that keeps the chart installable. Its Strategy needs no bucket
+      # coordinates (the S3 target lives on the MongoDB application's
+      # spec.backup, the driver only names the storage), so the gate is there
+      # purely for ordering: this chart ships its own CRDs as templates, Helm
+      # resolves the whole manifest through the RESTMapper before applying any
+      # of it, and one ungated Strategy CR makes the first install apply zero
+      # objects with "no matches for kind" and never recover. A count of 1 here
+      # is that bug, green, which is how it shipped once already.
       - hasDocuments:
-          count: 1
+          count: 0
         template: templates/strategy-mongodb-default.yaml
       - hasDocuments:
           count: 0
