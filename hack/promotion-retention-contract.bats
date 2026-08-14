@@ -113,3 +113,46 @@ step_block() {
     printf '%s\n' "$window" | grep -qF "${var}=\"\""
   done
 }
+
+@test "a failed org package listing cannot exit green above the guard" {
+  # The third listing feeds the nightly sweep, and its failure used to be
+  # indistinguishable from success: one `|| true` covered both the `gh api` and
+  # the `grep` that filters it, and grep legitimately exits 1 when no package
+  # matches. Both states arrived as an empty list, and the empty state exits 0 —
+  # below the nightly sweep, above the deferred guard. So a protection failure
+  # could end in a green run that swept nothing and never reached the guard,
+  # which bypasses the test above rather than varying it.
+  block="$(step_block 'Prune' "$RETENTION")"
+  [ -n "$block" ]
+
+  listing="$(printf '%s\n' "$block" | code_lines \
+    | grep -nF 'packages?package_type=container' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$listing" ]
+  window="$(printf '%s\n' "$block" | code_lines \
+    | awk -v start="$listing" 'NR >= start && NR <= start + 11')"
+  printf '%s\n' "$window" | grep -qF 'promotion_retention_blocked=1'
+  printf '%s\n' "$window" | grep -qF 'all_pkgs=""'
+
+  # The filter has to be its own statement, after that handler, so its exit 1
+  # can never again stand in for a failed listing.
+  handler="$(printf '%s\n' "$block" | code_lines \
+    | grep -nF 'all_pkgs=""' | awk -F: 'NR == 1 { print $1 }')"
+  filter="$(printf '%s\n' "$block" | code_lines \
+    | grep -nF "grep '^cozystack/'" | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$handler" ] && [ -n "$filter" ]
+  [ "$handler" -lt "$filter" ]
+
+  # And the empty-list early exit has to consult the flag before taking it: a
+  # blocked run leaves non-zero, an ordinarily empty org still exits 0 as it
+  # always did. Positions are read inside the branch's own window so an exit
+  # belonging to some other path cannot satisfy them.
+  branch="$(printf '%s\n' "$block" | code_lines \
+    | awk -v start="$filter" 'NR >= start && NR <= start + 12')"
+  check_at="$(printf '%s\n' "$branch" \
+    | grep -nF '"$promotion_retention_blocked" -eq 0' | awk -F: 'NR == 1 { print $1 }')"
+  fail_at="$(printf '%s\n' "$branch" | grep -nF 'exit 1' | awk -F: 'NR == 1 { print $1 }')"
+  green_at="$(printf '%s\n' "$branch" | grep -nF 'exit 0' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$check_at" ] && [ -n "$fail_at" ] && [ -n "$green_at" ]
+  [ "$check_at" -lt "$fail_at" ]
+  [ "$fail_at" -lt "$green_at" ]
+}

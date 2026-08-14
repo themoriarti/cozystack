@@ -189,9 +189,35 @@ jobs:
 
           # All container packages under the org that live in the cozystack/
           # registry namespace (ghcr.io/cozystack/cozystack/<name>).
-          pkgs="$(gh api --paginate "/orgs/${ORG}/packages?package_type=container" \
-            --jq '.[].name' | grep '^cozystack/' || true)"
-          [ -n "$pkgs" ] || { echo "No cozystack/* container packages found."; exit 0; }
+          #
+          # Listed and filtered as two statements, because one `|| true` cannot
+          # mean two things. `grep` legitimately exits 1 when the org has no
+          # cozystack/* package, and a failed listing produces the same empty
+          # output, so a trailing `|| true` covering both turned an API failure
+          # into "no packages found" — which exits 0 BELOW the nightly sweep and
+          # ABOVE the deferred guard, so an unresolvable protection set ended in
+          # a green run that swept nothing. That bypasses the guard rather than
+          # varying it.
+          all_pkgs="$(gh api --paginate "/orgs/${ORG}/packages?package_type=container" \
+            --jq '.[].name')" || {
+            echo "::error::Could not list ${ORG} container packages; refusing retention of promotion candidates."
+            promotion_retention_blocked=1
+            all_pkgs=""
+          }
+          # grep's exit 1 now means only what it says: nothing matched.
+          pkgs="$(printf '%s\n' "$all_pkgs" | grep '^cozystack/' || true)"
+          if [ -z "$pkgs" ]; then
+            # Fail-closed before the early exit. The flag set here means this
+            # listing or a protection source above went unresolved, and there is
+            # no sweep left to run that could carry the run to the guard below —
+            # so this is the last place the flag can still be honoured.
+            [ "$promotion_retention_blocked" -eq 0 ] || {
+              echo "::error::candidate protection could not be resolved and nothing was swept; refusing to report success."
+              exit 1
+            }
+            echo "No cozystack/* container packages found."
+            exit 0
+          fi
 
           printf '%s\n' "$pkgs" | while IFS= read -r pkg; do
             [ -n "$pkg" ] || continue
