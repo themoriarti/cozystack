@@ -820,18 +820,43 @@ cozy_assert_guest_console_attached() {
 # to this test costs one extra file named after itself and nothing else; at
 # the cap it can displace one of this suite's own, since kubectl returns the
 # list name-sorted. COLLECTION-TRUNCATED.txt is what keeps that visible.
+#
+# Takes the context it was called in, because it is called from both paths and
+# both write here. On the failure path the console is the evidence; on the
+# passing path it is the baseline that evidence is read against, and the two are
+# the same files in the same directory. Which one a tarball holds is otherwise
+# recoverable only from the run's verdict somewhere else entirely, so the
+# capture states it.
 cozy_capture_tenant_serial_console() {
+  local context="$1"
+  # How many Pods the walk may cover, taken from the caller because the two
+  # paths have different room. The failure path runs inside a phase whose budget
+  # is derived against the whole op, so it can afford the pool at its maximum.
+  # The passing path has no phase and no budget of its own: it runs inside the
+  # same operation whose ceiling the suite has already spent most of, and a
+  # diagnostic that turns a suite green-then-red for running long would be worse
+  # than the missing baseline it exists to collect. So that caller asks for the
+  # pool's minimum, which is what a boot baseline needs -- two workers booting
+  # is the same measurement as ten -- and the cap that fires records what it
+  # dropped either way.
+  local max_pods="$2"
   local report_dir="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}/tenant-serial-console"
   local pods pod rc
   local list_rc=0
   local seen=0
+  local walked=0
   local silent=0
-  local pod_err
-  local max_pods=6
+  local cut_short=0
+  local pod_err read_at read_done
+  local timeline timeline_err timeline_why timeline_rc=0 timeline_err_kept=0
   local err_log="${report_dir}/setup-error.log"
   local warn_log="${report_dir}/READ-WARNINGS.txt"
 
   mkdir -p "${report_dir}"
+  # Written before the first read, not after the walk: the outcome this most
+  # needs to be legible in is the one where nothing was captured, and every
+  # early return below leaves the directory holding a note alone.
+  printf '%s\n' "${context}" >"${report_dir}/CAPTURE-CONTEXT.txt"
   # stderr goes to its own file rather than being folded into the captured
   # stdout: a warning kubectl prints on an otherwise successful call would
   # otherwise be read back as a Pod name. Which file it goes to is decided by
@@ -863,7 +888,8 @@ cozy_capture_tenant_serial_console() {
     return 1
   fi
 
-  # Cap the walk. Every read here is bounded, but the pool can reach maxReplicas, so
+  # Cap the walk, at the number the caller asked for. Every read here is bounded,
+  # but the pool can reach maxReplicas, so
   # an uncapped loop is a term whose size the cluster sets rather than this file --
   # inside a failure path that has to reach the tenant snapshot at the end of it.
   # The phase budget beside COZY_DIAG_PHASE_BUDGET is what stops the collectors as a
@@ -880,6 +906,14 @@ cozy_capture_tenant_serial_console() {
         >"${report_dir}/COLLECTION-TRUNCATED.txt"
       break
     fi
+    # Counted after the cap test, not from it. `seen` is incremented before that
+    # test so it can fire on the Pod past the cap, which leaves it one higher
+    # than the number of Pods read whenever the walk truncates. Reporting a
+    # count of silent consoles against it would state a denominator that is
+    # neither what was read nor what matched -- and the truncation marker beside
+    # the capture prints both correctly, so the job log and the artifact would
+    # disagree on a run nobody opens the artifact for.
+    walked=$((walked + 1))
     echo "--- capturing guest serial console: ${pod} ---"
     rc=0
     # stderr goes beside the capture, not into it. Folded in, kubectl's own
@@ -891,9 +925,11 @@ cozy_capture_tenant_serial_console() {
     # read above decides it: kubectl writes warnings on stderr with a zero
     # status too, and a warning beside a healthy capture is not an error.
     pod_err="${report_dir}/${pod}.read-error.log"
+    read_at=$(date +%s)
     timeout -k 5 30 kubectl -n tenant-test logs "${pod}" \
       -c guest-console-log --limit-bytes=1048576 \
       >"${report_dir}/${pod}.log" 2>"${pod_err}" || rc=$?
+    read_done=$(date +%s)
     if [ ! -s "${pod_err}" ]; then
       rm -f "${pod_err}"
       pod_err=
@@ -925,6 +961,11 @@ cozy_capture_tenant_serial_console() {
         >>"${report_dir}/${pod}.log"
     elif [ "${rc}" -ne 0 ]; then
       silent=$((silent + 1))
+      # Counted apart as well as together. `silent` gates the Pod-state read
+      # below, and a console cut off part way needs that read as much as an
+      # empty one does; but it is not silence, and the summary line these feed
+      # would otherwise report bytes that arrived as bytes that never did.
+      cut_short=$((cut_short + 1))
       if [ -n "${pod_err}" ]; then
         printf '%s\n' \
           'console output is truncated; see read-error.log and POD-STATE.txt' \
@@ -935,8 +976,105 @@ cozy_capture_tenant_serial_console() {
           >>"${report_dir}/${pod}.log"
       fi
     fi
-    printf '\n[capture exit code: %s]\n' "${rc}" >>"${report_dir}/${pod}.log"
+    # The wall clock the log's own stamps have to be read against. Every line a
+    # guest prints is stamped in seconds since that guest's kernel started, so
+    # the file says how far the guest had got and nothing about when that was.
+    # Paired with the compute container's start in CAPTURE-TIMELINE.txt beside
+    # it, this turns the two questions a short console raises -- a guest that
+    # started too late to reach a milestone, or one that reached it and then
+    # went quiet -- into one subtraction. The read instant is otherwise nowhere
+    # in the file: it survives as the artifact's mtime, which is metadata rather
+    # than content, so a reader who opens the log sees nothing and anything that
+    # regenerates or rewrites the file loses it.
+    # Same bracket form the cAdvisor captures use, and for the same
+    # reason: the stream is drained somewhere between the two instants, so an
+    # age computed against either end is exact to the width of the bracket.
+    printf '\n[console read started at %s and returned at %s epoch seconds]\n' \
+      "${read_at}" "${read_done}" >>"${report_dir}/${pod}.log"
+    printf '[capture exit code: %s]\n' "${rc}" >>"${report_dir}/${pod}.log"
   done
+
+  # When each guest started, read once for the whole selector rather than per
+  # Pod, like the Pod-state read below and for the same reason: several workers
+  # are one finding and paying per Pod would put back the unbounded term the cap
+  # removed. Unlike that read this one is unconditional, because the question it
+  # answers is raised by a console that arrived intact just as much as by one
+  # that did not -- a full log ending mid-boot is the shape this failure keeps
+  # producing, and it is the shape that says nothing on its own.
+  #
+  # Both container starts, not just compute's: the guest's clock begins with
+  # compute, and the console container starting later or restarting would mean
+  # the stream missed a stretch the guest did print, which reads identically to
+  # a guest that was quiet.
+  #
+  # The console container is asked for in both status lists, the way the attach
+  # check asks for it in both spec lists. KubeVirt runs it as an init container
+  # today, so its runtime state is under initContainerStatuses and reading only
+  # containerStatuses returns empty for a container that started fine, which
+  # costs the field its meaning. Missing keys are not an error for a jsonpath
+  # template, so naming both costs an empty string on whichever list does not
+  # hold it.
+  #
+  # Both fields read the RUNNING instance, so a container that has since
+  # terminated reads empty here even though it ran. The legend says so rather
+  # than the query chasing lastState as well: what this pairs with is a console
+  # that was read from a live Pod, and a second start time for an instance whose
+  # console is not the one in the file beside it would be read as the same
+  # quantity.
+  timeline="${report_dir}/CAPTURE-TIMELINE.txt"
+  timeline_err="${report_dir}/CAPTURE-TIMELINE-warnings.txt"
+  {
+    printf '=== when each tenant worker guest started, against the reads above ===\n'
+    printf '%s\n' \
+      'each console log carries the instant its own read returned, in epoch seconds; the times below are RFC 3339, so convert before subtracting rather than comparing the two as printed. computeStartedAt subtracted from that instant is how long the guest had been alive when it was read; compare the result against the last [ ss.ssssss] stamp in the log, which counts from the same start. Close together means the guest was still printing when the read ran, so the log ends because the guest had not got further. Far apart means the console stopped growing for the difference, which is the guest going quiet or the stream no longer carrying it; consoleStartedAt is what separates those, since a console container that started late or restarted missed whatever the guest printed before it. Read that against CAPTURE-CONTEXT.txt before calling it a finding: on a capture taken after a suite passed, the guest finished booting long before the read and a large difference is what a healthy worker looks like, so what is worth comparing there is the guest seconds each milestone landed at rather than the size of the gap. These are the running instances only: a Pod whose compute has no start time has no compute container running now, which is not the same as never having had one, and phase beside it is what says which'
+  } >"${timeline}"
+  # Bounded like every read here, and its stderr kept out of the file for the
+  # same reason the reads above keep theirs out: the success probe below matches
+  # on the row prefix, and a warning kubectl writes beside a healthy read would
+  # otherwise be sitting inside the rows it is supposed to be distinguished
+  # from.
+  timeout -k 5 30 kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher \
+    -o jsonpath='{range .items[*]}{"name="}{.metadata.name}{" phase="}{.status.phase}{" podStartTime="}{.status.startTime}{" computeStartedAt="}{.status.containerStatuses[?(@.name=="compute")].state.running.startedAt}{" consoleStartedAt="}{.status.initContainerStatuses[?(@.name=="guest-console-log")].state.running.startedAt}{.status.containerStatuses[?(@.name=="guest-console-log")].state.running.startedAt}{"\n"}{end}' \
+    --request-timeout=30s >>"${timeline}" 2>>"${timeline_err}" || timeline_rc=$?
+  timeline_err_kept=0
+  if [ ! -s "${timeline_err}" ]; then
+    rm -f "${timeline_err}"
+  elif [ "${timeline_rc}" -ne 0 ]; then
+    if mv "${timeline_err}" "${report_dir}/CAPTURE-TIMELINE-error.log" 2>/dev/null; then
+      timeline_err_kept=1
+    fi
+  fi
+  # Three outcomes, three labels, because only one of them says anything about
+  # the guests. A read that failed is a statement about this machine's view of
+  # the cluster; a read that answered with nothing is a statement about the
+  # namespace; and neither may be left as an absent file, which reads as a
+  # capture that had no reason to write one. The failed arm is tested for rows
+  # as well, because a read cut off part way leaves both -- and a note saying
+  # nothing was observed, sitting under rows that plainly were, is a file that
+  # contradicts itself.
+  # The error file is named only when there is one. `timeout` kills the child
+  # without a word, so this read can fail having written to neither stream, and
+  # a note pointing at a file that was never created sends the reader looking
+  # for evidence that does not exist -- the same trap the per-Pod notes above
+  # avoid the same way.
+  if [ "${timeline_err_kept}" -eq 1 ]; then
+    timeline_why='; the reason it gave is in CAPTURE-TIMELINE-error.log'
+  else
+    timeline_why='; it gave no reason on either stream'
+  fi
+  if [ "${timeline_rc}" -ne 0 ] && grep -q '^name=' "${timeline}"; then
+    printf '%s\n' \
+      "the start-time read was cut off (exit ${timeline_rc}); the rows above are a prefix and the Pods missing from them were not observed${timeline_why}" \
+      >>"${timeline}"
+  elif [ "${timeline_rc}" -ne 0 ]; then
+    printf '%s\n' \
+      "the start-time read failed (exit ${timeline_rc}); when these guests started was not observed, which is not the same as their having no start time${timeline_why}" \
+      >>"${timeline}"
+  elif ! grep -q '^name=' "${timeline}"; then
+    printf '%s\n' \
+      'the start-time read succeeded and returned no rows; the walk above read consoles from Pods this selector no longer matches' \
+      >>"${timeline}"
+  fi
 
   # An empty console log has two causes that are indistinguishable in the log
   # itself: the guest printed nothing, or the container never started and there
@@ -948,6 +1086,13 @@ cozy_capture_tenant_serial_console() {
   # selector rather than per Pod: several silent workers are one finding, and
   # paying per Pod would put back the unbounded term the cap removed.
   if [ "${silent}" -gt 0 ]; then
+    # Said on stdout as well as in the report, because the two callers read
+    # different things. On the failure path the report is opened either way; on
+    # the passing path it is not opened at all, and a baseline that came back
+    # empty there would otherwise be visible only to whoever downloads a green
+    # run's artifact -- which is nobody. The count is not a failure: on the
+    # failure path a guest that printed nothing is itself a finding.
+    echo "» of the ${walked} guest consoles read, $((silent - cut_short)) came back empty and ${cut_short} were cut short; see POD-STATE.txt beside the capture"
     {
       printf '=== describe pods -l kubevirt.io=virt-launcher ===\n'
       timeout -k 5 30 kubectl -n tenant-test describe pods \
@@ -1971,6 +2116,39 @@ COZY_DIAG_RATE_INTERVAL_DEFAULT=12
 # rather than merit -- the note at the read says why, and says that merging
 # would improve both the cost and what a tight run collects.
 COZY_DIAG_PHASE_BUDGET_DEFAULT=420
+
+# The operation both kubernetes-*/chainsaw-test.yaml give the script, and the
+# room the passing-path console baseline needs inside it. Constants rather than
+# knobs: neither is a budget a caller tunes, they are a restatement of a ceiling
+# that lives in the suite files, and the guard in
+# hack/run-kubernetes-serial-console_test.bats reads both sides so a suite that
+# changes its `timeout:` fails there rather than silently leaving the reserve
+# measured against a ceiling that moved.
+#
+# The reserve is the capture's own cost at the cap that caller asks for -- a
+# listing, two console reads, the two Pod-state reads a silent console triggers
+# and the start-time read, six at the 30s bound and 5s kill grace, so 210s --
+# plus a minute. It buys one thing: a run that is already near the ceiling
+# declines the baseline instead of being killed while collecting it, because a
+# suite that proved everything it exists to prove must not go red over a
+# debugging aid.
+#
+# The extra minute is slack, not a bound on what follows. The teardown between
+# this capture and the end of the function carries no wall-clock ceiling of its
+# own -- `--wait=false` bounds what the deletes wait for, not how long the
+# request itself may hang -- so no finite reserve makes the tail of a run fit by
+# arithmetic. That is pre-existing and tracked in cozystack/cozystack#3666; what
+# the reserve bounds is this capture's own contribution to the ceiling, which is
+# the part this file added.
+COZY_OP_CEILING=3000
+COZY_GREEN_CAPTURE_RESERVE=270
+# Zero until run_kubernetes_test stamps it. Declared here so the arithmetic in
+# cozy_green_capture_has_room cannot meet an unbound name: under the `set -eu`
+# the chainsaw script runs with, that aborts the whole function, which is the
+# very outcome -- a passing run ending red -- the reserve exists to prevent. A
+# zero left in place fails closed rather than quietly: the elapsed time it
+# implies is the whole epoch, so the capture is declined and says so.
+_COZY_RUN_STARTED_AT=0
 COZY_DIAG_READ_TIMEOUT=$(_cozy_diag_seconds "${COZY_DIAG_READ_TIMEOUT:-$COZY_DIAG_READ_TIMEOUT_DEFAULT}" "$COZY_DIAG_READ_TIMEOUT_DEFAULT" COZY_DIAG_READ_TIMEOUT positive)
 # Validated too, though a suffix is not what breaks it: `timeout -k abc 20` exits 125
 # before running the command at all, so a non-numeric grace makes every read in the
@@ -2096,6 +2274,33 @@ cozy_diag_phase_has_time() {
   [ "${_COZY_DIAG_PHASE_DEADLINE}" -ne 0 ] || return 0
   [ "$(date +%s)" -ge "${_COZY_DIAG_PHASE_DEADLINE}" ] || return 0
   echo "=== ${1}: not collected — the diagnostics phase spent its ${COZY_DIAG_PHASE_BUDGET}s budget and the tenant crust-gather snapshot after it needs the rest of the op; nothing here was observed either way ===" >&2
+  return 1
+}
+
+# cozy_green_capture_has_room <what>: 0 while the operation can still afford
+# <what> on the PASSING path, 1 once it cannot -- and on 1 it says which
+# collector was declined and why.
+#
+# The failure path's counterpart above bounds a phase against a budget of its
+# own. This one has no phase to bound: it runs after everything the suite
+# proves, inside an operation whose ceiling the bringup ahead of it has already
+# spent an unknown share of. So the quantity is what is LEFT of that ceiling,
+# and the only way to know it is the stamp taken when the function began.
+#
+# A function rather than two lines at the call site, because the direction of
+# the comparison is the whole safety property and a predicate is something a
+# test can drive both ways. Inlined, the only coverage available is a grep for
+# the line, which passes just as well when the comparison is inverted -- and an
+# inverted one runs the capture on exactly the runs that cannot afford it.
+cozy_green_capture_has_room() {
+  local elapsed=$(( $(date +%s) - _COZY_RUN_STARTED_AT ))
+
+  [ "$(( COZY_OP_CEILING - elapsed ))" -lt "${COZY_GREEN_CAPTURE_RESERVE}" ] || return 0
+  # States the room asked for rather than the cost, because those are different
+  # numbers and the gate compares against the first: the reserve is the capture's
+  # own worst case plus slack, so reporting it as what the capture costs would
+  # overstate the collector by the slack every time this fires.
+  echo "» ${1}: not collected — ${elapsed}s of the ${COZY_OP_CEILING}s operation are spent and this needs ${COZY_GREEN_CAPTURE_RESERVE}s of room to start; nothing here was observed either way" >&2
   return 1
 }
 
@@ -2413,7 +2618,7 @@ cozy_report_node_join_failure() {
   # disable by design and the green path asserts it attached.
   if cozy_diag_phase_has_time '(b1) tenant worker guest serial console'; then
     echo "=== (b1) tenant worker guest serial console (management cluster, ns tenant-test) ==="
-    cozy_capture_tenant_serial_console || true
+    cozy_capture_tenant_serial_console 'node-join failed: captured after fewer than 2 tenant nodes became Ready inside the deadline' 6 || true
   fi
 
   # (d) What the workers got, what they were denied, and what the sandbox nodes
@@ -2561,6 +2766,14 @@ run_kubernetes_test() {
     local enable_ouroboros="${4:-}"
     local k8s_version
     k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
+
+  # Stamped here because the passing path below spends wall clock on a
+  # diagnostic after everything the suite proves has already passed, and the
+  # operation it runs inside has a fixed ceiling. What that costs is bounded;
+  # what is LEFT of the ceiling by then is not, so the only way the capture can
+  # be prevented from turning a green run red is to know how long this has been
+  # running. Nothing else reads it.
+  _COZY_RUN_STARTED_AT=$(date +%s)
 
   # Clean up stale resources from a previous failed retry
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
@@ -3390,6 +3603,48 @@ EOF
   cozy_assert_guest_console_attached || attach_rc=$?
   if [ "${attach_rc}" -eq 2 ]; then
     exit 1
+  fi
+
+  # The same capture the failure path takes, on the run that succeeded. Every
+  # console this tree has collected came from a failure, so what a healthy
+  # worker's boot looks like -- which stages it goes through and how long each
+  # takes -- has never been measured, and "slower than usual" is the claim the
+  # node-join failure keeps resting on. This is where the value it is compared
+  # against comes from, and it exists only until the tenant below is deleted:
+  # the container holding the stream goes with the Pod, and no read recovers it
+  # afterwards.
+  #
+  # Not gated by the diagnostics phase budget, which covers the failure path and
+  # the snapshot behind it. Every read here is bounded individually and none of
+  # them as a group, so the honest ceiling is the listing, one read per Pod at
+  # the cap this caller asks for, the two Pod-state reads a silent console
+  # triggers and the start-time read -- six reads at the 30s bound and 5s kill
+  # grace, so 210s, against a run that has finished everything it exists to
+  # prove and typically has minutes of its operation left. The wedge check is
+  # not in that count: it belongs to the failure path, and this caller reaches
+  # here only after the attach check above has already answered the question it
+  # asks. Asking for the pool's minimum rather than the pool is what keeps that
+  # number small.
+  #
+  # It is still declined rather than attempted when the operation no longer has
+  # room for it, which is what keeps "must not fail the suite" true of a
+  # collector whose cost is real: everything above has passed by here, so a run
+  # killed at the op ceiling while collecting a debugging aid would report the
+  # suite as broken on the strength of the aid. Where the reserve comes from is
+  # written beside the constant rather than repeated here.
+  if cozy_green_capture_has_room 'the tenant worker guest console baseline'; then
+    echo "» capturing the tenant worker guest console before teardown"
+    if ! cozy_capture_tenant_serial_console 'the suite passed: captured after the last assertion and before tenant teardown' 2; then
+      # Said in the job log rather than only in the report, because a green run
+      # is the one nobody opens the report for. This branch covers the two setup
+      # failures the capture returns non-zero for, the Pod listing failing and
+      # no virt-launcher Pod matching; a walk that ran and came back with empty
+      # consoles returns zero and is reported by the capture's own line about
+      # how many said nothing. It does not fail the suite: this captures a
+      # debugging aid, and everything the suite exists to prove has already
+      # passed by here.
+      echo "» WARNING: the guest console capture failed on a passing run; the boot baseline is missing from this report, see the notes beside the capture" >&2
+    fi
   fi
 
   # Success: disarm the tenant-snapshot trap so it doesn't fire on the clean exit.
