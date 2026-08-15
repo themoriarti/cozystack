@@ -2651,7 +2651,7 @@ ${ouroboros_addon}
     md0:
       diskSize: 20Gi
       gpus: []
-      instanceType: u1.medium
+      instanceType: u1.large
       # The failure this suite keeps hitting is a worker that stalls in the
       # guest before Talos apid answers, which leaves nothing to read on the
       # management side and nothing for talosctl to connect to. Turning this on
