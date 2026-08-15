@@ -724,7 +724,7 @@ run_capture() {
   # started rather than cut short -- and the console is the only capture that
   # survives a worker which never reached apid, the shape this failure usually
   # takes. Cost, not worth, is what puts it here.
-  console=$(grep -n 'cozy_capture_tenant_serial_console || true' "$lib" | head -n 1 | cut -d: -f1)
+  console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$console" ]; then
     echo "expected the failure block to still capture the guest serial console" >&2
     return 1

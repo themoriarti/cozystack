@@ -1108,7 +1108,7 @@ assert_file_lacks_pattern() {
   # capture can spend the whole budget between them. With
   # (c) last, the budget declines the answer and keeps the noise.
   csr=$(grep -n "cozy_diag_read 'tenant CSR list'" "$lib" | head -n 1 | cut -d: -f1)
-  console=$(grep -n 'cozy_capture_tenant_serial_console || true' "$lib" | head -n 1 | cut -d: -f1)
+  console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
   for v in csr console talos; do
     eval "n=\$$v"
@@ -1147,7 +1147,7 @@ assert_file_lacks_pattern() {
   # so cost decides it rather than taste. The companion guard is the one that
   # bounds what may sit ahead of the console at all.
   net=$(grep -n 'cozy_capture_tenant_worker_network_counters || true' "$lib" | head -n 1 | cut -d: -f1)
-  console=$(grep -n 'cozy_capture_tenant_serial_console || true' "$lib" | head -n 1 | cut -d: -f1)
+  console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
   mirror=$(grep -n 'ghcr_mirror_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
@@ -1180,7 +1180,7 @@ assert_file_lacks_pattern() {
   #
   # Two claims, because one of them is structural and the other is arithmetic
   # and neither implies the other.
-  console=$(grep -n 'cozy_capture_tenant_serial_console || true' "$lib" | head -n 1 | cut -d: -f1)
+  console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$console" ]; then
     echo "expected the failure path to capture the guest serial console" >&2
     return 1
