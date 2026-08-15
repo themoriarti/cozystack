@@ -32,9 +32,12 @@ spec:
         # so that a budget running out drops the collectors that cost minutes rather
         # than the reads that discriminate between failure modes:
         #   node-join diagnostics reads
-        #   worker CPU throttling counters
         #   worker network counters
         #   serial-console family (~5m50s at worst, ~3m30s at the pool's minimum)
+        #   worker CPU usage and throttling counters, two samples
+        #   sandbox node CPU time, two samples
+        #     (those two alternate rather than run to completion in turn: both
+        #     take their first reading, one wait passes, both take their second)
         #   guest Talos capture
         #   ghcr-mirror state, access log and warm-up Job
         #   talos-image-cache diagnosis

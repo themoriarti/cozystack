@@ -37,6 +37,7 @@ A Chainsaw `assert` polls until the resource matches its expected shape or the p
 
 - Condition checks use the **filter-as-list** form `(conditions[?type == 'Ready'])`. Chainsaw v0.2.15 throws "field not found" on the indexed `(...)[0]` form.
 - Imperative checks that no Kubernetes API condition models — S3 reachability through a port-forward, an external LB HTTP path, MetalLB advertisement — stay in a `script` step. A bare `sleep N` inside such a script is allowed **only** when nothing better models the wait; annotate it with a `TODO(e2e-replace-fixed-timeouts):` comment. The bootstrap BATS (`hack/e2e-install-cozystack.bats`, `hack/e2e-chainsaw/_lib/run-kubernetes.sh`) carries the sanctioned `until kubectl get` exceptions.
+- A **measurement interval** is not one of those waits and does not take the marker. The rule above governs a `sleep` standing in for a condition nobody wrote a wait for, and the marker means "replace this once something models it". A gap between two readings of a cumulative counter models nothing and is the quantity itself: the diagnostics phase in `hack/e2e-chainsaw/_lib/run-kubernetes.sh` reads the tenant worker CPU counters and the sandbox nodes' `/proc/stat` on either side of one `COZY_DIAG_RATE_INTERVAL` wait, because a single reading of a counter that accumulates from container start is an average over the whole uptime and no rate at all. There is no event to wait for instead, so a `TODO` there would promise a replacement that cannot exist. Carve-outs are named here rather than judged case by case, and this is the only measurement-interval one.
 
 ### 3. Let Chainsaw own cleanup; no test-level EXIT/RETURN traps
 
@@ -153,7 +154,7 @@ The suite is pinned to Chainsaw **v0.2.15** (the latest release as of May 2026);
 
 1. No new retry loop unless the step is pure infra (image pull / VM boot / network).
 2. Resource readiness uses a Chainsaw `assert` (not an imperative `until kubectl get …; kubectl wait`); condition checks use the filter-as-list form `(conditions[?type == 'Ready'])`.
-3. Imperative-only waits live in a `script` step; any bare `sleep` carries a `TODO(e2e-replace-fixed-timeouts):` justification.
+3. Imperative-only waits live in a `script` step; any bare `sleep` carries a `TODO(e2e-replace-fixed-timeouts):` justification, unless it is a measurement interval, which §2 carves out by name and which takes no marker because no event can replace it.
 4. No test-level `EXIT`/`RETURN` trap — rely on Chainsaw cleanup; a self-contained trap is allowed inside a single `script` step (port-forward / temp dir), and inside an explicit subshell within a BATS `@test`, where it does not displace the runner's own handler. A BATS file that still carries test-level traps declares the count itself in `# EXIT-TRAP DEBT: N`; do not ask for one to be removed without checking that line, because the count is exact in both directions.
 5. Controller-created artifacts the test cannot reclaim are pruned explicitly; nested tenants delete child → parent with a wait-for-deletion between.
 6. Standard HR-Ready assert timeout is **5–6m**; longer waits (harbor 10m, NFS 10m, VM image pulls, platform-wide install 15m) are justified in-line.
