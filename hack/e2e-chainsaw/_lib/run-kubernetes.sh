@@ -2651,7 +2651,10 @@ ${ouroboros_addon}
     md0:
       diskSize: 20Gi
       gpus: []
-      instanceType: u1.large
+      # Sizing comes from resources below; this is here because the values
+      # schema requires the field, and the chart drops the instancetype from
+      # the VM whenever a group sets both resources.cpu and resources.memory.
+      instanceType: u1.medium
       # The failure this suite keeps hitting is a worker that stalls in the
       # guest before Talos apid answers, which leaves nothing to read on the
       # management side and nothing for talosctl to connect to. Turning this on
@@ -2660,7 +2663,14 @@ ${ouroboros_addon}
       logSerialConsole: true
       maxReplicas: 10
       minReplicas: 2
-      resources: {}
+      # Two vCPUs at the memory the workers had before. Sized by resources
+      # rather than by instanceType: u1.large doubles memory along with the
+      # vCPUs, and four 8Gi workers do not fit beside the rest of the suite,
+      # so the second worker of each cluster stayed Pending on Insufficient
+      # memory and the node group never reached two Ready nodes.
+      resources:
+        cpu: 2
+        memory: 4Gi
       roles:
       - ingress-nginx
   storageClass: replicated
