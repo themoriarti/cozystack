@@ -112,6 +112,7 @@ Be precise about TIA's scope — it is narrower than "skip E2E for unrelated PRs
 - **Pre-pull** every kubeovn / linstor / cert-manager image onto all nodes before those HelmReleases install (`hack/e2e-prepull-images.sh`), so clustered workloads (OVN raft, LINSTOR, the cert-manager webhook) do not fail on per-node image-pull stagger.
 - **Exclude loop devices** from host LVM scanning in the Talos machine config so the host does not activate volume groups inside loop-mounted e2e disk images.
 - **Fail fast on node readiness** (≈5m, then bail) rather than marching into LB/NFS tests that will also fail — it saves several minutes per attempt and keeps the real failure at the top of the log.
+- **Give the sandbox a runner class strictly larger than its guests.** `hack/e2e-prepare-cluster.bats` boots the management nodes with fixed `-smp` and `-m`, and those resources are committed for the whole run, so a lane whose runner only just covers them leaves the host nothing for QEMU's own threads, containerd and the runner agent. A new e2e lane picks its `runs-on` accordingly; `hack/sandbox-runner-headroom.bats` derives both sides and fails the unit suite when any lane loses that margin.
 
 ### 10. The E2E workflow split: same-repo vs fork, and the "E2E Tests" commit status
 
