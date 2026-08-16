@@ -135,6 +135,21 @@ tests:
       - failedTemplate:
           errorPattern: 'nodeGroup md0: podCpuRequest \(2\) exceeds podCpuLimit \(1500m\)'
 
+  # Same guard, a unit the comparison used to be blind to: the chart library's
+  # quantity converter dropped the micro and nano suffixes, and a value it does
+  # not recognise converts to zero, which made the comparison read 0 against 0
+  # and wave the pair through.
+  - it: refuses a request above its own limit in the micro range
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 50u
+      podCpuRequest: 100u
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuRequest \(100u\) exceeds podCpuLimit \(50u\)'
+
   - it: accepts a request equal to its limit
     set:
       resources:

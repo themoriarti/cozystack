@@ -242,6 +242,38 @@ tests:
       - failedTemplate:
           errorPattern: 'nodeGroup worker0: podCpuRequest \(2\) exceeds podCpuLimit \(1500m\)'
 
+  # Same guard, a unit the comparison used to be blind to: the chart library's
+  # quantity converter dropped the micro and nano suffixes, and a value it does
+  # not recognise converts to zero, which made the comparison read 0 against 0
+  # and wave the pair through.
+  - it: refuses a request above its own limit in the micro range
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+          - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          podCpuLimit: 50u
+          podCpuRequest: 100u
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup worker0: podCpuRequest \(100u\) exceeds podCpuLimit \(50u\)'
+
   - it: accepts a request equal to its limit
     release:
       name: test-k8s
