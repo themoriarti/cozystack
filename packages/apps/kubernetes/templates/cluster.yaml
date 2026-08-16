@@ -188,20 +188,25 @@ spec:
             resources:
               {{/* 2Gi is enough: persistent DataVolumes are not counted as pod ephemeral storage */}}
               {{- $podResources := include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) }}
-              {{- /* The limit alone, and only for a group that asked for one.
-                    KubeVirt derives both sides from the guest vCPU count, and a
-                    limit declared here is what stops it deriving the ceiling.
-                    It does not leave the request where it was: the KubeVirt VMI
-                    defaulter (setDefaultResourceRequests) copies a declared CPU
-                    limit into the CPU request when the VM declares no request,
-                    so the group asks the scheduler for its whole ceiling.
-                    The enclosing KubevirtMachineTemplate is content-hash named,
-                    so a group that sets nothing has to render the same bytes it
-                    did before this field existed, down to the whitespace. */}}
+              {{- /* Either side of the pair, and only for a group that asked
+                    for it. KubeVirt derives both from the guest vCPU count, and
+                    each key declared here displaces one derivation: the limit
+                    stops it deriving a ceiling, the request stops its VMI
+                    defaulter (setDefaultResourceRequests) copying that declared
+                    ceiling into the request. A group declaring only the limit
+                    therefore moves both. The enclosing KubevirtMachineTemplate
+                    is content-hash named, so a group that sets neither has to
+                    render the same bytes it did before these fields existed,
+                    down to the whitespace. */}}
               {{- with .group.podCpuLimit }}
               {{- $limited := $podResources | fromYaml }}
               {{- $_ := set $limited.limits "cpu" (toString .) }}
               {{- $podResources = toYaml $limited }}
+              {{- end }}
+              {{- with .group.podCpuRequest }}
+              {{- $requested := $podResources | fromYaml }}
+              {{- $_ := set $requested.requests "cpu" (toString .) }}
+              {{- $podResources = toYaml $requested }}
               {{- end }}
               {{- $podResources | nindent 14 }}
           evictionStrategy: External
@@ -557,6 +562,23 @@ metadata:
        the instancetype from the VM. */}}
 {{- if and $group.podCpuLimit $group.instanceType (not (and $hasCpu $hasMem)) }}
 {{-   fail (printf "nodeGroup %s: podCpuLimit cannot be combined with instanceType sizing, because KubeVirt rejects a VirtualMachine that references an instancetype and also sets domain.resources.limits.cpu. Set both resources.cpu and resources.memory, which drops the instancetype from the VM, or drop podCpuLimit." $groupName) }}
+{{- end }}
+{{- /* Other side of the pair, same conflict and the same check upstream: the
+       instancetype applier reports domain.resources.requests.cpu alongside the
+       limit rather than resolving either. */}}
+{{- if and $group.podCpuRequest $group.instanceType (not (and $hasCpu $hasMem)) }}
+{{-   fail (printf "nodeGroup %s: podCpuRequest cannot be combined with instanceType sizing, because KubeVirt rejects a VirtualMachine that references an instancetype and also sets domain.resources.requests.cpu. Set both resources.cpu and resources.memory, which drops the instancetype from the VM, or drop podCpuRequest." $groupName) }}
+{{- end }}
+{{- /* A container requesting more than its own limit is rejected by API server
+       validation, and it is the worker's Pod that carries the rejection, two
+       objects away from the Kubernetes CR that named the values -- so the group
+       would come up with no Machine and nothing local to read. Compared as
+       floats because both fields are quantities: 1500m against 2 is not a
+       string comparison. */}}
+{{- if and $group.podCpuRequest $group.podCpuLimit }}
+{{-   if gt (include "cozy-lib.resources.toFloat" $group.podCpuRequest | float64) (include "cozy-lib.resources.toFloat" $group.podCpuLimit | float64) }}
+{{-     fail (printf "nodeGroup %s: podCpuRequest (%v) exceeds podCpuLimit (%v), and a container cannot request more CPU than its limit" $groupName $group.podCpuRequest $group.podCpuLimit) }}
+{{-   end }}
 {{- end }}
 {{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
 {{- $instanceType := dict }}

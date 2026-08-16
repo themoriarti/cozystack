@@ -1,0 +1,349 @@
+suite: worker pod CPU request
+
+# `podCpuRequest` is the only knob that sets `domain.resources.requests.cpu` on
+# a worker VM. It is the other half of `podCpuLimit`: KubeVirt copies a declared
+# CPU limit into the request when the VM declares none, so without this field
+# the ceiling and the scheduler reservation cannot be moved apart. What it holds
+# still is what the scheduler reserves per worker, not the size of the guest.
+
+templates:
+  - templates/cluster.yaml
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr:
+        group: instancetype.kubevirt.io
+        version: v1beta1
+        resource: virtualmachineclusterinstancetypes
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr:
+        group: cluster.x-k8s.io
+        version: v1beta1
+        resource: machinesets
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr:
+        group: infrastructure.cluster.x-k8s.io
+        version: v1alpha1
+        resource: kubevirtmachinetemplates
+      namespaced: true
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata:
+        name: u1.medium
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata:
+        name: ignored-ms
+        namespace: tenant-test
+      spec:
+        template:
+          spec:
+            infrastructureRef:
+              kind: Other
+              name: ignored
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata:
+        name: ignored-kmt
+        namespace: tenant-test
+
+tests:
+  - it: renders both sides of the pair when a node group sets both
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+          - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          podCpuLimit: 3
+          podCpuRequest: 200m
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "200m"
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      # The point of the pair: the ceiling moved and the reservation did not
+      # follow it. Asserted together, because a request rendered without its
+      # limit still landing would be a different feature.
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.cpu
+          value: "3"
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      # The ephemeral-storage pair the block carried before either field existed
+      # survives on both sides, request still divided by the cluster
+      # ephemeral-storage allocation ratio.
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.ephemeral-storage
+          value: "2Gi"
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.ephemeral-storage
+          value: "53687091"
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+
+  # Allowed, and it does not silently pull a limit in with it: KubeVirt keeps
+  # deriving the ceiling from the guest vCPU count, and only the scheduler
+  # weighting moves. The reverse -- a limit with no request -- is what moves
+  # both, which is why the pair is not symmetric.
+  - it: accepts a request on its own and renders no limit beside it
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+          - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          podCpuRequest: 1
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "1"
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.cpu
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+
+  - it: accepts a fractional quantity
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+          - worker
+          resources:
+            cpu: 1
+            memory: 2Gi
+          podCpuLimit: 1500m
+          podCpuRequest: 100m
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "100m"
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+
+  # KubeVirt's instancetype applier reports domain.resources.requests.cpu as a
+  # conflict in the same check that reports the limit, so a VM carrying both is
+  # refused at admission with no Machine and no explanation on the Kubernetes
+  # CR. Sizing a group by resources is what drops the instancetype from the VM.
+  - it: refuses the request on a group still sized by its instancetype
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+          - worker
+          podCpuRequest: 200m
+    asserts:
+      # Matched on the message, not on "some render error": a group carrying
+      # half a size trips the neighbouring resources.cpu / resources.memory
+      # guard first, so a bare failedTemplate here would pass on the wrong
+      # error.
+      - failedTemplate:
+          errorPattern: 'nodeGroup worker0: podCpuRequest cannot be combined with instanceType sizing'
+
+  # Rejected here rather than by API server validation on the worker's Pod,
+  # which is two objects away from the CR that named the values.
+  - it: refuses a request above its own limit
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+          - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          podCpuLimit: 1500m
+          podCpuRequest: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup worker0: podCpuRequest \(2\) exceeds podCpuLimit \(1500m\)'
+
+  - it: accepts a request equal to its limit
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+          - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          podCpuLimit: 2
+          podCpuRequest: 2
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "2"
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+
+  # The comparison is between quantities, not between the strings that spell
+  # them: "500m" sorts after "1" and would be refused by a lexical guard, while
+  # half a CPU under a ceiling of one is the ordinary case this field is for.
+  - it: accepts a milli request under an integer limit
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+          - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          podCpuLimit: 1
+          podCpuRequest: 500m
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "500m"
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+
+  - it: leaves the request to KubeVirt when the node group sets none
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+          - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+    asserts:
+      # Absent, not empty. The enclosing KubevirtMachineTemplate is named by a
+      # hash of its content, so a `cpu:` key rendered for a group that asked
+      # for nothing would rename the template and roll every live worker VM of
+      # every cluster on upgrade.
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.ephemeral-storage
+          value: "53687091"
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
