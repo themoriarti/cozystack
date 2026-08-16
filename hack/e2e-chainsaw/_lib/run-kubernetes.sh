@@ -3163,6 +3163,16 @@ ${ouroboros_addon}
       logSerialConsole: true
       maxReplicas: 10
       minReplicas: 2
+      # Headroom over the vCPU count, where KubeVirt would otherwise put the
+      # ceiling. Workers failing to join (cozystack/cozystack#3513) have been
+      # measured burning their vCPU threads flat out at a ceiling equal to
+      # their vCPU count while the guest kernel made no progress, which is what
+      # a vCPU spinning on a lock looks like when the vCPU holding that lock is
+      # the one preempted out of the quota they share. Whether the spare CPU
+      # lets the preempted one back in is what this value is here to answer:
+      # measured mechanism, predicted remedy. If the join failure rate does not
+      # move, the lever is elsewhere and this goes back to the vCPU count.
+      podCpuLimit: 3
       # Two vCPUs at the memory the workers had before. Sized by resources
       # rather than by instanceType: u1.large doubles memory along with the
       # vCPUs, and four 8Gi workers do not fit beside the rest of the suite,
