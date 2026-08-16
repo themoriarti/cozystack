@@ -164,8 +164,24 @@ kubelet: {}
 logSerialConsole: true
 EOF
 
+# --- Case: explicit pod CPU limit ---
+cat >"$WORK/case-podcpulimit.yaml" <<'EOF'
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: []
+resources:
+  cpu: "2"
+  memory: 4Gi
+gpus: []
+kubelet: {}
+podCpuLimit: 3
+EOF
+
 RC=0
-for c in resources gpu kubelet serialconsole; do
+for c in resources gpu kubelet serialconsole podcpulimit; do
   write_values "$WORK/case-${c}.yaml"
   diff_kinds "$c" || RC=1
 done
