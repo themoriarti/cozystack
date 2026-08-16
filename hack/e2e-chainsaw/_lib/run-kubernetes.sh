@@ -1205,7 +1205,9 @@ _cozy_capture_worker_cadvisor() {
   COZY_DIAG_READ_TIMEOUT=$(_cozy_diag_seconds "${COZY_DIAG_READ_TIMEOUT-}" "$COZY_DIAG_READ_TIMEOUT_DEFAULT" COZY_DIAG_READ_TIMEOUT positive)
   COZY_DIAG_READ_GRACE=$(_cozy_diag_seconds "${COZY_DIAG_READ_GRACE-}" "$COZY_DIAG_READ_GRACE_DEFAULT" COZY_DIAG_READ_GRACE)
 
-  nodes=$(_cozy_cadvisor_worker_nodes "${report_dir}" "${label}") || return 1
+  nodes=$(_cozy_virt_launcher_listing "${report_dir}" "${label}" \
+    '{range .items[*]}{.spec.nodeName}{"\n"}{end}' \
+    'no virt-launcher Pod with a node assigned in namespace tenant-test; an unscheduled Pod has no kubelet to ask') || return 1
 
   for node in ${nodes}; do
     seen=$((seen + 1))
@@ -1426,17 +1428,27 @@ _cozy_capture_worker_cadvisor() {
   done
 }
 
-# The worker node listing, shared by both captures as code and issued fresh by
+# The virt-launcher listing, shared by the captures as code and issued fresh by
 # each of them: they ask the same question of the same apiserver, and the answer
 # is deliberately not carried between them, for the reason given at the read.
-# Echoes the node names and returns non-zero when there is no walk to make, with
-# the reason written where the reader of that capture will look for it.
-_cozy_cadvisor_worker_nodes() {
+# Echoes the projected field and returns non-zero when there is no walk to make,
+# with the reason written where the reader of that capture will look for it.
+#
+# The whole query is a parameter, not just the field inside it, because what a
+# caller walks is not always what it reads: a capture that talks to a kubelet
+# needs the node a worker landed on, one that talks to the container needs the
+# Pod, and one that has to reach into a container needs to skip the Pods there
+# is nothing to reach into. The sentence for an answer that named nothing
+# travels with it, since an empty listing means something different under each
+# query and a shared wording would be wrong for one of them.
+_cozy_virt_launcher_listing() {
   local report_dir="$1"
   local label="$2"
+  local jsonpath="$3"
+  local empty_msg="$4"
   local err_log="${report_dir}/COLLECTION-FAILED.txt"
   local warn_log="${report_dir}/READ-WARNINGS.txt"
-  local raw_nodes nodes
+  local raw_values values
   local list_rc=0
 
   # stderr is kept out of the captured stdout so a warning on an otherwise
@@ -1448,13 +1460,13 @@ _cozy_cadvisor_worker_nodes() {
   # a listing that never answered indistinguishable from a namespace with no
   # workers in it -- the one conflation these collectors must not make.
   if command -v timeout >/dev/null 2>&1; then
-    raw_nodes=$(timeout -k "${COZY_DIAG_READ_GRACE}" "${COZY_DIAG_READ_TIMEOUT}" \
+    raw_values=$(timeout -k "${COZY_DIAG_READ_GRACE}" "${COZY_DIAG_READ_TIMEOUT}" \
       kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher \
-      -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' \
+      -o "jsonpath=${jsonpath}" \
       "--request-timeout=${COZY_DIAG_READ_TIMEOUT}s" 2>"${warn_log}") || list_rc=$?
   else
-    raw_nodes=$(kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher \
-      -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' \
+    raw_values=$(kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher \
+      -o "jsonpath=${jsonpath}" \
       "--request-timeout=${COZY_DIAG_READ_TIMEOUT}s" 2>"${warn_log}") || list_rc=$?
   fi
   if [ "${list_rc}" -ne 0 ]; then
@@ -1466,15 +1478,13 @@ _cozy_cadvisor_worker_nodes() {
     return 1
   fi
   [ -s "${warn_log}" ] || rm -f "${warn_log}"
-  nodes=$(printf '%s\n' "${raw_nodes}" | sort -u | grep -v '^$' || true)
-  if [ -z "${nodes}" ]; then
-    echo "no virt-launcher Pod with a node assigned for ${label}" >&2
-    printf '%s\n' \
-      'no virt-launcher Pod with a node assigned in namespace tenant-test; an unscheduled Pod has no kubelet to ask' \
-      >"${err_log}"
+  values=$(printf '%s\n' "${raw_values}" | sort -u | grep -v '^$' || true)
+  if [ -z "${values}" ]; then
+    echo "${empty_msg} (${label})" >&2
+    printf '%s\n' "${empty_msg}" >"${err_log}"
     return 1
   fi
-  printf '%s\n' "${nodes}"
+  printf '%s\n' "${values}"
 }
 
 # The one answer here that is not a failure, and until it is written down the
@@ -1852,6 +1862,274 @@ cozy_capture_sandbox_node_cpu_time() {
   done <<EOF
 ${rows}
 EOF
+}
+
+# The shell run inside a worker's compute container to list QEMU's threads.
+#
+# A function rather than a literal at the call site so it can be run against a
+# tree of files instead of against a container: it takes the /proc to walk as
+# its first argument and defaults to the real one, which is the only argument
+# the caller passes. That seam is the whole reason the branches below can be
+# exercised at all -- staging a process whose threads are worth reading needs a
+# hypervisor, and the two outcomes this has to get right are "found QEMU" and
+# "QEMU is gone", the second of which is a routine result on this failure path.
+#
+# Written for the container's shell rather than for the runner's: virt-launcher
+# ships no bash, and every construct here is POSIX. It also shells out to
+# nothing except `getconf`, whose absence it names: `read` is a builtin, and a
+# probe that needed `cat` would report a container missing coreutils as a
+# container whose QEMU had exited -- which is one of the two readings this
+# collector exists to tell apart, manufactured rather than observed.
+#
+# For the same reason the walk counts what it managed to read. Having read no
+# process at all and having read them all without finding QEMU are different
+# findings, and only the second is about the guest.
+_cozy_thread_cpu_probe() {
+  cat <<'PROBE'
+proc_root=${1:-/proc}
+found=0
+seen=0
+lines=0
+printf 'clock ticks per second: %s\n' "$(getconf CLK_TCK 2>/dev/null || echo unavailable)"
+for comm_file in "${proc_root}"/[0-9]*/comm; do
+  comm=
+  read -r comm <"${comm_file}"
+  [ -n "${comm}" ] || continue
+  seen=$((seen + 1))
+  case "${comm}" in
+    qemu-*) ;;
+    *) continue ;;
+  esac
+  pid_dir=${comm_file%/comm}
+  found=1
+  printf 'process %s comm %s\n' "${pid_dir##*/}" "${comm}"
+  # One line per file, because that is all /proc/<pid>/task/<tid>/stat is, and
+  # `read` returns non-zero on a last line with no newline while still setting
+  # the variable -- so the status is not what decides whether anything arrived.
+  for stat_file in "${pid_dir}"/task/*/stat; do
+    stat_line=
+    read -r stat_line <"${stat_file}"
+    [ -n "${stat_line}" ] || continue
+    lines=$((lines + 1))
+    printf '%s\n' "${stat_line}"
+  done
+# On the loop rather than on either read, and that is not a style choice.
+# Redirections are applied left to right, so a `2>/dev/null` written after the
+# input redirect is not in place yet when opening the input fails -- and `read`
+# is a builtin, so the complaint is the shell's own and there is no child whose
+# stderr was ever covered. A thread that exits between the glob and the read is
+# routine here, this probe's stderr is the collector's error artifact, and a
+# healthy capture must not ship a warnings file naming something that did not
+# affect the reading. On the loop the redirect is in place before the body runs,
+# which is also the only spelling that holds in every shell.
+done 2>/dev/null
+if [ "${seen}" -eq 0 ]; then
+  printf '%s\n' 'NO-PROC-READ: not one process could be read under the proc mount, so this says nothing about what the container was running'
+elif [ "${found}" -eq 0 ]; then
+  printf '%s\n' "NO-QEMU-PROCESS: ${seen} process(es) were read and none is named qemu-*, so this container had no QEMU threads to read"
+elif [ "${lines}" -eq 0 ]; then
+  # QEMU was named and then gone: its comm was read and not one of its task
+  # stat files could be. Without this the probe exits clean carrying only a
+  # heading, and a heading is enough to make the capture non-empty, so the
+  # collector would pin a legend about columns onto a file that has none.
+  printf '%s\n' 'NO-THREAD-LINES: a qemu-* process was named and not one of its task stat files could be read, so it exited between the two reads'
+fi
+PROBE
+}
+
+# Split the compute container's CPU time across QEMU's threads, from inside it.
+#
+# This exists because the collector beside it measures the wrong subject for the
+# question it is usually read for. The throttling capture reads the compute
+# container's cgroup, and that cgroup holds every thread QEMU runs: the guest's
+# vCPUs, QEMU's main thread, and its IO and worker threads. So a container
+# burning most of its quota while the guest reports no progress at all is two
+# incompatible findings wearing one number -- a guest computing at its ceiling,
+# and a guest standing still while something beside it spends the quota -- and
+# no container-level counter can separate them. The per-thread split is the only
+# reading that can, and nothing else in this tree collects it.
+#
+# Read from inside the container rather than from the kubelet, which is the
+# opposite of what the throttling capture does and for a reason that does not
+# apply here: cAdvisor publishes per-container series and no per-thread ones, so
+# there is no outside surface carrying this at all. The cost of going inside is
+# the one that capture's comment names -- a reader that shares the cgroup it
+# measures slows down exactly when the answer matters -- which is why the read
+# is bounded and why a container that never answers gets a sentence rather than
+# an empty file. hack/e2e-capture-dataplane.sh reads a container's own cpu.stat
+# the same way, and the exec here carries no --request-timeout for the same
+# reason its execs do not: the flag bounds a request, and this is a streamed
+# connection whose bound is the wall-clock wrapper.
+#
+# Nothing is computed here. The stat lines go into the artifact verbatim and the
+# legend beside them says how to read the two fields that matter, because the
+# field positions are a trap that produces a wrong answer rather than an error:
+# the thread this capture exists to identify is the one whose name contains a
+# space.
+#
+# Takes the sample number it is writing, because it is called twice, and it is
+# called from the loop the other two subjects already share rather than from one
+# of its own: every counter here is cumulative since the thread started, so a
+# rate needs two readings, and the wait between them is the one already being
+# paid.
+cozy_capture_tenant_worker_thread_cpu() {
+  local sample="$1"
+  local report_dir="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}/tenant-thread-cpu/sample-${sample}"
+  local pods pod rc raw pod_err probe read_at read_done
+  local seen=0
+  # The pool's declared minimum is two workers, and the listing below counts
+  # only the Running ones, so this covers that pool scaled once over rather than
+  # a sample of it. Raising it is not free, and at today's knobs it is not
+  # possible: this walk is taken twice, the budget derivation in
+  # hack/run-kubernetes-node-join_test.bats holds the whole sampling group
+  # against the room the tenant snapshot needs behind it, and the next value up
+  # fails that guard. Read the current margin off the guard, which computes both
+  # sides, rather than off a number written here.
+  local max_pods=4
+
+  mkdir -p "${report_dir}"
+  # Re-validated here for the reason every collector re-validates them: a value
+  # assigned after this file is sourced never passed the assignment-time check,
+  # and zero reaches `timeout` as no bound at all.
+  COZY_DIAG_READ_TIMEOUT=$(_cozy_diag_seconds "${COZY_DIAG_READ_TIMEOUT-}" "$COZY_DIAG_READ_TIMEOUT_DEFAULT" COZY_DIAG_READ_TIMEOUT positive)
+  COZY_DIAG_READ_GRACE=$(_cozy_diag_seconds "${COZY_DIAG_READ_GRACE-}" "$COZY_DIAG_READ_GRACE_DEFAULT" COZY_DIAG_READ_GRACE)
+
+  # Running only, which the sibling caller does not ask for and does not need:
+  # it reduces its answer to node names, so a launcher left over from an earlier
+  # attempt costs it nothing. Here each Pod costs a bounded exec and a slot under
+  # the cap, and a Pod that is not Running has no container to exec into at all,
+  # so three dead launchers could push a live worker out of the walk and spend
+  # the budget on tombstones. Filtered in the query rather than after it: a Pod
+  # dropped here was never counted.
+  pods=$(_cozy_virt_launcher_listing "${report_dir}" 'per-thread CPU time capture' \
+    '{range .items[?(@.status.phase=="Running")]}{.metadata.name}{"\n"}{end}' \
+    'no Running virt-launcher Pod in namespace tenant-test; a Pod that is not Running has no compute container to read threads from, and that it is not Running is itself a finding about this failure') || return 1
+
+  probe=$(_cozy_thread_cpu_probe)
+
+  for pod in ${pods}; do
+    seen=$((seen + 1))
+    if [ "${seen}" -gt "${max_pods}" ]; then
+      echo "--- worker per-thread CPU capture stopped at ${max_pods} Pods ---"
+      printf 'capture stopped after %s Pods; %s matched in total\n' \
+        "${max_pods}" "$(printf '%s\n' "${pods}" | wc -l | tr -d ' ')" \
+        >"${report_dir}/COLLECTION-TRUNCATED.txt"
+      break
+    fi
+    echo "--- capturing worker per-thread CPU time: ${pod} ---"
+    raw="${report_dir}/${pod}.txt"
+    pod_err="${report_dir}/${pod}.exec-error.log"
+    rc=0
+    # Stamped on both sides of the read, which is what makes a pair of captures
+    # subtractable. One stamp would leave the sampling instant somewhere inside
+    # a read whose duration is exactly what goes wrong on the run this collector
+    # exists for; on a healthy read the two are the same second.
+    read_at=$(date -u +%s)
+    # Guarded the way the other collectors in this pair guard it: without the
+    # guard a runner with no `timeout` would exit 127 here and leave an empty
+    # directory, which is the one outcome this collector may not produce.
+    # stdin closed explicitly: `sh -c` inherits it, and this walk shares its
+    # stdin with the caller.
+    if command -v timeout >/dev/null 2>&1; then
+      timeout -k "${COZY_DIAG_READ_GRACE}" "${COZY_DIAG_READ_TIMEOUT}" \
+        kubectl -n tenant-test exec "${pod}" -c compute -- \
+        sh -c "${probe}" >"${raw}" 2>"${pod_err}" </dev/null || rc=$?
+    else
+      kubectl -n tenant-test exec "${pod}" -c compute -- \
+        sh -c "${probe}" >"${raw}" 2>"${pod_err}" </dev/null || rc=$?
+    fi
+    read_done=$(date -u +%s)
+    if [ ! -s "${pod_err}" ]; then
+      rm -f "${pod_err}"
+      pod_err=
+    elif [ "${rc}" -eq 0 ]; then
+      mv "${pod_err}" "${report_dir}/${pod}.READ-WARNINGS.txt" 2>/dev/null || true
+      pod_err=
+    fi
+    # Tested before anything is appended, or nothing is ever empty. Which arm
+    # fires is decided by the STATUS and never by whether anything landed on
+    # stderr: `timeout` kills its child without a word and kubectl dies on
+    # SIGTERM the same way, so the dominant failure here -- a container on a
+    # wedged node -- arrives non-zero with an empty error log, and keyed on
+    # stderr the artifact would state the opposite of what happened.
+    #
+    # An empty file is the dangerous outcome rather than a neutral one. Every
+    # thread of a stalled guest still accumulates a stat line, so zero bytes
+    # here reads as a guest whose threads were all idle -- which is one of the
+    # two readings this collector was added to tell apart, arrived at by
+    # default.
+    if [ ! -s "${raw}" ] && [ "${rc}" -ne 0 ]; then
+      if [ -n "${pod_err}" ]; then
+        printf '%s\n' \
+          'the thread split is unknown: the compute container was not reached; see the exec-error.log beside this file, named for the same Pod' \
+          >>"${raw}"
+      else
+        printf '%s\n' \
+          'the thread split is unknown: the compute container was not reached, and the read died without a word on either stream' \
+          >>"${raw}"
+      fi
+    elif [ ! -s "${raw}" ]; then
+      printf '%s\n' \
+        'the thread split is unknown: the compute container answered and returned nothing, which a shell that ran cannot produce -- the probe prints a line before it looks for a process' \
+        >>"${raw}"
+    elif [ "${rc}" -ne 0 ]; then
+      printf '%s\n' \
+        'these thread counters are incomplete: the read was cut short part way through the thread list, so the threads missing from it are the ones listed last rather than an arbitrary subset' \
+        >>"${raw}"
+    elif grep -q '^NO-QEMU-PROCESS:' "${raw}"; then
+      # A clean read that found nothing to read, which on this path is a
+      # finding: the guest's QEMU has already exited. Kept apart from the legend
+      # below because that legend describes stat lines, and this file holds
+      # none -- an explanation of a column layout over a file without columns is
+      # the same overclaim as a pairing instruction over a partial read.
+      printf '%s\n' \
+        'there is nothing to split: the container answered and carried no QEMU process, so this Pod contributes no thread counters to the pair' \
+        >>"${raw}"
+    elif grep -q '^NO-THREAD-LINES:' "${raw}"; then
+      # A heading and nothing under it. The file is not empty, so none of the
+      # arms above fire, and the legend below would explain a column layout the
+      # capture does not carry -- which is why the probe says this rather than
+      # leaving it to be inferred from a line count nobody takes.
+      printf '%s\n' \
+        'the thread split is unknown: QEMU was still named when the probe looked and its threads were gone before they could be read, so this Pod contributes no thread counters to the pair' \
+        >>"${raw}"
+    elif grep -q '^NO-PROC-READ:' "${raw}"; then
+      # Not the arm above, and the difference is the whole point of the probe
+      # counting what it read. That one is a statement about the guest; this one
+      # is a statement about the probe, and reading it as the guest's would put
+      # "QEMU had already exited" in the artifact on the strength of a proc
+      # mount nobody could open.
+      printf '%s\n' \
+        'the thread split is unknown: the shell ran and could not read a single process, so nothing here is a reading about what the guest was doing' \
+        >>"${raw}"
+    else
+      printf '%s\n' \
+        '[each line above beginning with a number is /proc/<pid>/task/<tid>/stat verbatim: the first field is the thread id, the second is the thread name in parentheses, utime is the 14th field and stime the 15th]' \
+        '[counting those fields over whitespace reads the wrong column for exactly the threads this capture exists to identify: a KVM vCPU thread is named CPU 0/KVM, that space sits inside the parentheses, and every field after it shifts by one. Parse from the last ) in the line instead, after which the state is the first field, utime the 12th and stime the 13th]' \
+        "[the names: CPU N/KVM is the guest's vCPU N, the thread whose id equals the process id is QEMU's main thread and its emulator thread, and the rest are QEMU's own IO and worker threads, which carry the process name unless QEMU renamed them]" \
+        '[utime and stime are clock ticks, at the rate the first line above reports, and both are cumulative since the thread started: subtract this Pod file from its sibling under the other sample directory, and the stamps below from each other, to get a rate per thread]' \
+        >>"${raw}"
+    fi
+    # kubectl exits 1 for a refused connection as readily as for a container
+    # that is gone, so the status alone names none of them and the error log is
+    # the only thing that can.
+    if [ "${rc}" -eq 124 ]; then
+      printf '%s\n' \
+        '[exit 124: this collector timing out and the read exiting 124 on its own cannot be told apart]' \
+        >>"${raw}"
+    fi
+    # 128+SIGKILL. The grace signal produces it, and so does anything else that
+    # kills the read, so the note says what the status establishes and stops
+    # there.
+    if [ "${rc}" -eq 137 ]; then
+      printf '%s\n' \
+        '[exit 137: the read was killed rather than stopping on its own; the status does not say what killed it]' \
+        >>"${raw}"
+    fi
+    printf '[read attempted from %s to %s epoch seconds]\n' \
+      "${read_at}" "${read_done}" >>"${raw}"
+    printf '\n[capture exit code: %s]\n' "${rc}" >>"${raw}"
+  done
 }
 
 # Two properties of the network family are invisible to anyone writing this
@@ -2240,17 +2518,17 @@ cozy_diag_phase_start() {
   # cozystack/cozystack#3666; the warning names both halves rather than promising the
   # better one for all of them.
   #
-  # The worker CPU throttling, worker network counter and sandbox node CPU time
-  # captures belong to neither half: they call `timeout` directly AND carry the
-  # same fallback, so on a runner without the binary they run unbounded rather
-  # than exiting 127. That
-  # is the opposite failure from the one the sentence above would lead a reader
-  # to, and it is the half with the snapshot behind it, so they are named here
-  # rather than left to be inferred. The list is derived from the source by
+  # The worker CPU throttling, worker network counter, sandbox node CPU time and
+  # worker per-thread CPU time captures belong to neither half: they call
+  # `timeout` directly AND carry the same fallback, so on a runner without the
+  # binary they run unbounded rather than exiting 127. That is the opposite
+  # failure from the one the sentence above would lead a reader to, and it is
+  # the half with the snapshot behind it, so they are named here rather than
+  # left to be inferred. The list is derived from the source by
   # hack/run-kubernetes-node-join_test.bats, so a collector that joins this
   # group without joining the sentence fails there.
   command -v timeout >/dev/null 2>&1 || \
-    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, sandbox node CPU time, ghcr-mirror and talos-image-cache captures -- keep collecting instead, unbounded" >&2
+    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, sandbox node CPU time, worker per-thread CPU time, ghcr-mirror and talos-image-cache captures -- keep collecting instead, unbounded" >&2
   # Re-checked here, not only at assignment: a value set after this file is sourced
   # -- which is how a test sets it -- would otherwise reach the arithmetic below
   # unvalidated, and that is the one failure that costs the whole block.
@@ -2632,11 +2910,11 @@ cozy_report_node_join_failure() {
   # settle that, and these counters do.
   #
   # It sits BELOW the console, and its ceiling rather than its worth is the
-  # reason. Each collector spends a listing plus up to three node reads per
-  # sample, so the pair is sixteen bounded reads and one interval: at the read
-  # bound and the three-node cap that is most of the phase budget on its own. In
-  # practice it costs the interval plus a handful of reads that an apiserver or
-  # an apid answering at all answers in under a second -- but the run where
+  # reason. Each collector spends a listing plus one read per subject it walks,
+  # twice, and at the read bound and today's caps that ceiling is well past the
+  # whole phase budget rather than a share of it. In practice it costs the
+  # interval plus a handful of reads that an apiserver or an apid answering at
+  # all answers in under a second -- but the run where
   # those reads DO approach their bound is a wedged kubelet, which is the
   # failure this whole block is written for. So the ceiling is not a remote
   # case here, and a collector carrying one that large must not sit ahead of the
@@ -2651,28 +2929,33 @@ cozy_report_node_join_failure() {
   # because it is the first question this pair invites. The phase budget is
   # derived as budget + largest overshoot + snapshot <= op - bringup, where the
   # overshoot term is exactly "one collector admitted a moment before the
-  # deadline runs its whole cost". This pair's ceiling is sixteen bounded reads
-  # plus the interval; the term is the guest-Talos walk, which is larger. So a
-  # pair admitted at the last second finishes inside the room already left for
-  # the tenant crust-gather snapshot rather than pushing it past the op.
+  # deadline runs its whole cost". This group's ceiling is the sum of its walks
+  # plus the interval; the term is the guest-Talos walk, which is still larger,
+  # though no longer by much. So a group admitted at the last second finishes
+  # inside the room already left for the tenant crust-gather snapshot rather
+  # than pushing it past the op.
   # hack/run-kubernetes-node-join_test.bats holds that against both numbers, so
-  # a later change to the cap, the read bound or the interval cannot quietly
-  # make this pair the binding term.
+  # a later change to a cap, the read bound or the interval cannot quietly make
+  # this group the binding term. The margin is not uniform across those knobs
+  # and is not restated here: every walk enters the sum multiplied by its cap
+  # and by two samples, while the interval enters it once, so a cap and the
+  # interval are nowhere near equally expensive. The guard computes both sides
+  # from the source, so it is where a reader finds out which knob has room, and
+  # where the failure surfaces rather than in a timed-out run.
   #
-  # Both collectors are read twice with one wait between the passes, and the
-  # wait is shared: the counters on both sides are cumulative, so one reading of
-  # either is an average over an uptime rather than a rate over the failure.
-  # Taking the first reading of both, waiting once, and taking the second of
-  # both costs the wait once rather than twice.
+  # Each collector is read twice with one wait between the passes, and the wait
+  # is shared: every counter here is cumulative, so one reading of any of them
+  # is an average over an uptime rather than a rate over the failure. Taking the
+  # first reading of each, waiting once, and taking the second of each costs the
+  # wait once rather than once per subject.
   #
-  # What the knob does NOT give is the interval either subject's counters span.
-  # The worker's two readings are separated by the wait plus the sandbox pass
-  # between them, the sandbox's by the wait plus the worker pass, and on the run
-  # this exists for those passes are the slow part rather than the wait. So each
-  # capture stamps the moment it was read and the reader subtracts stamps rather
-  # than assuming the knob. The two subjects' windows overlap and are offset by
-  # one pass; they are not identical, and treating them as identical is the
-  # error the stamps remove.
+  # What the knob does NOT give is the interval a subject's counters span. Each
+  # subject's two readings are separated by the wait plus the other subjects'
+  # passes, and on the run this exists for those passes are the slow part rather
+  # than the wait. So each capture stamps the moment it was read and the reader
+  # subtracts stamps rather than assuming the knob. The subjects' windows
+  # overlap and are offset from one another; they are not identical, and
+  # treating them as identical is the error the stamps remove.
   #
   # This `sleep` is not the fixed-timeout kind the e2e conventions rule out.
   # Those stand in for a condition nobody wrote a wait for; this one is the
@@ -2684,8 +2967,11 @@ cozy_report_node_join_failure() {
   # passed that check -- and zero, the value the flag rejects, would put both
   # readings at the same instant and leave a pair that divides to nothing.
   COZY_DIAG_RATE_INTERVAL=$(_cozy_diag_seconds "${COZY_DIAG_RATE_INTERVAL-}" "$COZY_DIAG_RATE_INTERVAL_DEFAULT" COZY_DIAG_RATE_INTERVAL positive "zero puts both readings at the same instant, so the pair divides to nothing")
-  if cozy_diag_phase_has_time '(d) tenant worker CPU counters and sandbox node CPU time'; then
-    echo "=== (d) tenant worker CPU counters + sandbox node CPU time, two samples with a ${COZY_DIAG_RATE_INTERVAL}s wait between the passes; each capture carries the time it was read ==="
+  # The label names all three subjects because the phase reuses it verbatim in
+  # the decline line, the way the (b) gate below does and for the same reason: a
+  # decline that names two of them reports the third as lost to nobody.
+  if cozy_diag_phase_has_time '(d) tenant worker CPU counters, sandbox node CPU time and worker per-thread CPU time'; then
+    echo "=== (d) tenant worker CPU counters + sandbox node CPU time + worker per-thread CPU time, two samples with a ${COZY_DIAG_RATE_INTERVAL}s wait between the passes; each capture carries the time it was read ==="
     for _sample in 1 2; do
       # Guarded like every other external here, and for a sharper reason than
       # the reads: this call is not wrapped in `|| true`, and the block runs
@@ -2703,6 +2989,7 @@ cozy_report_node_join_failure() {
       fi
       cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true
       cozy_capture_sandbox_node_cpu_time "${_sample}" || true
+      cozy_capture_tenant_worker_thread_cpu "${_sample}" || true
     done
   fi
 

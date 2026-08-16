@@ -36,8 +36,9 @@ spec:
         #   serial-console family (~6m25s at worst, ~4m05s at the pool's minimum)
         #   worker CPU usage and throttling counters, two samples
         #   sandbox node CPU time, two samples
-        #     (those two alternate rather than run to completion in turn: both
-        #     take their first reading, one wait passes, both take their second)
+        #   worker per-thread CPU time inside virt-launcher, two samples
+        #     (those alternate rather than run to completion in turn: each takes
+        #     its first reading, one wait passes, each takes its second)
         #   guest Talos capture
         #   ghcr-mirror state, access log and warm-up Job
         #   talos-image-cache diagnosis
