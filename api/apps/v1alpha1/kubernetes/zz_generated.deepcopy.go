@@ -410,6 +410,7 @@ func (in *NodeGroup) DeepCopyInto(out *NodeGroup) {
 		copy(*out, *in)
 	}
 	out.Kubelet = in.Kubelet
+	out.PodCpuLimit = in.PodCpuLimit.DeepCopy()
 	in.Resources.DeepCopyInto(&out.Resources)
 	if in.Roles != nil {
 		in, out := &in.Roles, &out.Roles

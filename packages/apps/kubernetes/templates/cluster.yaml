@@ -187,7 +187,21 @@ spec:
             {{- end }}
             resources:
               {{/* 2Gi is enough: persistent DataVolumes are not counted as pod ephemeral storage */}}
-              {{- include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) | nindent 14 }}
+              {{- $podResources := include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) }}
+              {{- /* The limit alone, and only for a group that asked for one.
+                    KubeVirt derives both sides from the guest vCPU count, and a
+                    limit declared here is what stops it deriving that one; a
+                    request declared here would override the vCPU-derived one
+                    and move the scheduler weight along with the ceiling. The
+                    enclosing KubevirtMachineTemplate is content-hash named, so
+                    a group that sets nothing has to render the same bytes it
+                    did before this field existed, down to the whitespace. */}}
+              {{- with .group.podCpuLimit }}
+              {{- $limited := $podResources | fromYaml }}
+              {{- $_ := set $limited.limits "cpu" (toString .) }}
+              {{- $podResources = toYaml $limited }}
+              {{- end }}
+              {{- $podResources | nindent 14 }}
           evictionStrategy: External
           volumes:
           - name: system
@@ -532,6 +546,15 @@ metadata:
 {{- $hasMem := and $group.resources $group.resources.memory }}
 {{- if and $group.instanceType (or (and $hasCpu (not $hasMem)) (and $hasMem (not $hasCpu))) }}
 {{-   fail (printf "nodeGroup %s: set both resources.cpu and resources.memory, or neither" $groupName) }}
+{{- end }}
+{{- /* Same conflict class, other field: podCpuLimit renders
+       domain.resources.limits.cpu, and a VM that carries an instancetype and
+       that key is refused by KubeVirt's instancetype applier, which reports it
+       as a conflict rather than resolving it. The group has to be sized by
+       resources for the limit to be usable at all, since that is what drops
+       the instancetype from the VM. */}}
+{{- if and $group.podCpuLimit $group.instanceType (not (and $hasCpu $hasMem)) }}
+{{-   fail (printf "nodeGroup %s: podCpuLimit cannot be combined with instanceType sizing, because KubeVirt rejects a VirtualMachine that references an instancetype and also sets domain.resources.limits.cpu. Set both resources.cpu and resources.memory, which drops the instancetype from the VM, or drop podCpuLimit." $groupName) }}
 {{- end }}
 {{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
 {{- $instanceType := dict }}
