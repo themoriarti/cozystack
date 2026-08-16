@@ -3163,12 +3163,21 @@ ${ouroboros_addon}
       logSerialConsole: true
       maxReplicas: 10
       minReplicas: 2
-      # No podCpuLimit here for now: a limit with no request makes Kubernetes
-      # default the request to the limit, so the compute pod asks the scheduler
-      # for the whole ceiling and the workers sit Pending on Insufficient cpu
-      # before the guest exists. The headroom experiment for
-      # cozystack/cozystack#3513 returns once the chart can pair the limit with
-      # an explicit request.
+      # Headroom above the vCPU count, where KubeVirt would otherwise put the
+      # ceiling. Workers failing to join (cozystack/cozystack#3513) have been
+      # measured burning their vCPU threads flat out at a ceiling equal to their
+      # vCPU count while the guest kernel made no progress, which is what a vCPU
+      # spinning on a lock looks like when the vCPU holding that lock is the one
+      # preempted out of the quota they share. Whether the spare CPU lets the
+      # preempted one back in is what this is here to answer. The request is
+      # what keeps scheduling where it was: setDefaultResourceRequests, in
+      # KubeVirt's VMI mutating webhook, copies a declared CPU limit into an
+      # undeclared CPU request, so the limit alone would have every worker ask
+      # the scheduler for its whole ceiling and sit Pending on Insufficient cpu.
+      # Its value is the one KubeVirt derived for these workers before, from the
+      # vCPU count and the cluster CPU allocation ratio.
+      podCpuLimit: 3
+      podCpuRequest: 200m
       # Two vCPUs at the memory the workers had before. Sized by resources
       # rather than by instanceType: u1.large doubles memory along with the
       # vCPUs, and four 8Gi workers do not fit beside the rest of the suite,
