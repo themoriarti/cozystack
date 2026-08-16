@@ -235,6 +235,12 @@ run_capture() {
   # name has to come from the Pod. Reading a fixed node, or the wrong one,
   # returns a healthy stranger's counters.
   assert_file_contains 'get --raw /api/v1/nodes/srv1/proxy/metrics/cadvisor' "$kubectl_calls"
+  # And the node name comes from the field this caller asks the listing for.
+  # That projection is a parameter of the shared listing, and the other caller
+  # of it passes the Pod name instead; swapped, this capture would ask kubelets
+  # named after Pods and get nothing, with no error to say why. The mock answers
+  # any listing regardless of what was asked for, so nothing else here sees it.
+  assert_file_contains 'jsonpath={range .items[*]}{.spec.nodeName}{"\n"}{end}' "$kubectl_calls"
   capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'container_cpu_cfs_throttled_periods_total' "$capture"
   # One assertion per alternative in the filter's regex, because a typo in an
@@ -567,7 +573,7 @@ run_capture() {
   fn=$(awk '/^cozy_capture_tenant_worker_cpu_throttle\(\)/,/^}/' "$lib"
       awk '/^_cozy_capture_worker_cadvisor\(\)/,/^}/' "$lib"
       awk '/^_cozy_cadvisor_node_stream\(\)/,/^}/' "$lib"
-      awk '/^_cozy_cadvisor_worker_nodes\(\)/,/^}/' "$lib")
+      awk '/^_cozy_virt_launcher_listing\(\)/,/^}/' "$lib")
   case "$fn" in
     *'max_nodes=3'*) ;;
     *) echo "expected the collector to cap the walk at the 3 nodes the comments state" >&2; return 1 ;;
@@ -668,7 +674,7 @@ run_capture() {
   # declined the cheaper reads around it -- which is the failure the phase
   # budget exists to prevent, reintroduced by the newest caller.
   lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  gate=$(grep -n "^ *if cozy_diag_phase_has_time '(d) tenant worker CPU counters and sandbox node CPU time'; then$" \
+  gate=$(grep -n "^ *if cozy_diag_phase_has_time '(d) tenant worker CPU counters, sandbox node CPU time and worker per-thread CPU time'; then$" \
     "$lib" | head -n 1 | cut -d: -f1)
   call=$(grep -n '^ *cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true$' "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$gate" ] || [ -z "$call" ]; then

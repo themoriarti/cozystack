@@ -232,6 +232,7 @@ stub_gated_collectors() {
   cozy_capture_tenant_worker_cpu_throttle() { printf 'cpu-throttle-stub\n'; }
   cozy_capture_tenant_worker_network_counters() { printf 'network-counters-stub\n'; }
   cozy_capture_sandbox_node_cpu_time() { printf 'sandbox-cpu-time-stub\n'; }
+  cozy_capture_tenant_worker_thread_cpu() { printf 'thread-cpu-stub\n'; }
   ghcr_mirror_diagnose() { printf 'ghcr-mirror-stub\n'; }
 }
 
@@ -702,7 +703,7 @@ assert_file_lacks_pattern() {
   # A rule written for additions does not catch a removal, so both directions
   # are named here.
   for marker in serial-console-stub talos-stub image-cache-stub cpu-throttle-stub \
-    network-counters-stub ghcr-mirror-stub; do
+    network-counters-stub sandbox-cpu-time-stub thread-cpu-stub ghcr-mirror-stub; do
     if grep -q "$marker" "$tmp/out"; then
       echo "FAIL: $marker ran after the phase ran out of budget" >&2
       false
@@ -711,7 +712,7 @@ assert_file_lacks_pattern() {
   assert_file_contains '(b1) tenant worker guest serial console: not collected' "$tmp/out"
   assert_file_contains '(b) in-guest Talos dmesg + kubelet logs + service states + links: not collected' "$tmp/out"
   assert_file_contains 're-probe talos-image-cache ClusterIP + cacher debug bundle: not collected' "$tmp/out"
-  assert_file_contains '(d) tenant worker CPU counters and sandbox node CPU time: not collected' "$tmp/out"
+  assert_file_contains '(d) tenant worker CPU counters, sandbox node CPU time and worker per-thread CPU time: not collected' "$tmp/out"
   assert_file_contains '(d2) tenant worker network counters: not collected' "$tmp/out"
   assert_file_contains 'ghcr-mirror state, access log and warm-up Job: not collected' "$tmp/out"
   rm -rf "$tmp"
@@ -933,6 +934,7 @@ assert_file_lacks_pattern() {
     cozy_capture_tenant_worker_network_counters() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_capture_sandbox_node_cpu_time() { :; }
+    cozy_capture_tenant_worker_thread_cpu() { :; }
     kubectl() { printf "KUBECTL_RAN\n" >&2; }
     PATH='"$tmp"'/bin
     cozy_report_node_join_failure test-latest-version
@@ -1215,17 +1217,21 @@ assert_file_lacks_pattern() {
       return 1
     fi
   done
-  # Every walk's cap, not the first one. The two subjects declare their own
-  # `local max_nodes` and are equal today, so taking the first would be right by
-  # accident: raise one alone and the arithmetic below would keep using the
-  # other, under-counting the pair while reading as satisfied.
-  caps=$(grep -oE 'local max_nodes=[0-9]+' "$lib" | sed -E 's/.*=//')
+  # Every walk's cap, not the first one, and not only the ones spelled
+  # `max_nodes`: the subjects declare their own literal and two of them are
+  # equal today, so taking the first would be right by accident, and a subject
+  # that walks Pods rather than nodes would be left out of the sum entirely --
+  # under-counting the pair while reading as satisfied.
+  #
+  # A literal cap only. The serial-console walk takes its cap from its caller,
+  # which is what keeps it out of this expression: it is not part of the pair.
+  caps=$(grep -oE 'local max_(nodes|pods)=[0-9]+' "$lib" | sed -E 's/.*=//')
   # `|| true`: grep -c exits 1 on a count of zero, and under errexit that ends
   # the test before the branch below can say what was missing -- the guard would
   # still fail, with the diagnostic it was given replaced by silence.
   ncaps=$(printf '%s\n' "$caps" | grep -c . || true)
-  if [ "$ncaps" -ne 2 ]; then
-    echo "expected two capped walks in $lib, found $ncaps; the pair arithmetic below is written for exactly the two subjects the sampling loop reads" >&2
+  if [ "$ncaps" -ne 3 ]; then
+    echo "expected three capped walks in $lib, found $ncaps; the pair arithmetic below is written for exactly the subjects the sampling loop reads" >&2
     return 1
   fi
   # A capped walk costs a listing plus one read per node, each at the read bound
@@ -1293,9 +1299,10 @@ assert_file_lacks_pattern() {
       return 1
     fi
   done
-  # Two subjects, two samples each, one walk apiece at that subject's own cap,
-  # plus the single wait. Summed per subject rather than doubling one walk, so a
-  # cap raised on one side alone is counted where it lands.
+  # Each subject, two samples each, one walk apiece at that subject's own cap,
+  # plus the single wait -- single because the subjects share the pass rather
+  # than each waiting for their own. Summed per subject rather than multiplying
+  # one walk, so a cap raised on one side alone is counted where it lands.
   pair=$interval
   for c in $caps; do
     pair=$(( pair + 2 * (1 + c) * (bound + grace) ))
@@ -1372,9 +1379,10 @@ assert_file_lacks_pattern() {
   # A helper renamed or a guard removed drops it out of `guarded`, and this
   # fails; a capture dropped from the warning fails on the phrase check below.
   for entry in \
-    'cozy_capture_tenant_worker_cpu_throttle:CPU throttling:_cozy_cadvisor_node_stream _cozy_cadvisor_worker_nodes' \
-    'cozy_capture_tenant_worker_network_counters:network counter:_cozy_cadvisor_node_stream _cozy_cadvisor_worker_nodes' \
+    'cozy_capture_tenant_worker_cpu_throttle:CPU throttling:_cozy_cadvisor_node_stream _cozy_virt_launcher_listing' \
+    'cozy_capture_tenant_worker_network_counters:network counter:_cozy_cadvisor_node_stream _cozy_virt_launcher_listing' \
     'cozy_capture_sandbox_node_cpu_time:sandbox node CPU time:cozy_capture_sandbox_node_cpu_time' \
+    'cozy_capture_tenant_worker_thread_cpu:worker per-thread CPU time:cozy_capture_tenant_worker_thread_cpu _cozy_virt_launcher_listing' \
     'ghcr_mirror_diagnose:ghcr-mirror:ghcr_mirror_diagnose _ghcr_mirror_bounded_read' \
     'talos_image_cache_diagnose:talos-image-cache:talos_image_cache_diagnose _talos_image_cache_bounded_read'; do
     fn=${entry%%:*}
@@ -1410,6 +1418,7 @@ ${carrier}
       cozy_capture_tenant_worker_cpu_throttle) phrase='CPU throttling' ;;
       cozy_capture_tenant_worker_network_counters) phrase='network counter' ;;
       cozy_capture_sandbox_node_cpu_time) phrase='sandbox node CPU time' ;;
+      cozy_capture_tenant_worker_thread_cpu) phrase='worker per-thread CPU time' ;;
       ghcr_mirror_diagnose) phrase='ghcr-mirror' ;;
       talos_image_cache_diagnose) phrase='talos-image-cache' ;;
       # The sentence enumerates the CAPTURES. Two other kinds of function guard
@@ -1421,7 +1430,7 @@ ${carrier}
       # step. A function that is neither still fails below, which is what makes
       # this a list of exemptions rather than a list of everything.
       cozy_diag_read | _ghcr_mirror_bounded_read | _talos_image_cache_bounded_read) continue ;;
-      _cozy_cadvisor_node_stream | _cozy_cadvisor_worker_nodes) continue ;;
+      _cozy_cadvisor_node_stream | _cozy_virt_launcher_listing) continue ;;
       cozy_report_node_join_failure | _talos_image_cache_deploy_state) continue ;;
       *)
         echo "$fn guards its call with command -v but this test has no phrase for it; add one here and to the warning" >&2
@@ -1473,6 +1482,7 @@ ${carrier}
     case "$fn" in
       cozy_capture_tenant_worker_cpu_throttle) phrase='worker CPU usage and throttling counters' ;;
       cozy_capture_sandbox_node_cpu_time) phrase='sandbox node CPU time' ;;
+      cozy_capture_tenant_worker_thread_cpu) phrase='worker per-thread CPU time' ;;
       cozy_capture_tenant_worker_network_counters) phrase='worker network counters' ;;
       cozy_capture_tenant_serial_console) phrase='serial-console family' ;;
       cozy_capture_tenant_talos) phrase='guest Talos capture' ;;
