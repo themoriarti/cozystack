@@ -135,6 +135,115 @@ tests:
       - failedTemplate:
           errorPattern: 'nodeGroup md0: podCpuRequest \(2\) exceeds podCpuLimit \(1500m\)'
 
+  # Zero on its own means what it says: no limit is declared, so KubeVirt's
+  # defaulter does not fire, and the rendered zero survives to the container as
+  # a reservation of nothing. A block keyed on truthiness would drop it and
+  # render the pool's deliberate choice as though it had chosen nothing.
+  - it: renders a request of zero rather than treating it as unset
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuRequest: 0
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "0"
+
+  # The pair that reads as "reserve nothing under this ceiling" and does the
+  # opposite: KubeVirt's defaulter tests the request with IsZero, which an
+  # explicit zero satisfies exactly as an absent key does, so it overwrites the
+  # zero with the limit and the worker asks for its whole ceiling. Refused
+  # rather than documented, because nothing later reports it.
+  - it: refuses a request of zero beside a limit
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 3
+      podCpuRequest: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuRequest 0 beside a podCpuLimit does not reserve nothing'
+
+  # A zero limit on its own does not reach a Pod. It removes the ceiling, but
+  # KubeVirt keeps deriving a request from the vCPU count when the VM declares
+  # none -- the defaulter that would have copied the limit across does not fire
+  # precisely because the limit is zero -- and API server validation refuses a
+  # request above a limit that exists, zero being a limit that exists.
+  - it: refuses a zero limit with no request beside it
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuLimit 0 needs podCpuRequest 0 beside it'
+
+  # Both zero is the one shape a zero limit reaches a Pod in: no ceiling and no
+  # reservation, with nothing for the defaulter to copy and nothing for
+  # validation to refuse.
+  - it: accepts a zero request beside a zero limit
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 0
+      podCpuRequest: 0
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "0"
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.cpu
+          value: "0"
+
+  # The schema's quantity pattern admits a leading minus, so both fields have
+  # to refuse it here; the request-versus-limit comparison does not catch it,
+  # because a negative is below any ceiling.
+  - it: refuses a negative request
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 3
+      podCpuRequest: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuRequest \(-1\) must not be negative'
+
+  - it: refuses a negative limit
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuLimit \(-1\) must not be negative'
+
+  # A limit of zero is not the tightest ceiling but no ceiling at all -- the
+  # kubelet turns a zero CPU limit into no CFS quota. What refuses this pair is
+  # not the ceiling being small, it is the API server's rule that a request
+  # cannot exceed a limit that exists, zero included.
+  - it: sees a limit of zero when comparing the pair
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 0
+      podCpuRequest: 200m
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuRequest \(200m\) exceeds podCpuLimit \(0\)'
+
   # Same guard, a unit the comparison used to be blind to: the chart library's
   # quantity converter dropped the micro and nano suffixes, and a value it does
   # not recognise converts to zero, which made the comparison read 0 against 0
