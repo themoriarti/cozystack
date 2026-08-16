@@ -4,9 +4,9 @@ suite: worker pod CPU limit
 # worker VM. KubeVirt otherwise derives that limit from the guest vCPU count
 # whenever the namespace carries a ResourceQuota that limits CPU, and it stops
 # deriving as soon as the VMI declares the limit itself, so the value rendered
-# here is what the compute container gets. The request stays whatever KubeVirt
-# computes from the vCPU count and the cluster CPU allocation ratio: this field
-# moves the ceiling alone.
+# here is what the compute container gets. It is not only the ceiling that
+# moves: KubeVirt copies a declared CPU limit into an undeclared CPU request,
+# so a group that sets this field alone requests its whole ceiling.
 
 templates:
   - templates/cluster.yaml
@@ -84,10 +84,9 @@ tests:
         documentSelector:
           path: kind
           value: KubevirtMachineTemplate
-      # The knob is deliberately one-dimensional. A rendered CPU request would
-      # override KubeVirt's vCPU-derived one and move the scheduler weight
-      # along with the ceiling, which is a second variable this field does not
-      # exist to change.
+      # This field renders one key. What the container ends up requesting is
+      # then KubeVirt's copy of the limit rather than anything the chart wrote,
+      # which is why moving the request needs a field of its own.
       - notExists:
           path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
         documentSelector:

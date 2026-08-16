@@ -190,11 +190,13 @@ spec:
               {{- $podResources := include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) }}
               {{- /* The limit alone, and only for a group that asked for one.
                     KubeVirt derives both sides from the guest vCPU count, and a
-                    limit declared here is what stops it deriving that one; a
-                    request declared here would override the vCPU-derived one
-                    and move the scheduler weight along with the ceiling. The
-                    enclosing KubevirtMachineTemplate is content-hash named, so
-                    a group that sets nothing has to render the same bytes it
+                    limit declared here is what stops it deriving the ceiling.
+                    It does not leave the request where it was: the KubeVirt VMI
+                    defaulter (setDefaultResourceRequests) copies a declared CPU
+                    limit into the CPU request when the VM declares no request,
+                    so the group asks the scheduler for its whole ceiling.
+                    The enclosing KubevirtMachineTemplate is content-hash named,
+                    so a group that sets nothing has to render the same bytes it
                     did before this field existed, down to the whitespace. */}}
               {{- with .group.podCpuLimit }}
               {{- $limited := $podResources | fromYaml }}
