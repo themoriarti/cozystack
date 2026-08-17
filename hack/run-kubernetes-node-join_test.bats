@@ -235,7 +235,7 @@ stub_collectors() {
 # make that test pass more easily; it removes the collector from the audit
 # entirely, and the test stays green because there is nothing left to audit.
 # Each of them carries reads the audit is the only instrument that sees:
-# ghcr_mirror_diagnose issues five, and the two cadvisor captures issue a Pod
+# ghcr_mirror_diagnose issues five, and every cadvisor capture issues a Pod
 # listing and a node read apiece. Their own suites substitute a grep over the
 # source, which by construction cannot see a read that was added without a
 # bound.
@@ -246,6 +246,7 @@ stub_collectors() {
 stub_gated_collectors() {
   cozy_capture_tenant_worker_cpu_throttle() { printf 'cpu-throttle-stub\n'; }
   cozy_capture_tenant_worker_network_counters() { printf 'network-counters-stub\n'; }
+  cozy_capture_tenant_worker_block_io() { printf 'block-io-stub\n'; }
   cozy_capture_sandbox_node_cpu_time() { printf 'sandbox-cpu-time-stub\n'; }
   cozy_capture_tenant_worker_thread_cpu() { printf 'thread-cpu-stub\n'; }
   ghcr_mirror_diagnose() { printf 'ghcr-mirror-stub\n'; }
@@ -327,7 +328,7 @@ assert_file_lacks_pattern() {
   # -- so each collector is pinned individually.
   #
   # Pinned by the report directory each capture writes, not by a read only it
-  # issues. The two cAdvisor captures run one shared body, so their Pod listing
+  # issues. The cAdvisor captures run one shared body, so their Pod listing
   # and node read are byte-identical and neither has a read of its own: a
   # listing-keyed pin is satisfied by whichever of them ran, and stays green
   # with the other absent from the audit entirely. The directory is the one
@@ -341,7 +342,7 @@ assert_file_lacks_pattern() {
   # empty one is exactly what a capture that issued no read leaves behind -- and
   # that is the state this pin has to reject, since a capture missing from the
   # audit is a capture whose reads nobody bounded.
-  for subdir in tenant-cpu-throttle tenant-network-counters sandbox-host-cpu-time; do
+  for subdir in tenant-cpu-throttle tenant-network-counters tenant-block-io sandbox-host-cpu-time; do
     dir="$COZY_REPORT_DIR/snapshots/kubernetes/$subdir"
     if [ -z "$(find "$dir" -type f 2>/dev/null | head -n 1)" ]; then
       echo "FAIL: $subdir produced no file, so that capture issued no read and its reads were not audited" >&2
@@ -700,14 +701,14 @@ assert_file_lacks_pattern() {
     cat "$kubectl_calls" >&2
     false
   fi
-  # The six gates whose collectors are stubbed here are the mechanism, not a
+  # The gates whose collectors are stubbed here are the mechanism, not a
   # detail: declining the heaviest guest-Talos capture is what the budget
   # derivation is for, and a stub issues no kubectl, so the check above cannot
-  # see it run. That is the whole reason the count is over the stubbed ones and
+  # see it run. That is the whole reason the walk is over the stubbed ones and
   # not over every gate in the block -- the importer listing is gated too, and
   # it reads for real, so the check above already covers it. Each stub prints a
-  # marker; none of the six may appear, and each must have said why. The count
-  # is load-bearing rather than descriptive -- a stubbed gate added without a
+  # marker; none of them may appear, and each must have said why. The list is
+  # load-bearing rather than descriptive -- a stubbed gate added without a
   # line here is a collector that may run past the deadline while this test
   # stays green, which is exactly what the empty-kubectl_calls check above
   # cannot catch for a collector that issues no reads of its own.
@@ -718,7 +719,8 @@ assert_file_lacks_pattern() {
   # A rule written for additions does not catch a removal, so both directions
   # are named here.
   for marker in serial-console-stub talos-stub image-cache-stub cpu-throttle-stub \
-    network-counters-stub sandbox-cpu-time-stub thread-cpu-stub ghcr-mirror-stub; do
+    network-counters-stub block-io-stub sandbox-cpu-time-stub thread-cpu-stub \
+    ghcr-mirror-stub; do
     if grep -q "$marker" "$tmp/out"; then
       echo "FAIL: $marker ran after the phase ran out of budget" >&2
       false
@@ -729,6 +731,7 @@ assert_file_lacks_pattern() {
   assert_file_contains 're-probe talos-image-cache ClusterIP + cacher debug bundle: not collected' "$tmp/out"
   assert_file_contains '(d) tenant worker CPU counters, sandbox node CPU time and worker per-thread CPU time: not collected' "$tmp/out"
   assert_file_contains '(d2) tenant worker network counters: not collected' "$tmp/out"
+  assert_file_contains '(d3) tenant worker block IO counters: not collected' "$tmp/out"
   assert_file_contains 'ghcr-mirror state, access log and warm-up Job: not collected' "$tmp/out"
   rm -rf "$tmp"
 }
@@ -949,6 +952,7 @@ assert_file_lacks_pattern() {
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
+    cozy_capture_tenant_worker_block_io() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_capture_sandbox_node_cpu_time() { :; }
     cozy_capture_tenant_worker_thread_cpu() { :; }
@@ -1024,6 +1028,7 @@ assert_file_lacks_pattern() {
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
+    cozy_capture_tenant_worker_block_io() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
@@ -1057,6 +1062,7 @@ assert_file_lacks_pattern() {
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
+    cozy_capture_tenant_worker_block_io() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
@@ -1142,6 +1148,68 @@ assert_file_lacks_pattern() {
     echo "the CSR reads (line $csr) must precede the serial console ($console) and the Talos capture ($talos)" >&2
     exit 1
   fi
+}
+
+@test "the replicated volume state is read before anything that can spend the budget" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # One read, and it answers a question with no other source once the suite ends:
+  # the report collects the same tables after cleanup has deleted the worker's
+  # volumes, so a red run leaves nothing about their state behind. A DRBD replica
+  # serving the worker's system disk from a peer rather than locally is slow in a
+  # way every counter in this block attributes to something else, so a budget that
+  # declines this read keeps every symptom and drops the cause.
+  volumes=$(grep -n "cozy_diag_read 'LINSTOR resource state'" "$lib" | head -n 1 | cut -d: -f1)
+  console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
+  cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
+  talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
+  mirror=$(grep -n 'ghcr_mirror_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
+  cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
+  for v in volumes console cpu talos mirror cache; do
+    eval "n=\$$v"
+    if [ -z "$n" ]; then
+      echo "expected to locate $v in $lib" >&2
+      exit 1
+    fi
+  done
+  for later in console cpu talos mirror cache; do
+    eval "n=\$$later"
+    if [ "$volumes" -ge "$n" ]; then
+      echo "the volume state read (line $volumes) must precede $later (line $n), or a tight run declines it" >&2
+      exit 1
+    fi
+  done
+}
+
+@test "the block IO counters run with the cheap reads, ahead of everything that costs minutes" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # Same decision as the network counters beside it and the same shape: one
+  # listing and one read per node, read once, against collectors that can spend
+  # minutes each. What makes it worth a position rather than a place is that
+  # nothing else here counts a read at all -- the CPU families say what the group
+  # was allowed and what it got, the byte counters say what crossed the network,
+  # and a guest waiting on blocks looks exactly like a guest computing without
+  # result in both. Below the guest captures it would be declined on the slow runs
+  # this failure comes from, which are the only runs it exists for.
+  block=$(grep -n 'cozy_capture_tenant_worker_block_io || true' "$lib" | head -n 1 | cut -d: -f1)
+  console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
+  cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
+  talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
+  mirror=$(grep -n 'ghcr_mirror_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
+  cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
+  for v in block console cpu talos mirror cache; do
+    eval "n=\$$v"
+    if [ -z "$n" ]; then
+      echo "expected to locate $v in $lib" >&2
+      exit 1
+    fi
+  done
+  for later in console cpu talos mirror cache; do
+    eval "n=\$$later"
+    if [ "$block" -ge "$n" ]; then
+      echo "the block IO counters (line $block) must precede $later (line $n), or a tight run declines them" >&2
+      exit 1
+    fi
+  done
 }
 
 @test "the byte-path counters run with the cheap reads, ahead of everything that costs minutes" {
@@ -1295,6 +1363,11 @@ assert_file_lacks_pattern() {
       # arm can state exactly, unlike a walk whose size follows the sandbox.
       cozy_capture_sandbox_kvm_exits) ahead=$((ahead + bound + grace)) ;;
       cozy_capture_tenant_worker_network_counters) ahead=$((ahead + walk)) ;;
+      # One walk apiece and read once, so each costs what the expression above
+      # prices a capped walk at. Both sit ahead of the console on the same
+      # ground: their answers exist nowhere else in the artifact, and a walk read
+      # once cannot cost the console more than a walk's worth.
+      cozy_capture_tenant_worker_block_io) ahead=$((ahead + walk)) ;;
       *)
         echo "$fn is gated ahead of the console and this guard has no cost arm for it; add one, or move it below the console" >&2
         return 1
@@ -1399,7 +1472,7 @@ assert_file_lacks_pattern() {
     exit 1
   fi
   # Direction one: for each capture the sentence names, the functions whose
-  # guard is what makes that sentence true of it. The two cAdvisor captures do
+  # guard is what makes that sentence true of it. The cAdvisor captures do
   # not carry the guard themselves -- it lives in the body they share -- and
   # naming that body here is what the closure was trying and failing to derive.
   # A helper renamed or a guard removed drops it out of `guarded`, and this
@@ -1407,6 +1480,7 @@ assert_file_lacks_pattern() {
   for entry in \
     'cozy_capture_tenant_worker_cpu_throttle:CPU throttling:_cozy_cadvisor_node_stream _cozy_virt_launcher_listing' \
     'cozy_capture_tenant_worker_network_counters:network counter:_cozy_cadvisor_node_stream _cozy_virt_launcher_listing' \
+    'cozy_capture_tenant_worker_block_io:block IO counter:_cozy_cadvisor_node_stream _cozy_virt_launcher_listing' \
     'cozy_capture_sandbox_node_cpu_time:sandbox node CPU time:cozy_capture_sandbox_node_cpu_time' \
     'cozy_capture_sandbox_kvm_exits:sandbox kernel KVM counters:cozy_capture_sandbox_kvm_exits' \
     'cozy_capture_tenant_worker_thread_cpu:worker per-thread CPU time:cozy_capture_tenant_worker_thread_cpu _cozy_virt_launcher_listing' \
@@ -1512,6 +1586,7 @@ ${carrier}
       cozy_capture_sandbox_node_cpu_time) phrase='sandbox node CPU time' ;;
       cozy_capture_tenant_worker_thread_cpu) phrase='worker per-thread CPU time' ;;
       cozy_capture_tenant_worker_network_counters) phrase='worker network counters' ;;
+      cozy_capture_tenant_worker_block_io) phrase='worker block IO counters' ;;
       cozy_capture_tenant_serial_console) phrase='serial-console family' ;;
       cozy_capture_tenant_talos) phrase='guest Talos capture' ;;
       ghcr_mirror_diagnose) phrase='ghcr-mirror state' ;;
@@ -1722,6 +1797,7 @@ EOF
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
+    cozy_capture_tenant_worker_block_io() { :; }
     ghcr_mirror_diagnose() { :; }
     kubectl() { :; }
     COZY_DIAG_PHASE_BUDGET=0
@@ -1761,9 +1837,12 @@ EOF
   # So this catches a budget raised past what today's collectors leave room for, and
   # nothing else. It does not cover the guest-Talos walk growing with the pool, which
   # carries no cap; nor the collector gated last, whose image-cache re-probe has no
-  # wall-clock bound at all; nor a new collector heavier than the literal, since
-  # nothing makes one move it. Those are the residuals, and the first two exist
-  # today rather than hypothetically. All are tracked in cozystack/cozystack#3666.
+  # wall-clock bound at all; nor a bounded read gated ahead of the console outside
+  # the CAPTURE-style call form this walk enumerates, as the LINSTOR resource state
+  # read is, whose cost is therefore not summed here; nor a new collector heavier
+  # than the literal, since nothing makes one move it. Those are the residuals, and
+  # the first three exist today rather than hypothetically. All are tracked in
+  # cozystack/cozystack#3666.
   bringup=1500
   # 620 was this figure while the guest-Talos walk ran two commands per worker.
   # It now runs four: the service list and the link table were added at a 10s
