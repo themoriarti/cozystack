@@ -3167,24 +3167,24 @@ ${ouroboros_addon}
       # ceiling. Workers failing to join (cozystack/cozystack#3513) have been
       # measured burning their vCPU threads flat out at a ceiling equal to their
       # vCPU count while the guest kernel made no progress, which is what a vCPU
-      # spinning on a lock looks like when the vCPU holding that lock is the one
-      # preempted out of the quota they share. Whether the spare CPU lets the
-      # preempted one back in is what this is here to answer. The request is
+      # spinning on a lock looks like. Spare quota above the pair did not change
+      # it: under a ceiling of 3 the pair kept burning the same 1.4 to 1.8 cores
+      # with no progress, so the spin is not a quota artefact. A single vCPU
+      # cannot spin on its sibling, which is what this shape is here to answer,
+      # and the ceiling above the vCPU count keeps the emulator and IO threads
+      # from eating into the one core the guest computes with. The request is
       # what keeps scheduling where it was: setDefaultResourceRequests, in
       # KubeVirt's VMI mutating webhook, copies a declared CPU limit into an
       # undeclared CPU request, so the limit alone would have every worker ask
       # the scheduler for its whole ceiling and sit Pending on Insufficient cpu.
       # Its value is the one KubeVirt derived for these workers before, from the
       # vCPU count and the cluster CPU allocation ratio.
-      podCpuLimit: 3
-      podCpuRequest: 200m
-      # Two vCPUs at the memory the workers had before. Sized by resources
-      # rather than by instanceType: u1.large doubles memory along with the
-      # vCPUs, and four 8Gi workers do not fit beside the rest of the suite,
-      # so the second worker of each cluster stayed Pending on Insufficient
-      # memory and the node group never reached two Ready nodes.
+      podCpuLimit: 2
+      podCpuRequest: 100m
+      # One vCPU at the memory the workers had before. Sized by resources
+      # rather than by instanceType, which cannot carry the pod CPU pair above.
       resources:
-        cpu: 2
+        cpu: 1
         memory: 4Gi
       roles:
       - ingress-nginx
