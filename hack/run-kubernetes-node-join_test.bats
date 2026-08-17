@@ -199,10 +199,10 @@ no_sandbox_talosconfig() {
   export TALOSCONFIG="$1/talosconfig-absent"
 }
 
-# The block calls seven collectors that have their own suites and their own
-# bounds. Four of them are stubbed here; the other three are stubbed only where
-# the test is about the budget rather than the reads, for the reason given
-# under stub_gated_collectors below. Stubbed after sourcing so these tests are
+# The block calls collectors that have their own suites and their own bounds.
+# The ones here are stubbed everywhere; the ones under stub_gated_collectors
+# below are stubbed only where the test is about the budget rather than the
+# reads, for the reason given there. Stubbed after sourcing so these tests are
 # about the block's own reads; left un-stubbed they would drag a Certificate, a
 # helper Pod and a cache probe into every case here.
 stub_collectors() {
@@ -210,6 +210,21 @@ stub_collectors() {
   cozy_capture_tenant_serial_console() { printf 'serial-console-stub\n'; }
   cozy_capture_tenant_talos() { printf 'talos-stub\n'; }
   talos_image_cache_diagnose() { printf 'image-cache-stub\n'; }
+  # Stubbed here rather than left to the gated set, and the audit below loses
+  # nothing by it: that audit works by letting real collector bodies reach the
+  # kubectl mock and failing on any read taken outside a `timeout` wrapper, and
+  # this one issues no kubectl read at all -- it shells out to `unshare` and
+  # `mount`. Un-stubbed it does that for real, so on Linux the unit suite
+  # attempts to mount debugfs with whatever privileges the host gives it -- this
+  # suite runs from `make unit-tests` on an ordinary VM rather than in the
+  # privileged sandbox container, so whether the attempt succeeds is the host's
+  # answer and not the code's -- while on macOS there is no `unshare` at all and
+  # the collector stops at its own precondition, so the path is never exercised.
+  # A unit test whose result is set by the machine rather than by the code is
+  # the property being removed, and the `timeout` mock in this file is a
+  # pass-through, so a `mount` that hung would hang the suite with no ceiling to
+  # stop it.
+  cozy_capture_sandbox_kvm_exits() { printf 'kvm-exits-stub\n'; }
 }
 
 # The collectors below are deliberately NOT in stub_collectors, and that is
@@ -866,6 +881,7 @@ assert_file_lacks_pattern() {
       talos_image_cache_diagnose() { :; }
       cozy_capture_tenant_worker_cpu_throttle() { :; }
       cozy_capture_tenant_worker_network_counters() { :; }
+      cozy_capture_sandbox_kvm_exits() { :; }
       ghcr_mirror_diagnose() { :; }
       kubectl() { :; }
       cozy_report_node_join_failure test-latest-version
@@ -932,6 +948,7 @@ assert_file_lacks_pattern() {
     talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
+    cozy_capture_sandbox_kvm_exits() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_capture_sandbox_node_cpu_time() { :; }
     cozy_capture_tenant_worker_thread_cpu() { :; }
@@ -1006,6 +1023,7 @@ assert_file_lacks_pattern() {
     talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
+    cozy_capture_sandbox_kvm_exits() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
@@ -1038,6 +1056,7 @@ assert_file_lacks_pattern() {
     talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
+    cozy_capture_sandbox_kvm_exits() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
@@ -1268,6 +1287,13 @@ assert_file_lacks_pattern() {
       # console experiment's own failure is named before the wording that
       # matches the bug it studies, and it is two bounded reads.
       cozy_report_guest_console_wedge) continue ;;
+      # Not behind the phase gate either, and for a reason of its own: it is the
+      # second half of a pair whose first reading was taken before the node-join
+      # wait, so declining it would not save a reading, it would orphan one
+      # already taken. Counted rather than skipped all the same -- it does sit
+      # ahead of the console in wall clock, and one bounded read is a cost this
+      # arm can state exactly, unlike a walk whose size follows the sandbox.
+      cozy_capture_sandbox_kvm_exits) ahead=$((ahead + bound + grace)) ;;
       cozy_capture_tenant_worker_network_counters) ahead=$((ahead + walk)) ;;
       *)
         echo "$fn is gated ahead of the console and this guard has no cost arm for it; add one, or move it below the console" >&2
@@ -1382,6 +1408,7 @@ assert_file_lacks_pattern() {
     'cozy_capture_tenant_worker_cpu_throttle:CPU throttling:_cozy_cadvisor_node_stream _cozy_virt_launcher_listing' \
     'cozy_capture_tenant_worker_network_counters:network counter:_cozy_cadvisor_node_stream _cozy_virt_launcher_listing' \
     'cozy_capture_sandbox_node_cpu_time:sandbox node CPU time:cozy_capture_sandbox_node_cpu_time' \
+    'cozy_capture_sandbox_kvm_exits:sandbox kernel KVM counters:cozy_capture_sandbox_kvm_exits' \
     'cozy_capture_tenant_worker_thread_cpu:worker per-thread CPU time:cozy_capture_tenant_worker_thread_cpu _cozy_virt_launcher_listing' \
     'ghcr_mirror_diagnose:ghcr-mirror:ghcr_mirror_diagnose _ghcr_mirror_bounded_read' \
     'talos_image_cache_diagnose:talos-image-cache:talos_image_cache_diagnose _talos_image_cache_bounded_read'; do
@@ -1418,6 +1445,7 @@ ${carrier}
       cozy_capture_tenant_worker_cpu_throttle) phrase='CPU throttling' ;;
       cozy_capture_tenant_worker_network_counters) phrase='network counter' ;;
       cozy_capture_sandbox_node_cpu_time) phrase='sandbox node CPU time' ;;
+      cozy_capture_sandbox_kvm_exits) phrase='sandbox kernel KVM counters' ;;
       cozy_capture_tenant_worker_thread_cpu) phrase='worker per-thread CPU time' ;;
       ghcr_mirror_diagnose) phrase='ghcr-mirror' ;;
       talos_image_cache_diagnose) phrase='talos-image-cache' ;;
@@ -1493,6 +1521,11 @@ ${carrier}
       # the wording that matches the bug it studies, and it is not part of what
       # the budget covers.
       cozy_report_guest_console_wedge) continue ;;
+      # Called the same way and also not behind the gate. Its first reading was
+      # taken before the node-join wait, so it is not something the budget hands
+      # out or withholds: declining it would leave that earlier reading with
+      # nothing to pair against rather than save the phase any time.
+      cozy_capture_sandbox_kvm_exits) continue ;;
       *)
         echo "$fn runs in the diagnostics block but this test has no phrase for it; add one here and to both chainsaw comments" >&2
         exit 1
@@ -1525,6 +1558,134 @@ EOF
       exit 1
     fi
   done
+}
+
+@test "the KVM counter readings sit on either side of the node-join wait on both paths" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # What this pair measures is decided by where its two calls sit, not by
+  # anything inside the collector: the counters carry running totals, so the
+  # interval a difference divides by is whatever runs between the readings.
+  #
+  # The failure path gets that for free -- the second reading is among the first
+  # things the failure block does, so the interval is the wait. The passing path
+  # does not. Everything from the kubelet-version check through the storage and
+  # LoadBalancer assertions runs after the wait, and the comment above the wait
+  # prices that tail at ten to fifteen minutes, so a second reading placed after
+  # it prices a different window over a different workload while the capture's
+  # own legend says it priced the join. Since the green run is what the red ones
+  # are read against, that does not merely widen the green number, it removes
+  # the comparison the collector exists for.
+  wait_line=$(grep -n '^  if ! timeout 18m bash -c' "$lib" | head -n 1 | cut -d: -f1)
+  first=$(grep -n 'cozy_capture_sandbox_kvm_exits 1' "$lib" | head -n 1 | cut -d: -f1)
+  # The green second reading, found as the one after the wait rather than by
+  # position in the file: the other call with the same argument is the failure
+  # block's, and picking by count would be right only while the two happen to be
+  # written in this order.
+  green=$(awk -v w="$wait_line" 'NR > w && /cozy_capture_sandbox_kvm_exits 2/ { print NR; exit }' "$lib")
+  # The first thing the happy path does with the tenant cluster once the wait
+  # returns. It stands in for the whole tail rather than for itself.
+  tail_line=$(grep -n '^  versions=\$(kubectl --kubeconfig' "$lib" | head -n 1 | cut -d: -f1)
+  for v in wait_line first green tail_line; do
+    eval "n=\$$v"
+    if [ -z "$n" ]; then
+      echo "expected to read $v from $lib; without it this guard reports success for having lost its input" >&2
+      return 1
+    fi
+  done
+  if [ "$first" -ge "$wait_line" ]; then
+    echo "the first KVM counter reading (line $first) is not taken before the node-join wait (line $wait_line), so the pair does not span it" >&2
+    return 1
+  fi
+  if [ "$green" -le "$wait_line" ]; then
+    echo "the passing path's second KVM counter reading (line $green) is not after the wait (line $wait_line)" >&2
+    return 1
+  fi
+  if [ "$green" -ge "$tail_line" ]; then
+    echo "the passing path's second KVM counter reading (line $green) is taken after the suite's happy-path tail begins (line $tail_line), so the green interval covers minutes of work the red one does not and the two are no longer comparable" >&2
+    return 1
+  fi
+  # And the same claim on the failing side, which is the half that has no
+  # equivalent of the tail to fail against and so would otherwise widen in
+  # silence. The failure block's own reads are bounded and small against an 18m
+  # wait, so this is not about today's arithmetic; it is that a collector
+  # inserted ahead of the reading later moves the red interval while the
+  # symmetric mistake on the green side fails loudly.
+  red=$(awk -v w="$wait_line" 'NR < w && /cozy_capture_sandbox_kvm_exits 2/ { line = NR } END { if (line) print line }' "$lib")
+  node_table=$(grep -n "cozy_diag_read 'tenant node table'" "$lib" | head -n 1 | cut -d: -f1)
+  for v in red node_table; do
+    eval "n=\$$v"
+    if [ -z "$n" ]; then
+      echo "expected to read $v from $lib; without it this half of the guard reports success for having lost its input" >&2
+      return 1
+    fi
+  done
+  if [ "$red" -ge "$node_table" ]; then
+    echo "the failure path's second KVM counter reading (line $red) is taken after the diagnostics block has started reading the cluster (line $node_table), so the red interval is the wait plus whatever those reads cost" >&2
+    return 1
+  fi
+  # And what is allowed to run in front of it, by name. The check above bounds
+  # the reading against one later line; it does not notice a collector inserted
+  # between the block's first line and the reading, which is the way the red
+  # interval actually widens. One collector is there on purpose -- the wedge
+  # check, which has to name the console experiment's own failure before the
+  # headline whose wording matches the bug it studies -- and it is two bounded
+  # reads. Anything joining it has to be a decision rather than a diff nobody
+  # priced, so the set is pinned to that one name.
+  block=$(grep -n '^cozy_report_node_join_failure() {' "$lib" | head -n 1 | cut -d: -f1)
+  if [ -z "$block" ]; then
+    echo "expected the failure block to still be a function in $lib; without it this half of the guard reports success for having lost its input" >&2
+    return 1
+  fi
+  # Matched on the call, not on the `|| true` suffix the other guards key on.
+  # The suffix is what makes a call gated by the phase; it says nothing about
+  # what costs time, and the dominant idiom inside this block is `cozy_diag_read`
+  # with no suffix at all. Keyed on the suffix, this check would accept exactly
+  # the insertion it exists to refuse. `cozy_diag_phase_*` is out because it is
+  # bookkeeping rather than a read, and the trailing space or end-of-line keeps
+  # a function definition from matching its own call form.
+  ahead_of_red=$(grep -nE '^ *(cozy_capture_[a-z_]+|cozy_report_[a-z_]+|cozy_diag_read|[a-z_]+_diagnose)( |$)' "$lib" \
+    | sed -E 's/:[[:space:]]*/:/; s/(:[a-z_]+) .*/\1/' \
+    | awk -F: -v b="$block" -v r="$red" '$1 > b && $1 < r { print $2 }')
+  case "$(printf '%s\n' $ahead_of_red)" in
+    cozy_report_guest_console_wedge) ;;
+    '')
+      echo "found no collector at all ahead of the failure path's KVM reading; the wedge check belongs there, so this half of the guard checked nothing" >&2
+      return 1
+      ;;
+    *)
+      echo "more than the wedge check now runs between the failure block's start and its KVM counter reading, so the red interval is wider than the wait by whatever those collectors cost:" >&2
+      printf '%s\n' $ahead_of_red >&2
+      return 1
+      ;;
+  esac
+}
+
+@test "both KVM counter readings report a shortfall to the job log, not only to the report" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # The status exists to make a line print, and the reason is not symmetry with
+  # the collectors inside the diagnostics block, which are called `|| true` and
+  # whose whole record is the report. Both of these readings run outside that
+  # block -- one before the node-join wait, one after it on the passing path --
+  # and a passing run's report is the artifact nobody opens.
+  # docs/agents/e2e-testing.md requires what a passing-path collector could not
+  # collect at all to reach the job log. The guest console capture on the
+  # passing path is consumed the same way for the same reason, and its own suite
+  # pins that shape; this one had nothing pinning it, so rewriting both sites to
+  # `|| true` was invisible to every test in the tree.
+  #
+  # Derived from the source rather than restated, like the call-order checks
+  # above: what is pinned is the shape, one `if !` and one warning line per
+  # call site, not the wording of either.
+  calls=$(grep -c 'if ! cozy_capture_sandbox_kvm_exits [12]; then' "$lib")
+  warns=$(grep -c "» WARNING: the sandbox kernel's KVM counters yielded no reading" "$lib")
+  if [ "$calls" -ne 2 ]; then
+    echo "expected both KVM counter readings outside the diagnostics block to consume the collector's status with 'if !', found $calls" >&2
+    return 1
+  fi
+  if [ "$warns" -ne 2 ]; then
+    echo "expected each of those two call sites to put its shortfall in the job log, found $warns warning lines" >&2
+    return 1
+  fi
 }
 
 @test "the declined path leaves no shell error in the diagnostics log" {
@@ -1560,6 +1721,7 @@ EOF
     talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
+    cozy_capture_sandbox_kvm_exits() { :; }
     ghcr_mirror_diagnose() { :; }
     kubectl() { :; }
     COZY_DIAG_PHASE_BUDGET=0
