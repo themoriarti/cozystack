@@ -1864,6 +1864,375 @@ ${rows}
 EOF
 }
 
+# The walk over a mounted debugfs that turns the kernel's KVM counters into
+# lines, taking the mount point as its first argument.
+#
+# A function emitting a program rather than a literal at the call site, for the
+# reason the thread walk beside it is written the same way: staging a subject
+# worth reading needs a hypervisor, and the outcomes this has to get right --
+# counters present, kvm directory absent, directory present and empty -- are
+# reachable against a tree of files and against nothing else.
+#
+# Nothing is computed here. Each counter goes out under the level it was read
+# at, because debugfs publishes the same names twice: once summed over every VM
+# the kernel hosts and once per VM. Folded together they answer neither
+# question.
+_cozy_kvm_stats_probe() {
+  cat <<'PROBE'
+kvm_root="${1}/kvm"
+globals=0
+vm_lines=0
+vms=0
+skipped=0
+if [ ! -d "${kvm_root}" ]; then
+  printf '%s\n' "NO-KVM-DIR: debugfs is mounted and holds no kvm directory, so this kernel has no KVM in use. The sandbox VMs are started with accel=kvm by hack/e2e-prepare-cluster.bats, so this is a statement about how they are being run rather than a capture that came up short"
+  exit 4
+fi
+printf '%s\n' '[counters follow, one per line, as: level name value; a file under these directories that is not a counter is named on a skipped line instead]'
+# A counter is one integer and nothing else, and that shape is what decides
+# whether a file here ends up in the numbers. It cannot decide whether the file
+# gets read, which is a separate job done by name above, because for a seq_file
+# the reading is the cost.
+#
+# `read` returning non-zero is not what decides whether a line arrived: it does
+# that on a last line with no newline while still setting the variable. The
+# kernel's own stat files do carry the newline, since it formats them through
+# "%llu\n", but this walks whatever the directory holds rather than a list of
+# names it was given.
+# The files that must not be OPENED, as opposed to the ones that must not be
+# emitted. Those are two different jobs and only one of them a shape test can
+# do: mmu_rmaps_stat is registered with single_open() and seq_read, so the walk
+# over every rmap head under the VM slots_lock and MMU write lock runs on the
+# first read() rather than at open, and a reader that opens the file to find out
+# what shape it is has already paid for it. Hence a name, checked before
+# anything is opened, even though a name is a property of the kernel version
+# where a shape is a property of the class. The shape test below stays as the
+# general net: it keeps an unknown non-counter out of the artifact, which is all
+# it can do, and this list keeps the one known expensive read from happening.
+is_known_non_counter() {
+  case "$1" in
+    mmu_rmaps_stat) return 0 ;;
+  esac
+  return 1
+}
+read_counter() {
+  counter_value=
+  # Status 2 keeps "could not be read" apart from "read, wrong shape", and one
+  # command carries both ways the first can happen: the open is refused in the
+  # instant a VM's debugfs entry is being removed, and a file that did open
+  # keeps refusing the read for the whole teardown once its entry is detached.
+  # A file that fails either way may well be a counter whose VM is going away,
+  # and saying "not a counter" about it would send the reader away from exactly
+  # the per-VM files the legend tells them to consult when a guest disappears.
+  _content=$(cat "$1" 2>/dev/null) || return 2
+  case "${_content}" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  counter_value=${_content}
+}
+for stat_file in "${kvm_root}"/*; do
+  [ -f "${stat_file}" ] || continue
+  stat_name=${stat_file##*/}
+  if is_known_non_counter "${stat_name}"; then
+    skipped=$((skipped + 1))
+    printf '[skipped global] %s: not opened, it is a known non-counter and reading it costs the guest\n' "${stat_name}"
+  elif read_counter "${stat_file}"; then
+    globals=$((globals + 1))
+    printf '[global] %s %s\n' "${stat_name}" "${counter_value}"
+  else
+    case "$?" in
+      2) skip_why='could not be read, so nothing about its shape is known' ;;
+      *) skip_why='not a single integer, so not a counter' ;;
+    esac
+    skipped=$((skipped + 1))
+    printf '[skipped global] %s: %s\n' "${stat_name}" "${skip_why}"
+  fi
+done 2>/dev/null
+# On the loop as well as inside read_counter's own silencing: a counter that
+# disappears between the glob and the read is routine -- a VM directory goes
+# when its VM does -- and this probe's stderr is the collector's warning
+# artifact, which must not name something that did not affect the reading.
+for vm_dir in "${kvm_root}"/*/; do
+  [ -d "${vm_dir}" ] || continue
+  vm_name=${vm_dir%/}
+  vm_name=${vm_name##*/}
+  vms=$((vms + 1))
+  for stat_file in "${vm_dir}"*; do
+    [ -f "${stat_file}" ] || continue
+    stat_name=${stat_file##*/}
+    if is_known_non_counter "${stat_name}"; then
+      skipped=$((skipped + 1))
+      printf '[skipped vm %s] %s: not opened, it is a known non-counter and reading it costs the guest\n' "${vm_name}" "${stat_name}"
+    elif read_counter "${stat_file}"; then
+      vm_lines=$((vm_lines + 1))
+      printf '[vm %s] %s %s\n' "${vm_name}" "${stat_name}" "${counter_value}"
+    else
+      case "$?" in
+        2) skip_why='could not be read, so nothing about its shape is known' ;;
+        *) skip_why='not a single integer, so not a counter' ;;
+      esac
+      skipped=$((skipped + 1))
+      printf '[skipped vm %s] %s: %s\n' "${vm_name}" "${stat_name}" "${skip_why}"
+    fi
+  done
+done 2>/dev/null
+printf '[counters read: %s kernel-wide and %s per-VM, across %s per-VM director(ies); %s file(s) skipped, each with its reason beside it above]\n' \
+  "${globals}" "${vm_lines}" "${vms}" "${skipped}"
+# On counters rather than on directories. A VM that goes away under the walk
+# leaves a directory whose files cannot be read, which is indistinguishable on
+# disk from a VM that reported nothing -- and counted as a directory it would
+# satisfy this test while the capture holds no number at all, then carry the
+# legend telling a reader to difference it against its sibling.
+if [ "${globals}" -eq 0 ] && [ "${vm_lines}" -eq 0 ]; then
+  # A kvm directory that could be opened and held nothing readable. Without
+  # this the probe exits clean carrying only a heading, a heading is enough to
+  # make the capture non-empty, and the collector would pin a legend about
+  # taking differences onto a file with nothing to difference.
+  printf '%s\n' 'NO-COUNTER-FILES: the kvm directory was opened and not one counter under it could be read, so this says nothing about what the kernel paid'
+  exit 5
+fi
+PROBE
+}
+
+# The KVM exit counters of the kernel the sandbox VMs run on.
+#
+# This exists because every other CPU reading in this tree measures a subject
+# inside the sandbox and none of them can price a tick. The cgroup captures say
+# what a tenant worker was allowed and what it consumed; the per-thread split
+# says which QEMU thread consumed it; the node's own /proc/stat says whether the
+# sandbox node was given its turn. All of them can be healthy at once -- quota
+# untouched, steal at zero, the vCPU thread at its ceiling -- while the guest
+# does six to ten times less work per core than the same image does on a run
+# that passes. Ticks handed out and work not done is not a quantity any counter
+# inside the sandbox holds.
+#
+# It is held one layer down. A tenant worker is a guest of a sandbox node, which
+# is itself a guest of the runner, and the arrangement's cost is paid by the
+# runner's kernel: every exit a sandbox node takes, every nested page fault, and
+# every TLB flush that servicing its own guest provokes. That kernel publishes
+# the totals in debugfs, and the suite runs in a container sharing it, so this
+# is a local read rather than a walk over nodes -- which is also why it can be
+# afforded at all. The reading it does NOT give is the other half: a tenant
+# worker's exits into its sandbox node are counted by that node's kernel, and
+# reaching those costs a bounded read per node per sample, which the phase
+# budget in hack/run-kubernetes-node-join_test.bats does not have.
+#
+# Mounted in a mount namespace of this call's own rather than in the sandbox's.
+# The suite keeps running for the length of a node-join wait after this returns,
+# and a mount left behind would be a diagnostic editing the environment the rest
+# of the run measures. The namespace also removes the unmount: there is nothing
+# to clean up after a read the wrapper killed, which is the arm where a
+# collector that unmounts itself would leak.
+#
+# Takes the sample number it is writing, because it is called twice and the two
+# calls sit on either side of the node-join wait rather than inside one block.
+# A counter here accumulates over the life of the VM it belongs to, so a single
+# reading is an average over that life rather than a rate over anything; the
+# pair spans the window the guest was failing to boot in, and the stamps in each
+# file are what say how wide that window was. What the kernel-wide files add on
+# top of that is stated in the legend they ship with rather than here, because
+# it changes what a difference means rather than how wide the window is.
+cozy_capture_sandbox_kvm_exits() {
+  local sample="$1"
+  local report_dir="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}/sandbox-kvm-exits/sample-${sample}"
+  local raw="${report_dir}/kvm-stats.txt"
+  local err_log="${report_dir}/COLLECTION-FAILED.txt"
+  local read_log="${report_dir}/read-error.log"
+  local rc=0
+  local counters_present=0
+  local program read_at read_done
+  # The mount point, and the seam that lets the walk above be exercised against
+  # a tree of files instead of against a kernel. Production never sets it: the
+  # path is where debugfs belongs, and mounting there inside a private namespace
+  # is invisible outside this call.
+  local mount_point="${COZY_DIAG_KVM_DEBUGFS:-/sys/kernel/debug}"
+
+  # Checked, unlike its neighbours, because this is the one failure the markers
+  # below cannot describe: with no directory every write under it fails, the
+  # collector becomes a silent no-op, and the artifact carries the empty space
+  # this capture exists to refuse -- with nowhere to put a marker saying so.
+  if ! mkdir -p "${report_dir}"; then
+    echo "the report directory for the sandbox KVM counters could not be created, so nothing was read and nothing could be written to say so" >&2
+    return 1
+  fi
+  # Re-validated here for the reason every collector re-validates them: a value
+  # assigned after this file is sourced never passed the assignment-time check,
+  # and zero reaches `timeout` as no bound at all.
+  COZY_DIAG_READ_TIMEOUT=$(_cozy_diag_seconds "${COZY_DIAG_READ_TIMEOUT-}" "$COZY_DIAG_READ_TIMEOUT_DEFAULT" COZY_DIAG_READ_TIMEOUT positive)
+  COZY_DIAG_READ_GRACE=$(_cozy_diag_seconds "${COZY_DIAG_READ_GRACE-}" "$COZY_DIAG_READ_GRACE_DEFAULT" COZY_DIAG_READ_GRACE)
+
+  # Both preconditions are reported rather than returned into silence, and both
+  # say the same thing in their own words: nothing was asked, which is not a
+  # reading that the arrangement cost the kernel nothing.
+  if ! command -v unshare >/dev/null 2>&1; then
+    echo "unshare is not on PATH, so the sandbox kernel's KVM counters were not read" >&2
+    printf '%s\n' \
+      'unshare is not on PATH, so debugfs could not be mounted in a namespace of this capture own and the counters were never asked for; that is not a reading that nesting cost it nothing' \
+      >"${err_log}"
+    return 1
+  fi
+  if ! command -v mount >/dev/null 2>&1; then
+    echo "mount is not on PATH, so the sandbox kernel's KVM counters were not read" >&2
+    printf '%s\n' \
+      'mount is not on PATH, so debugfs was never mounted and the counters were never asked for; that is not a reading that nesting cost it nothing' \
+      >"${err_log}"
+    return 1
+  fi
+
+  program="if ! mount -t debugfs none \"\${1}\"; then exit 3; fi
+$(_cozy_kvm_stats_probe)"
+
+  echo "--- capturing the sandbox kernel's KVM exit counters (sample ${sample}) ---"
+  # Stamped around the read rather than inside it, and here the stamps are the
+  # only timing there is: a debugfs counter carries no sample time, and the two
+  # readings of this pair are separated by the node-join wait rather than by a
+  # knob, so without these the interval the pair spans is unrecoverable from the
+  # artifact.
+  read_at=$(date -u +%s)
+  # stdin closed explicitly for the reason the node walk above states: nothing
+  # here reads it today, and a program that started to would consume whatever
+  # the caller was iterating.
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k "${COZY_DIAG_READ_GRACE}" "${COZY_DIAG_READ_TIMEOUT}" \
+      unshare --mount --propagation private \
+      sh -c "${program}" cozy-kvm-exits "${mount_point}" \
+      >"${raw}" 2>"${read_log}" </dev/null || rc=$?
+  else
+    unshare --mount --propagation private \
+      sh -c "${program}" cozy-kvm-exits "${mount_point}" \
+      >"${raw}" 2>"${read_log}" </dev/null || rc=$?
+  fi
+  read_done=$(date -u +%s)
+
+  # Emptied rather than only removed, because the arms below decide what to tell
+  # the reader by whether there is an error log to send them to, and a variable
+  # still holding the path of a file that is gone points at nothing.
+  if [ ! -s "${read_log}" ]; then
+    rm -f "${read_log}"
+    read_log=
+  elif [ "${rc}" -eq 0 ] || [ "${rc}" -eq 4 ] || [ "${rc}" -eq 5 ]; then
+    # mount writes hints to stderr and exits zero, the way kubectl and talosctl
+    # do beside it. Which file the complaint lands in is decided by the status,
+    # not by whether stderr holds anything, so a healthy capture keeps its
+    # warning instead of shipping a failure marker next to a reading.
+    mv "${read_log}" "${report_dir}/READ-WARNINGS.txt" 2>/dev/null || true
+    read_log=
+  fi
+
+  # Whether a counter reached the file, which is a different question from
+  # whether the file has bytes in it. The probe writes its heading before it
+  # reads anything, so a walk killed on its first blocked read leaves a file
+  # that is not empty and holds no number; keyed on size, the arms below would
+  # call that a partial reading, and the caller would be told a pair was
+  # collected. Same distinction the probe makes one level down when it counts
+  # counters rather than the directories they sit in.
+  if grep -q -e '^\[global\] ' -e '^\[vm ' "${raw}" 2>/dev/null; then
+    counters_present=1
+  fi
+
+  # How to read the numbers goes on every capture that holds numbers, which is a
+  # wider set than the captures holding a whole reading. The naming trap and the
+  # anonymity of the per-VM split do not depend on the walk having finished, and
+  # a capture cut short is exactly where a reader needs them. Only the
+  # instruction to difference two files asserts completeness, and that one stays
+  # on the arm below that has it.
+  if [ "${counters_present}" -ne 0 ]; then
+    printf '%s\n' \
+      '[these counters belong to the kernel that hosts the sandbox VMs and not what runs inside them: this suite runs in a container sharing the runner kernel, which is the hypervisor for the Talos nodes hack/e2e-prepare-cluster.bats starts with accel=kvm. An exit counted here is a sandbox node leaving its guest mode, so the cost of running a tenant worker inside that node is paid here too -- while the worker own exits into its sandbox node are counted by that node kernel, which this file does not read]' \
+      '[what a difference between the two samples means depends on the level. A per-VM file is cumulative since that VM was created. A kernel-wide file is not an accumulator at all: the kernel answers it by summing the same counter over the VMs alive at the moment of the read, so a VM that went away between the samples takes its whole contribution with it. What the survivors accumulated in the meantime competes with that loss, so the difference is understated by a whole VM life while its sign proves nothing when positive. When it does come out negative, that is a finding about the sandbox -- a guest disappeared, since no per-vCPU counter ever decreases -- and not a rate; read the per-VM files beside it to see which one went]' \
+      '[and several of these are not counts at all, sitting in the same directory under the same kind of name: guest_mode and blocking are per-vCPU booleans that every file here sums, so a reading is the number of vCPUs in that state at that instant -- bounded by the vCPU count, not by 1 -- while pages_4k, pages_2m, pages_1g, mmu_unsync and nx_lpage_splits are instantaneous, and max_mmu_rmap_size and max_mmu_page_hash_collisions are running maxima. A difference of any of those is a number with no meaning. Which kind a counter is comes from the kernel own descriptor tables in arch/x86/kvm/x86.c and include/linux/kvm_host.h and from nothing visible here, so read this as the names present when it was written rather than as a closed set]' \
+      '[not every file in these directories is a counter, and the ones that are not are named on a skipped line above. Two different reasons appear there. mmu_rmaps_stat, which the kernel puts in every per-VM directory, is skipped by name and is never opened: it is a seq_file whose contents are computed on the first read, under that VM slots_lock and its MMU write lock, walking every rmap head -- so a reader that opened it to see what shape it was would already have stalled the guest page faults of the VM this capture exists to observe. Anything else that turns out not to hold exactly one integer is skipped after being read, which keeps it out of the numbers but cannot make its read free]' \
+      '[there is no ept_violation counter here to look for. The nested-paging faults are counted as pf_taken and pf_fixed, under those names on both vendors, so a reader who searches for the Intel spelling concludes the capture is missing what it holds]' \
+      '[a per-VM directory is named <pid>-<fd> with the pid in the kernel initial namespace, which this container cannot map to its own processes: /proc/<pid>/sched and NSpid both answer with the container-local number. So the split is per-VM and anonymous -- it says how evenly the sandbox VMs paid, not which sandbox node paid what]' \
+      >>"${raw}"
+  fi
+
+  case "${rc}" in
+    0)
+      # The pairing instruction is the one line that stays on this arm, for the
+      # reason the node CPU time capture withholds its own: telling a reader to
+      # subtract two files asserts that both hold a whole reading.
+      #
+      # Unconditional on this arm, and deliberately not also gated on
+      # counters_present. A zero status means the probe read counters, because
+      # the probe exits 4 or 5 when it did not -- so the second test would be
+      # unreachable, and an unreachable guard here is not free: it would absorb
+      # those exit codes, leaving nothing that notices if the probe ever stopped
+      # honouring them. The codes are pinned directly instead, by the two tests
+      # that read them out of the capture.
+      printf '%s\n' \
+        '[subtracting this file from its sibling under the other sample directory, and the stamps below from each other, gives a rate. The two readings are taken on either side of the node-join wait, so the interval is that window rather than a fixed knob, and it is exact to the width of the two brackets]' \
+        >>"${raw}"
+      ;;
+    3)
+      echo "debugfs could not be mounted, so the sandbox kernel's KVM counters were not read" >&2
+      # Branched on whether there is a message, because the sentence below
+      # points at one. mount almost always writes a reason and exits non-zero,
+      # but a refusal that says nothing leaves this marker holding a single line
+      # telling the reader to look above it at an empty file -- the same shape
+      # of promise-without-a-referent that the arms further down avoid.
+      if [ -n "${read_log}" ]; then
+        mv "${read_log}" "${err_log}" 2>/dev/null || true
+        read_log=
+        printf '%s\n' \
+          'debugfs could not be mounted, so the counters were never reached; the message above is what mount said. This is not a kernel that was asked and had nothing to report' \
+          >>"${err_log}"
+      else
+        printf '%s\n' \
+          'debugfs could not be mounted, so the counters were never reached, and mount refused without a word on either stream. This is not a kernel that was asked and had nothing to report' \
+          >>"${err_log}"
+      fi
+      printf '%s\n' \
+        'these counters are unavailable: debugfs could not be mounted, and the failure is recorded beside this file' \
+        >>"${raw}"
+      ;;
+    4 | 5) : ;;
+    *)
+      # Four arms rather than two, and the pair of questions they answer are
+      # independent: whether a counter reached the file, and whether the read
+      # left a message anywhere. Told only the first, a reader goes looking for
+      # an explanation in the job log of a run that may be days old; told only
+      # the second, they cannot tell a capture worth differencing from one that
+      # holds nothing.
+      if [ "${counters_present}" -ne 0 ] && [ -n "${read_log}" ]; then
+        printf '%s\n' \
+          'these counters are incomplete: the walk was cut short part way through the kvm directory, so a difference against the sibling sample understates every counter it did not reach; what the read said before it stopped is in the read-error.log beside this file' \
+          >>"${raw}"
+      elif [ "${counters_present}" -ne 0 ]; then
+        printf '%s\n' \
+          'these counters are incomplete: the walk was cut short part way through the kvm directory, so a difference against the sibling sample understates every counter it did not reach, and it stopped without a word on either stream' \
+          >>"${raw}"
+      elif [ -n "${read_log}" ]; then
+        printf '%s\n' \
+          'these counters are unavailable: the read produced no counter at all; what it said before it stopped is in the read-error.log beside this file' \
+          >>"${raw}"
+      else
+        printf '%s\n' \
+          'these counters are unavailable: the read produced no counter at all and stopped without a word on either stream, so what the kernel paid is not recorded here either way' \
+          >>"${raw}"
+      fi
+      ;;
+  esac
+  printf '[read attempted from %s to %s epoch seconds]\n' \
+    "${read_at}" "${read_done}" >>"${raw}"
+  printf '\n[capture exit code: %s]\n' "${rc}" >>"${raw}"
+  # Non-zero when the capture holds no counter, and only then -- whether that is
+  # a read that failed or a kernel that answered and had none. Both callers ask
+  # this function whether it collected something to pair with, and one of them
+  # runs on the passing path where the report is the artifact nobody downloads,
+  # so a capture holding no number has to answer out loud or the warning saying
+  # the pair is broken never prints. That covers the two findings as well by
+  # design: a kernel with no kvm directory at all is the most consequential
+  # thing this instrument can report, and reaching only the report would be the
+  # quietest possible place to put it. A capture cut short after it wrote
+  # counters is the case this does NOT cover: it left a usable reading, marked
+  # as partial, and telling the caller nothing was collected would contradict
+  # the file sitting beside it.
+  if [ "${rc}" -eq 3 ] || [ "${counters_present}" -eq 0 ]; then
+    return 1
+  fi
+}
+
 # The shell run inside a worker's compute container to list QEMU's threads.
 #
 # A function rather than a literal at the call site so it can be run against a
@@ -2518,17 +2887,17 @@ cozy_diag_phase_start() {
   # cozystack/cozystack#3666; the warning names both halves rather than promising the
   # better one for all of them.
   #
-  # The worker CPU throttling, worker network counter, sandbox node CPU time and
-  # worker per-thread CPU time captures belong to neither half: they call
-  # `timeout` directly AND carry the same fallback, so on a runner without the
-  # binary they run unbounded rather than exiting 127. That is the opposite
-  # failure from the one the sentence above would lead a reader to, and it is
-  # the half with the snapshot behind it, so they are named here rather than
-  # left to be inferred. The list is derived from the source by
-  # hack/run-kubernetes-node-join_test.bats, so a collector that joins this
-  # group without joining the sentence fails there.
+  # A third group belongs to neither half: those collectors call `timeout`
+  # directly AND carry the same fallback, so on a runner without the binary they
+  # run unbounded rather than exiting 127. That is the opposite failure from the
+  # one the sentence above would lead a reader to, and it is the half with the
+  # snapshot behind it, so the warning below names them one at a time. Only
+  # there: that list is derived from the source by
+  # hack/run-kubernetes-node-join_test.bats, and a second copy up here would be
+  # an unchecked list sitting beside a checked one, drifting from it at whatever
+  # rate collectors are added.
   command -v timeout >/dev/null 2>&1 || \
-    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, sandbox node CPU time, worker per-thread CPU time, ghcr-mirror and talos-image-cache captures -- keep collecting instead, unbounded" >&2
+    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, sandbox node CPU time, sandbox kernel KVM counters, worker per-thread CPU time, ghcr-mirror and talos-image-cache captures -- keep collecting instead, unbounded" >&2
   # Re-checked here, not only at assignment: a value set after this file is sourced
   # -- which is how a test sets it -- would otherwise reach the arithmetic below
   # unvalidated, and that is the one failure that costs the whole block.
@@ -2709,6 +3078,14 @@ cozy_report_node_join_failure() {
   # the instrumentation studies -- sends a triager to the known flake.
   echo "=== node-join failed: fewer than 2 tenant nodes Ready within 18m — diagnostics follow ==="
   cozy_report_guest_console_wedge || true
+  # The second KVM counter reading, pairing with the one taken before the wait.
+  # Ungated for the reason the wedge check above is, and for one of its own:
+  # the phase gate decides what may START, and a collector it declines loses
+  # only itself -- except this one, which would also retire a reading taken
+  # eighteen minutes earlier and leave it an orphan. Its cost is a single
+  # bounded read of a file on this machine, so it cannot meaningfully bound what
+  # comes after it.
+  cozy_capture_sandbox_kvm_exits 2 || true
   cozy_diag_read 'tenant node table' \
     kubectl --kubeconfig "${tenant_kc}" describe nodes "${request_timeout}"
   cozy_diag_read 'tenant HelmReleases' \
@@ -3309,6 +3686,22 @@ EOF
   # bring-up; 18m restores margin and still sits well inside the 50m step
   # timeout (the downstream LB/NFS/ouroboros checks add ~10-15m on the happy
   # path).
+  # The first of the two KVM counter readings, taken here rather than inside the
+  # failure block and taken on every run rather than on the failing ones. Both
+  # follow from what those counters are: running totals (per-VM since that VM
+  # was created, kernel-wide summed over the VMs alive at the read), so one
+  # reading is an average over a whole life and a rate needs two -- and the
+  # interval worth measuring is the window the guest is failing
+  # to boot in, which is the wait below. A pair taken a few seconds apart after
+  # the deadline has already expired would price the tail instead of the fault.
+  #
+  # Ungated and not fatal. It reads a file this kernel already keeps, so its
+  # cost is one bounded local read against a wait measured in minutes, and a run
+  # that could not take it must still be allowed to go on and fail for its own
+  # reasons.
+  if ! cozy_capture_sandbox_kvm_exits 1; then
+    echo "» WARNING: the sandbox kernel's KVM counters yielded no reading before the node-join wait, so the reading taken after it will have nothing to pair with; whether the read failed or the kernel had no counters to give is written into the capture itself, and any message the read left is in the log beside it" >&2
+  fi
   if ! timeout 18m bash -c '
     until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes --no-headers 2>/dev/null | grep -cw Ready)" -ge 2 ]; do
       sleep 5
@@ -3321,6 +3714,21 @@ EOF
     # registered above), so it has to be reached.
     cozy_report_node_join_failure "${test_name}"
     exit 1
+  fi
+  # The second KVM counter reading on the path where the join succeeded, and it
+  # belongs here rather than beside the console baseline at the end of the run.
+  # The pair is only a measurement of the join window if both readings bracket
+  # it, and the tail below this point is another ten to fifteen minutes of a
+  # tenant cluster doing storage and LoadBalancer work: a sample taken after it
+  # would price a different window over a different workload while the legend in
+  # the capture says it priced the join. That would corrupt exactly the
+  # comparison these counters exist for, since the green run is what the red
+  # ones are read against. Placing it here also removes an orphan: a failure
+  # between the wait and the end of the suite would otherwise leave the first
+  # reading alone in the report, carrying an instruction to difference it
+  # against a sibling that was never written.
+  if ! cozy_capture_sandbox_kvm_exits 2; then
+    echo "» WARNING: the sandbox kernel's KVM counters yielded no reading after the node-join wait, so this report carries no green baseline for the exit rate; whether the read failed or the kernel had no counters to give is written into the capture itself, and any message the read left is in the log beside it" >&2
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
 
