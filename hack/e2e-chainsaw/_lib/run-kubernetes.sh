@@ -1123,13 +1123,13 @@ _cozy_cadvisor_node_stream() {
   # duration -- and it is declined for a reason that outlives any particular way
   # of sharing the read.
   #
-  # Sharing it means the two captures becoming one walk, and that is not done
-  # here for scope rather than for merit: one walk behind the first of the two
-  # gates would be cheaper AND collect more. The gate is a deadline checked with
-  # date, not a per-collector allowance, so the pair yields both, the first
-  # alone, or neither -- and a merged walk admitted at the first gate turns the
-  # first-alone case into both while leaving neither unchanged. Anyone weighing
-  # this should read that as an argument for merging, not against it.
+  # Sharing it means the captures of one node becoming one walk, and that is not
+  # done here for scope rather than for merit: one walk behind the earliest of
+  # their gates would be cheaper AND collect more. The gate is a deadline checked
+  # with date, not a per-collector allowance, so a run yields all of them, a
+  # prefix of them, or none -- and a merged walk admitted at the earliest gate
+  # turns every prefix into all of them while leaving none unchanged. Anyone
+  # weighing this should read that as an argument for merging, not against it.
   #
   # A cross-phase cache avoids the merge and was tried; it is not what stands
   # here, and the reason is not the cost above but that a cache publishes a
@@ -1154,7 +1154,7 @@ _cozy_cadvisor_node_stream() {
 
 # _cozy_capture_worker_cadvisor <subdir> <label> <subject> <series> <tmp-prefix> <tail-hook> <metric-re>
 #
-# The body both worker counter captures share. It was two near-identical copies
+# The body every worker counter capture shares. It was two near-identical copies
 # differing in a report subdirectory, a regex, a subject phrase and a trailing
 # note, and the copies cost more than duplication normally does: the block-level
 # bound audit pins each collector by something only it produces, and two
@@ -1411,12 +1411,12 @@ _cozy_capture_worker_cadvisor() {
     # hooks today end on an `if` that returns 0 when its condition is false, so
     # this changes nothing now and removes the requirement that they always will.
     "${tail_hook}" "${raw}" "${rc}" "${filter_rc}" "${had_series}" || true
-    # Sample-agnostic on purpose. This body is shared, and only one of its two
-    # callers takes a second sample: telling the reader of the other one to
-    # subtract a sibling would name a file that does not exist and contradict
-    # that capture's own tail note in the line above it. What is true for both
-    # is when the read happened, so that is what this says, and the instruction
-    # to pair it belongs to the capture that has a pair.
+    # Sample-agnostic on purpose. This body is shared, and only one of its
+    # callers takes a second sample: telling the reader of a caller that does not
+    # to subtract a sibling would name a file that does not exist and contradict
+    # that capture's own tail note in the line above it. What is true for every
+    # caller is when the read happened, so that is what this says, and the
+    # instruction to pair it belongs to the capture that has a pair.
     # The bracket only, with no claim about what was sampled inside it. When the
     # read was attempted is true on every arm, including the ones that just said
     # nothing was read; that counters exist between the two instants is not, and
@@ -2527,6 +2527,149 @@ cozy_capture_tenant_worker_network_counters() {
     '^container_network_(receive|transmit)_(bytes|packets|packets_dropped|errors)_total\{'
 }
 
+# How to read the device label, which is the one sentence here that holds on a
+# partial file as well as on a whole one. A function because more than one arm of
+# the note below prints it and a second copy is a scheduled divergence.
+_cozy_block_io_device_legend() {
+  printf '%s\n' \
+    '[the device labels here name HOST devices, and which of them backs the guest system disk is decided by the major rather than by the name: the kernel registers block major 147 for DRBD, so a container_blkio_device_usage_total row at that major with operation="Read" is the replicated volume the guest reads its image from]' \
+    >>"$1"
+}
+
+# Said in the file because which families arrive is decided by the kernel
+# interface under them, and a family's absence is not a reading about the disk.
+_cozy_block_io_tail_note() {
+  local raw="$1" rc="$2" filter_rc="$3" had_series="$4"
+  local start_rc=0 counter_rc=0
+
+  [ "${had_series}" -eq 1 ] || return 0
+  # Every sentence that reads the file AS A WHOLE reading is withheld from a read
+  # that did not finish, the way the CPU note withholds its pairing sentence and
+  # the sandbox capture withholds its column legend. On a truncated capture what
+  # is here is a prefix: a total over the container's age understates it by
+  # whatever never arrived, and a family missing from a prefix says nothing about
+  # the kernel interface that would explain its absence.
+  #
+  # The device legend is not one of those and stays: it explains how to read a
+  # label on the rows that did arrive, which is as true of a prefix as of a whole
+  # file, and a reader is most in need of it exactly when the file is short.
+  if [ "${rc}" -ne 0 ] || [ "${filter_rc}" -ge 2 ]; then
+    printf '%s\n' \
+      'these counters are cumulative since the container started, and this capture is marked incomplete above, so what is here may be a prefix of what the kubelet had: no averaging instruction and no reading of a missing family follows, because both would treat a prefix as the whole' \
+      >>"${raw}"
+    _cozy_block_io_device_legend "${raw}"
+    return 0
+  fi
+  # The divisor family is not a counter, and keeping it in the filter costs this
+  # sentence: the shared walk decides "the kubelet reported nothing for this
+  # subject" from whether ANY row survived, so a container cAdvisor knows about
+  # puts its start time in the file whether or not a single disk row arrived, and
+  # the walk's own "no series" arm can no longer fire. Without this the file would
+  # carry a start time, an instruction for dividing counters, and no counters --
+  # which is the reading this capture exists to make impossible. Decided on the
+  # subject families rather than on the row count, and on grep's exact status for
+  # the reason the arms below are.
+  grep -qE '^container_(blkio_device_usage_total|fs_|pressure_io_)' "${raw}" || counter_rc=$?
+  if [ "${counter_rc}" -eq 1 ]; then
+    printf '%s\n' \
+      'no block IO counter reached this file: what is above is a container start time, which cAdvisor publishes for any container it knows and which this capture keeps as the divisor for counters that did arrive. So the kubelet answered and reported no block IO for a tenant-test worker on this node -- not a worker that touched no disk' \
+      >>"${raw}"
+    return 0
+  fi
+  if [ "${counter_rc}" -ne 0 ]; then
+    printf '%s\n' \
+      'whether any block IO counter reached this file could not be checked: the search for the subject families failed on this runner rather than answering, so read the rows above before taking any sentence here as a statement about the disk' \
+      >>"${raw}"
+    _cozy_block_io_device_legend "${raw}"
+    return 0
+  fi
+  # Totals, and the note says so rather than calling them an average: an average
+  # needs a divisor, and the only reason this file can offer one is that the
+  # start-time row is kept in the filter.
+  #
+  # Two arms rather than the three the checks above take, because the check above
+  # already read this file: reaching here means grep returned 0 or 1 on it, so a
+  # third arm for "could not read it" would be unreachable by construction.
+  grep -q '^container_start_time_seconds{' "${raw}" || start_rc=$?
+  if [ "${start_rc}" -eq 0 ]; then
+    printf '%s\n' \
+      "these counters are cumulative since the container started and this is one reading of them, so what is above are totals and not a rate. container_start_time_seconds above is the divisor, one row per container rather than one per node, so take the row whose container and pod labels match the counters being divided: a worker Pod's container starts with the guest it carries and KubeVirt gives that Pod restartPolicy Never, so the container is never restarted under the guest, the read stamp below minus that start is the guest's own life, and a total over that span is the average across exactly the window the node-join deadline covers. A rate INSIDE that window needs a second capture of the same stream, which this collector does not take" \
+      >>"${raw}"
+  else
+    printf '%s\n' \
+      'these counters are cumulative since the container started and this is one reading of them, so what is above are totals and not a rate. The divisor is missing from this file: container_start_time_seconds carries it and no row of it survived here, so the container Started line in the virt-launcher describe dump is where the age has to come from' \
+      >>"${raw}"
+  fi
+  printf '%s\n' \
+    "[container_pressure_io_stalled_seconds_total and container_pressure_io_waiting_seconds_total, where they appear, answer this collector's question directly, since they count the time the group spent stalled on IO rather than the bytes it moved. Their absence is a setting rather than a quiet disk: cAdvisor publishes these families only when the kubelet turns its pressure metrics on, which sits behind a feature gate. The kernel is not the missing half on these nodes, since the sandbox kernel ships pressure accounting enabled]" \
+    >>"${raw}"
+  _cozy_block_io_device_legend "${raw}"
+  printf '%s\n' \
+    '[a missing service time or queue depth here is the kernel interface and not an idle disk: under cgroup v2 io.stat publishes transferred bytes and completed operations only, so container_fs_io_current and container_fs_io_time_seconds_total are either absent or carry the node filesystem counters cAdvisor falls back to, which are not this Pod]' \
+    >>"${raw}"
+}
+
+# Read how much each tenant worker moved through its block devices, from the
+# kubelet's cAdvisor endpoint on the node the worker runs on.
+#
+# This exists because a worker burning its whole vCPU while making no progress
+# has two mechanisms behind one appearance. It is computing and getting nowhere,
+# or it is waiting on blocks -- and a vCPU thread spinning in a wait on a nested
+# guest with no idle exit looks like a busy vCPU either way, at a quota with room
+# to spare and with the node under it half free. Nothing else in this tree counts
+# the worker's IO: the CPU counters beside it measure what the group was allowed
+# and what it got, the network counters measure what crossed into the Pod, and
+# both are blind to blocks by construction.
+#
+# The guest's own /proc/diskstats would answer it from inside, and cannot be
+# reached: the diagnostics credential minted for the guest carries the os:reader
+# role, which Talos does not allow to read file contents at all, and Talos
+# publishes no resource carrying disk statistics. The Pod's cgroup is the nearest
+# surface that exists, and it sits outside the guest, so a wedged guest does not
+# slow the reading down.
+#
+# Read once rather than twice, unlike its neighbours in the sampling loop, and
+# the counter's own origin is why: it accumulates from the container starting,
+# which for a worker Pod is when the guest was created. A single reading is
+# therefore an average over the guest's whole life, and the guest's whole life IS
+# the window the deadline covers on this failure. What one reading cannot give is
+# a rate inside that window, which is what would separate a guest reading slowly
+# throughout from one that read its image and then burned CPU; the file says so
+# where the rows are.
+cozy_capture_tenant_worker_block_io() {
+  # Anchored on the metric names, and the namespace is not a worker filter: the
+  # tenant-test namespace also carries the Kamaji control plane, whose apiserver
+  # and etcd have disks of their own, so the Pod name carries the second half of
+  # the filter as it does for the sibling captures.
+  #
+  # container_blkio_device_usage_total is the row that survives cgroup v2 with an
+  # operation and a device major on it, so it is the one that attributes reads to
+  # a volume; the fs_* families are kept beside it because a node that publishes
+  # the service-time ones must not produce an artifact identical to a node that
+  # cannot.
+  #
+  # container_start_time_seconds is in the filter for a different reason from
+  # every other family here: it is not a counter but the divisor these counters
+  # need. cAdvisor publishes it for any container it knows, outside the disk
+  # group, and keeping it is what lets one reading of a cumulative total be read
+  # as an average without leaving the file for a Started line in a describe dump.
+  #
+  # It costs two things, both paid rather than left implicit. The subject word
+  # below names it, because the shared walk builds its "reported no <subject>
+  # series" sentences from that word and a sentence naming only block IO would be
+  # false about a file holding a start time. And the tail note decides "no
+  # counter arrived" on the subject families rather than on the walk's row count,
+  # which this family would otherwise make always true.
+  _cozy_capture_worker_cadvisor \
+    tenant-block-io \
+    'block IO counters capture' \
+    'how much these workers moved through their disks' \
+    'block IO or container start-time' \
+    cozy-block-io \
+    _cozy_block_io_tail_note \
+    '^container_(blkio_device_usage_total|start_time_seconds|fs_((reads|writes)(_bytes)?_total|(read|write)_seconds_total|io_(current|time_seconds_total|time_weighted_seconds_total))|pressure_io_(stalled|waiting)_seconds_total)\{'
+}
+
 # Collect the guest-side evidence requested by issue #3513. This runs only after
 # the 18-minute Ready deadline has already failed. VMIs without a reported IP
 # are recorded before any Certificate or Pod is created; when at least one IP is
@@ -2676,7 +2819,7 @@ _cozy_diag_seconds() {
 # count rather than confidence: those bound a single read or a short walk, while the
 # block below issues a dozen back to back, so the same per-read bound would put the
 # block's own ceiling ahead of the tenant crust-gather snapshot it exists to reach.
-# The two worker counter captures are the exception and deliberately so: they
+# The worker counter captures are the exception and deliberately so: they
 # share one body that is a short walk by that measure, and it still takes this
 # knob rather than a higher literal, because a bound that does not follow the
 # knob is a bound nobody can lower. Read the sentence above as describing the
@@ -2745,23 +2888,34 @@ COZY_DIAG_RATE_INTERVAL_DEFAULT=12
 # re-probe has no substitute and is the collector this budget gives up first,
 # which was already true at 480.
 #
-# The second cost lands on the guest captures rather than on the tail. One
-# collector reads the node's metric stream ahead of the console: (d2) spends a
-# listing plus one read per node -- up to 100s at the read bound and the
-# three-node cap, a ceiling those numbers impose rather than a duration measured
-# on a live cluster. Between that and the sixty seconds off the budget, the
-# console and guest-Talos captures reach their gate with less left than before;
-# they are still ahead of the tail in the order, so they are not first to go,
-# but a run that was marginal for them is likelier to decline them now.
+# The second cost lands on the guest captures rather than on the tail. Two
+# collectors read the node's metric stream ahead of the console -- (d2) and (d3)
+# -- and each spends a listing plus one read per node, so up to 200s between them
+# at the read bound and the three-node cap, plus the single read at (a3), which
+# takes its 25s from the same budget: 225s, a ceiling those numbers impose rather
+# than a duration measured on a live cluster. Between that and the sixty seconds
+# off the budget, the console and guest-Talos captures reach their gate with less
+# left than before; they are still ahead of the tail in the order, so they are not
+# first to go, but a run that was marginal for them is likelier to decline them
+# now.
+#
+# Only part of that figure is held mechanically, and the boundary is worth naming
+# rather than leaving a reader to trust the whole of it: the guard in
+# hack/run-kubernetes-node-join_test.bats walks the CAPTURE-style collectors gated
+# ahead of the console -- the ones called as `cozy_capture_… || true` -- and fails
+# on any it has no cost arm for, so a walk added there is priced before the suite
+# goes green. A bounded read added ahead of the console, as (a3) is, is not in that
+# enumeration and its 25s are not summed there. That gap is recorded where the
+# other budget residuals are rather than fixed here.
 #
 # What is deliberately NOT ahead of the console is the two-sample CPU pair,
 # whose own ceiling is several times this one. What sits ahead of the console
 # bounds what the console can lose, so that figure is the one to keep small; the
 # ordering argument at the pair says the rest.
 #
-# That second read is not shared away in this change, and the reason is scope
-# rather than merit -- the note at the read says why, and says that merging
-# would improve both the cost and what a tight run collects.
+# Those reads are not shared away in this change, and the reason is scope rather
+# than merit -- the note at the read says why, and says that merging would
+# improve both the cost and what a tight run collects.
 COZY_DIAG_PHASE_BUDGET_DEFAULT=420
 
 # The operation both kubernetes-*/chainsaw-test.yaml give the script, and the
@@ -2897,7 +3051,7 @@ cozy_diag_phase_start() {
   # an unchecked list sitting beside a checked one, drifting from it at whatever
   # rate collectors are added.
   command -v timeout >/dev/null 2>&1 || \
-    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, sandbox node CPU time, sandbox kernel KVM counters, worker per-thread CPU time, ghcr-mirror and talos-image-cache captures -- keep collecting instead, unbounded" >&2
+    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, worker block IO counter, sandbox node CPU time, sandbox kernel KVM counters, worker per-thread CPU time, ghcr-mirror and talos-image-cache captures -- keep collecting instead, unbounded" >&2
   # Re-checked here, not only at assignment: a value set after this file is sourced
   # -- which is how a test sets it -- would otherwise reach the arithmetic below
   # unvalidated, and that is the one failure that costs the whole block.
@@ -3208,6 +3362,31 @@ cozy_report_node_join_failure() {
     kubectl -n tenant-test logs -l kamaji.clastix.io/name="kubernetes-${test_name}" \
     -c talos-csr-signer --tail=200 --prefix
 
+  # (a3) State of the replicated volumes behind the worker disks. Numbered with
+  # the import stage it belongs to and placed here instead, because position in
+  # this block is cost order rather than subject: it is one read, and moving it up
+  # would push the two reads at (c) a read further from the start of the budget.
+  #
+  # What it answers is a state rather than a rate, which is why one read settles
+  # it. A worker reads its system disk over DRBD, and a replica that is
+  # SyncTarget, Inconsistent or Diskless serves those reads from a peer over the
+  # network instead of locally, which is slow in a way no counter in this block
+  # attributes to storage. The state also disappears with the volume: the report
+  # collects the same tables after the suite, by which time cleanup has usually
+  # deleted the worker's volumes, so a red run leaves nothing about them there.
+  #
+  # Which rows are the worker's is decided through the PV name, which the (a2)
+  # dump above prints beside each PVC; resource names here are those PV names.
+  #
+  # No --request-timeout: this is an exec stream rather than an API request, so
+  # the wall clock around it is the whole bound. A controller that is absent and
+  # one that is wedged both arrive as a failed read, and kubectl's own message
+  # beside the note is what separates them.
+  echo "=== (a3) replicated volume state behind the worker disks (management cluster) ==="
+  cozy_diag_read 'LINSTOR resource state' \
+    kubectl -n cozy-linstor exec deploy/linstor-controller \
+    --container=linstor-controller -- linstor --no-color r l
+
   # Order below is load-bearing and the phase budget is why. The budget declines
   # whatever has not started when it runs out, so what runs last is what gets
   # declined -- and (c) is the discriminator for mode 2b, the failure this whole
@@ -3256,6 +3435,20 @@ cozy_report_node_join_failure() {
   if cozy_diag_phase_has_time '(d2) tenant worker network counters'; then
     echo "=== (d2) tenant worker network counters (management cluster, ns tenant-test) ==="
     cozy_capture_tenant_worker_network_counters || true
+  fi
+
+  # (d3) Worker block IO, and it sits here for the reason (d2) does: one listing
+  # and one read per node, read once, against the minutes the collectors below can
+  # spend between them. What it settles has no other answer in this artifact
+  # either. A worker whose vCPU thread runs at its physical maximum while nothing
+  # progresses is either computing without result or waiting on blocks, and every
+  # other counter here is blind to the second: the CPU families say what the group
+  # was allowed and what it got, (d2) says what crossed the network, and neither
+  # counts a read. Placed below the guest captures it would be declined on exactly
+  # the slow runs this failure comes from.
+  if cozy_diag_phase_has_time '(d3) tenant worker block IO counters'; then
+    echo "=== (d3) tenant worker block IO counters (management cluster, ns tenant-test) ==="
+    cozy_capture_tenant_worker_block_io || true
   fi
 
   # (b1) Guest serial console, read from the management cluster. First of the
