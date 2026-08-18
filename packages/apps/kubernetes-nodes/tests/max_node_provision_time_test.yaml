@@ -63,6 +63,28 @@ tests:
           path: metadata.annotations["cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime"]
           value: "1h30m"
 
+  - it: accepts the canonical Go rendering of a duration
+    set:
+      maxNodeProvisionTime: "1h0m0s"
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime"]
+          value: "1h0m0s"
+
+  - it: accepts a zero tail segment, which metav1.Duration serializes
+    set:
+      maxNodeProvisionTime: "20m0s"
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime"]
+          value: "20m0s"
+
   - it: rejects a provision time carrying no unit
     set:
       maxNodeProvisionTime: "30"

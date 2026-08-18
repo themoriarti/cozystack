@@ -488,21 +488,7 @@ metadata:
   annotations:
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: "{{ $group.minReplicas }}"
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "{{ $group.maxReplicas }}"
-    {{- /* cluster-autoscaler parses this annotation with time.ParseDuration and
-           silently falls back to its own default on a value it cannot parse,
-           so the duration is checked here: the values schema types the field
-           as a string and stops there, which lets "30" and "30min" reach the
-           template. The accepted shape is narrower than Go's duration grammar
-           on purpose, because that grammar also admits a value large enough to
-           overflow -- which is the silent fallback again -- and a fraction
-           small enough to round to zero, which marks every machine
-           long-unregistered at once. Every string this admits parses to a
-           positive duration. */}}
-    {{- $maxNodeProvisionTime := toString $.Values.maxNodeProvisionTime }}
-    {{- if not (regexMatch "^([1-9][0-9]{0,4}[smh]){1,3}$" $maxNodeProvisionTime) }}
-    {{-   fail (printf "maxNodeProvisionTime must be a whole number of s, m or h (e.g. 30m, 1h30m), got %q" $maxNodeProvisionTime) }}
-    {{- end }}
-    cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime: {{ $maxNodeProvisionTime | quote }}
+    cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime: {{ include "kubernetes.positiveDuration" (dict "field" "maxNodeProvisionTime" "value" $.Values.maxNodeProvisionTime) | quote }}
     {{- if $effectiveMemory }}
     {{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}
     {{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
@@ -609,10 +595,10 @@ spec:
   unhealthyConditions:
   - type: Ready
     status: Unknown
-    timeout: {{ $.Values.readyUnknownTimeout | quote }}
+    timeout: {{ include "kubernetes.positiveDuration" (dict "field" "readyUnknownTimeout" "value" $.Values.readyUnknownTimeout) | quote }}
   - type: Ready
     status: "False"
-    timeout: {{ $.Values.readyFalseTimeout | quote }}
+    timeout: {{ include "kubernetes.positiveDuration" (dict "field" "readyFalseTimeout" "value" $.Values.readyFalseTimeout) | quote }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
