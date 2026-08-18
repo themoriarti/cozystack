@@ -43,6 +43,11 @@ spec:
         #   guest Talos capture
         #   ghcr-mirror state, access log and warm-up Job
         #   talos-image-cache diagnosis
+        # The three bracket pairs -- the sandbox kernel KVM counters, the runner
+        # kernel CPU time and the sandbox QEMU thread time -- sit outside this
+        # order on purpose: each is ungated, one bounded read a side, taken
+        # before the node-join wait and right after it on both paths, and their
+        # cost arms live in the budget guard rather than in this list.
         # and then, after the phase rather than inside it, the in-process tenant
         # crust-gather snapshot.
         #
