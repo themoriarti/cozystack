@@ -46,6 +46,9 @@ type ConfigSpec struct {
 	// MachineHealthCheck tuning for worker node groups.
 	// +kubebuilder:default:={}
 	NodeHealthCheck NodeHealthCheck `json:"nodeHealthCheck"`
+	// How long the cluster-autoscaler waits for a newly created worker to register as a Node before it treats that machine as long-unregistered. Rendered onto every worker MachineDeployment as the `cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime` annotation, which overrides the autoscaler's built-in default for these node groups only. Two things change when the timer fires, and both make a slow join worse rather than better: the machine stops counting towards the group's upcoming capacity, so the autoscaler asks for a replacement for capacity that is already on its way, and the machine becomes eligible for removal. Size it above the slowest join a healthy worker can take, counting the Talos image import, the guest boot and the CNI rollout. Accepted as a whole number of seconds, minutes or hours ("30m", "1h30m"), which is narrower than Go's duration syntax on purpose: the autoscaler ignores a value it cannot parse and falls back to its own default without failing, and the narrower shape cannot express a value that overflows the parser or a fraction it rounds to zero.
+	// +kubebuilder:default:="30m"
+	MaxNodeProvisionTime string `json:"maxNodeProvisionTime"`
 	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
 	// +kubebuilder:default:={}
 	Oidc OIDC `json:"oidc"`
