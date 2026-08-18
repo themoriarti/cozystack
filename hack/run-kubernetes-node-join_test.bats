@@ -225,6 +225,15 @@ stub_collectors() {
   # pass-through, so a `mount` that hung would hang the suite with no ceiling to
   # stop it.
   cozy_capture_sandbox_kvm_exits() { printf 'kvm-exits-stub\n'; }
+  # The two readings beside it, stubbed on the same ground and for a sharper
+  # version of it: neither issues a kubectl read, so neither contributes to the
+  # audit below, and un-stubbed they do not probe the host -- they READ it. One
+  # cats the runner's real /proc/stat and the other walks the whole of /proc,
+  # opening a comm file per process on the machine running `make unit-tests`.
+  # The result of a case here would then be set by whatever else that machine
+  # happens to be running, which is the property this file removes.
+  cozy_capture_runner_kernel_cpu_time() { printf 'runner-kernel-cpu-stub\n'; }
+  cozy_capture_sandbox_qemu_thread_cpu() { printf 'sandbox-qemu-thread-stub\n'; }
 }
 
 # The collectors below are deliberately NOT in stub_collectors, and that is
@@ -885,6 +894,8 @@ assert_file_lacks_pattern() {
       cozy_capture_tenant_worker_cpu_throttle() { :; }
       cozy_capture_tenant_worker_network_counters() { :; }
       cozy_capture_sandbox_kvm_exits() { :; }
+      cozy_capture_runner_kernel_cpu_time() { :; }
+      cozy_capture_sandbox_qemu_thread_cpu() { :; }
       ghcr_mirror_diagnose() { :; }
       kubectl() { :; }
       cozy_report_node_join_failure test-latest-version
@@ -952,6 +963,8 @@ assert_file_lacks_pattern() {
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
+    cozy_capture_runner_kernel_cpu_time() { :; }
+    cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_capture_sandbox_node_cpu_time() { :; }
@@ -1028,6 +1041,8 @@ assert_file_lacks_pattern() {
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
+    cozy_capture_runner_kernel_cpu_time() { :; }
+    cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
@@ -1062,6 +1077,8 @@ assert_file_lacks_pattern() {
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
+    cozy_capture_runner_kernel_cpu_time() { :; }
+    cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
     ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
@@ -1362,6 +1379,16 @@ assert_file_lacks_pattern() {
       # ahead of the console in wall clock, and one bounded read is a cost this
       # arm can state exactly, unlike a walk whose size follows the sandbox.
       cozy_capture_sandbox_kvm_exits) ahead=$((ahead + bound + grace)) ;;
+      # The other two halves of the same shape, and priced identically. The
+      # runner-kernel reading is one bounded read of /proc/stat; the QEMU
+      # thread reading is one bounded probe walk of this container's own /proc
+      # plus three bounded pid-file reads, all under the same ceiling the arm
+      # prices. Each pair's first half is taken before the wait, so declining
+      # either here would orphan a reading taken eighteen minutes earlier
+      # rather than save one. Counted all the same, because they do sit ahead
+      # of the console in wall clock.
+      cozy_capture_runner_kernel_cpu_time) ahead=$((ahead + bound + grace)) ;;
+      cozy_capture_sandbox_qemu_thread_cpu) ahead=$((ahead + bound + grace)) ;;
       cozy_capture_tenant_worker_network_counters) ahead=$((ahead + walk)) ;;
       # One walk apiece and read once, so each costs what the expression above
       # prices a capped walk at. Both sit ahead of the console on the same
@@ -1422,7 +1449,10 @@ assert_file_lacks_pattern() {
   # missing from it. So the list is derived here rather than restated: every
   # function that guards its bounded call with `command -v timeout` has to
   # appear in that sentence.
-  warn=$(grep -n 'timeout is not on PATH' "$lib" | head -n 1 | cut -d: -f1)
+  # Anchored on the phrase unique to the phase warning itself: the captures now
+  # write their own [bounds] notes carrying "timeout is not on PATH", so the
+  # first match of that phrase is no longer this sentence.
+  warn=$(grep -n 'run UNBOUNDED' "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$warn" ]; then
     echo "expected the phase to still warn when timeout is missing" >&2
     exit 1
@@ -1483,6 +1513,8 @@ assert_file_lacks_pattern() {
     'cozy_capture_tenant_worker_block_io:block IO counter:_cozy_cadvisor_node_stream _cozy_virt_launcher_listing' \
     'cozy_capture_sandbox_node_cpu_time:sandbox node CPU time:cozy_capture_sandbox_node_cpu_time' \
     'cozy_capture_sandbox_kvm_exits:sandbox kernel KVM counters:cozy_capture_sandbox_kvm_exits' \
+    'cozy_capture_runner_kernel_cpu_time:runner kernel CPU time:cozy_capture_runner_kernel_cpu_time' \
+    'cozy_capture_sandbox_qemu_thread_cpu:sandbox QEMU per-thread CPU time:cozy_capture_sandbox_qemu_thread_cpu' \
     'cozy_capture_tenant_worker_thread_cpu:worker per-thread CPU time:cozy_capture_tenant_worker_thread_cpu _cozy_virt_launcher_listing' \
     'ghcr_mirror_diagnose:ghcr-mirror:ghcr_mirror_diagnose _ghcr_mirror_bounded_read' \
     'talos_image_cache_diagnose:talos-image-cache:talos_image_cache_diagnose _talos_image_cache_bounded_read'; do
@@ -1520,6 +1552,8 @@ ${carrier}
       cozy_capture_tenant_worker_network_counters) phrase='network counter' ;;
       cozy_capture_sandbox_node_cpu_time) phrase='sandbox node CPU time' ;;
       cozy_capture_sandbox_kvm_exits) phrase='sandbox kernel KVM counters' ;;
+      cozy_capture_runner_kernel_cpu_time) phrase='runner kernel CPU time' ;;
+      cozy_capture_sandbox_qemu_thread_cpu) phrase='sandbox QEMU per-thread CPU time' ;;
       cozy_capture_tenant_worker_thread_cpu) phrase='worker per-thread CPU time' ;;
       ghcr_mirror_diagnose) phrase='ghcr-mirror' ;;
       talos_image_cache_diagnose) phrase='talos-image-cache' ;;
@@ -1601,6 +1635,12 @@ ${carrier}
       # out or withholds: declining it would leave that earlier reading with
       # nothing to pair against rather than save the phase any time.
       cozy_capture_sandbox_kvm_exits) continue ;;
+      # The other two halves of that same pair, exempt on the same ground and not
+      # on their own: each was read once before the node-join wait, so what runs
+      # here is the second half of a measurement rather than a collector the
+      # budget may hand out or withhold.
+      cozy_capture_runner_kernel_cpu_time) continue ;;
+      cozy_capture_sandbox_qemu_thread_cpu) continue ;;
       *)
         echo "$fn runs in the diagnostics block but this test has no phrase for it; add one here and to both chainsaw comments" >&2
         exit 1
@@ -1633,6 +1673,45 @@ EOF
       exit 1
     fi
   done
+}
+
+@test "nothing new runs between the KVM reading and the two beside it" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # The interval each of the three pairs divides by is whatever runs between its
+  # two readings, and on the failure path that is everything the block does before
+  # the second one. The KVM guard below pins what may precede ITS reading; this
+  # pins the gap between that reading and the two that follow it, which is where
+  # the other two intervals actually widen. Nothing belongs in there: the three
+  # readings are the second halves of three pairs and are meant to be adjacent.
+  block=$(grep -n '^cozy_report_node_join_failure() {' "$lib" | head -n 1 | cut -d: -f1)
+  kvm=$(awk -v b="$block" 'NR > b && /cozy_capture_sandbox_kvm_exits 2/ { print NR; exit }' "$lib")
+  last=$(awk -v b="$block" 'NR > b && /cozy_capture_sandbox_qemu_thread_cpu 2/ { print NR; exit }' "$lib")
+  for v in block kvm last; do
+    eval "n=\$$v"
+    if [ -z "$n" ]; then
+      echo "expected to read $v from $lib; without it this guard reports success for having lost its input" >&2
+      return 1
+    fi
+  done
+  if [ "$last" -le "$kvm" ]; then
+    echo "expected the QEMU thread reading (line $last) to follow the KVM one (line $kvm) inside the failure block" >&2
+    return 1
+  fi
+  # Matched on the call rather than on the `|| true` suffix, for the reason the
+  # KVM guard gives: the suffix says a call is phase-gated and says nothing about
+  # what costs time, and the dominant idiom in this block is `cozy_diag_read`
+  # with no suffix at all.
+  between=$(grep -nE '^ *(cozy_capture_[a-z_]+|cozy_report_[a-z_]+|cozy_diag_read|[a-z_]+_diagnose)( |$)' "$lib" \
+    | sed -E 's/:[[:space:]]*/:/; s/(:[a-z_]+) .*/\1/' \
+    | awk -F: -v a="$kvm" -v b="$last" '$1 > a && $1 < b { print $2 }')
+  case "$(printf '%s\n' $between)" in
+    'cozy_capture_runner_kernel_cpu_time') ;;
+    *)
+      echo "more than the runner kernel reading now runs between the KVM reading and the QEMU thread one, so those two intervals are wider than the wait by whatever it costs:" >&2
+      printf '%s\n' $between >&2
+      return 1
+      ;;
+  esac
 }
 
 @test "the KVM counter readings sit on either side of the node-join wait on both paths" {
@@ -1797,6 +1876,8 @@ EOF
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
+    cozy_capture_runner_kernel_cpu_time() { :; }
+    cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
     ghcr_mirror_diagnose() { :; }
     kubectl() { :; }
