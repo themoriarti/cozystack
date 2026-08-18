@@ -308,6 +308,12 @@ type NodeHealthCheck struct {
 	// Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
 	// +kubebuilder:default:="10m"
 	NodeStartupTimeout string `json:"nodeStartupTimeout"`
+	// How long a worker Node may report `Ready=False` before the MachineHealthCheck remediates the Machine. A Node that has registered but has no working CNI yet reports `Ready=False`, so this value is the whole budget a first boot gets for the CNI rollout to reach that node, and a worker deleted mid-rollout takes the rollout with it while its replacement starts over. Raising it delays replacing a worker that is genuinely dead, but not rescheduling its workload: Pods leave an unreachable Node on the node lifecycle controller's taint-based eviction and the toleration that carries, not on this timer.
+	// +kubebuilder:default:="10m"
+	ReadyFalseTimeout string `json:"readyFalseTimeout,omitempty"`
+	// How long a worker Node may report `Ready=Unknown` before the MachineHealthCheck remediates the Machine, which for a KubeVirt worker means deleting the VM. `Ready=Unknown` is what the node lifecycle controller writes once it stops hearing from a kubelet, on a grace period of its own, so the wall clock from a guest going quiet to a deleted worker is this value plus that grace period. A guest starved of CPU stops answering long before it is dead, so a value of a few tens of seconds deletes workers that would have come back on their own.
+	// +kubebuilder:default:="5m"
+	ReadyUnknownTimeout string `json:"readyUnknownTimeout,omitempty"`
 }
 
 type OIDC struct {

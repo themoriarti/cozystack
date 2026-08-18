@@ -307,11 +307,15 @@ talos:
 ## @typedef {struct} NodeHealthCheck - MachineHealthCheck configuration for worker node groups.
 ## @field {string} maxUnhealthy="50%" - Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers.
 ## @field {string} nodeStartupTimeout="10m" - Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
+## @field {string} [readyUnknownTimeout]="5m" - How long a worker Node may report `Ready=Unknown` before the MachineHealthCheck remediates the Machine, which for a KubeVirt worker means deleting the VM. `Ready=Unknown` is what the node lifecycle controller writes once it stops hearing from a kubelet, on a grace period of its own, so the wall clock from a guest going quiet to a deleted worker is this value plus that grace period. A guest starved of CPU stops answering long before it is dead, so a value of a few tens of seconds deletes workers that would have come back on their own.
+## @field {string} [readyFalseTimeout]="10m" - How long a worker Node may report `Ready=False` before the MachineHealthCheck remediates the Machine. A Node that has registered but has no working CNI yet reports `Ready=False`, so this value is the whole budget a first boot gets for the CNI rollout to reach that node, and a worker deleted mid-rollout takes the rollout with it while its replacement starts over. Raising it delays replacing a worker that is genuinely dead, but not rescheduling its workload: Pods leave an unreachable Node on the node lifecycle controller's taint-based eviction and the toleration that carries, not on this timer.
 
 ## @param {NodeHealthCheck} nodeHealthCheck - MachineHealthCheck tuning for worker node groups.
 nodeHealthCheck:
   maxUnhealthy: "50%"
   nodeStartupTimeout: "10m"
+  readyUnknownTimeout: "5m"
+  readyFalseTimeout: "10m"
 
 ##
 ## @section Node Autoscaling
