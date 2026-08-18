@@ -1,0 +1,108 @@
+suite: MachineHealthCheck timeouts
+
+# Each entry pairs a Node condition with the time that condition may hold
+# before the Machine is remediated, and the two entries are not
+# interchangeable: `Ready=Unknown` is a worker that stopped answering, and
+# `Ready=False` is a worker that answered and said it is not ready. Asserting
+# the whole entry rather than an indexed timeout is what makes a swapped pair
+# fail here instead of on a live cluster.
+#
+# Both timeouts are rendered quoted, which matters only for a value YAML would
+# otherwise read as a number: `"600"` reaches CAPI as a string it can name a
+# missing unit in, rather than as an integer it can only refuse to decode. The
+# last case holds the quoting on both of them, because an unquoted render of a
+# well-formed value is indistinguishable from a quoted one, so nothing else here
+# would notice the filter going missing.
+#
+# `nodeStartupTimeout` bounds the phase before any of that: it is the window a
+# Machine has to produce a Node at all, and the unhealthyConditions entries are
+# evaluated only once one exists. Its default is pinned here because the parity
+# gate compares this chart against its counterpart, so a default moved in both
+# at once passes there and only fails on this assertion.
+
+templates:
+  - templates/cluster.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+tests:
+  - it: renders both chart-default condition timeouts
+    documentSelector:
+      path: kind
+      value: MachineHealthCheck
+    asserts:
+      - contains:
+          path: spec.unhealthyConditions
+          content:
+            type: Ready
+            status: Unknown
+            timeout: "5m"
+      - contains:
+          path: spec.unhealthyConditions
+          content:
+            type: Ready
+            status: "False"
+            timeout: "10m"
+      - lengthEqual:
+          path: spec.unhealthyConditions
+          count: 2
+
+  - it: passes configured condition timeouts through verbatim
+    set:
+      nodeHealthCheck:
+        maxUnhealthy: "50%"
+        nodeStartupTimeout: "20m"
+        readyUnknownTimeout: "90s"
+        readyFalseTimeout: "25m"
+    documentSelector:
+      path: kind
+      value: MachineHealthCheck
+    asserts:
+      - contains:
+          path: spec.unhealthyConditions
+          content:
+            type: Ready
+            status: Unknown
+            timeout: "90s"
+      - contains:
+          path: spec.unhealthyConditions
+          content:
+            type: Ready
+            status: "False"
+            timeout: "25m"
+
+  - it: renders the chart-default nodeStartupTimeout
+    documentSelector:
+      path: kind
+      value: MachineHealthCheck
+    asserts:
+      - equal:
+          path: spec.nodeStartupTimeout
+          value: "20m"
+
+  - it: keeps a numeric-looking timeout a string rather than a number
+    set:
+      nodeHealthCheck:
+        readyUnknownTimeout: "90"
+        readyFalseTimeout: "600"
+    documentSelector:
+      path: kind
+      value: MachineHealthCheck
+    asserts:
+      - contains:
+          path: spec.unhealthyConditions
+          content:
+            type: Ready
+            status: Unknown
+            timeout: "90"
+      - contains:
+          path: spec.unhealthyConditions
+          content:
+            type: Ready
+            status: "False"
+            timeout: "600"

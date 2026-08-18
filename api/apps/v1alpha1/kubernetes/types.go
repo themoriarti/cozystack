@@ -46,6 +46,9 @@ type ConfigSpec struct {
 	// MachineHealthCheck tuning for worker node groups.
 	// +kubebuilder:default:={}
 	NodeHealthCheck NodeHealthCheck `json:"nodeHealthCheck"`
+	// How long the cluster-autoscaler waits for a newly created worker to register as a Node before it treats that machine as long-unregistered. Rendered onto every worker MachineDeployment as the `cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime` annotation, which overrides the autoscaler's built-in default for these node groups only. Two things change when the timer fires, and both make a slow join worse rather than better: the machine stops counting towards the group's upcoming capacity, so the autoscaler asks for a replacement for capacity that is already on its way, and the machine becomes eligible for removal. Size it above the slowest join a healthy worker can take, counting the Talos image import, the guest boot and the CNI rollout. Accepted as a whole number of seconds, minutes or hours ("30m", "1h30m"), which is narrower than Go's duration syntax on purpose: the autoscaler ignores a value it cannot parse and falls back to its own default without failing, and the narrower shape cannot express a value that overflows the parser or a fraction it rounds to zero.
+	// +kubebuilder:default:="30m"
+	MaxNodeProvisionTime string `json:"maxNodeProvisionTime"`
 	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
 	// +kubebuilder:default:={}
 	Oidc OIDC `json:"oidc"`
@@ -299,12 +302,18 @@ type NodeGroup struct {
 }
 
 type NodeHealthCheck struct {
-	// Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers.
+	// Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers. Watch how a percentage behaves in a small group: the MachineHealthCheck controller scales it against the number of machines the check covers and rounds down, then remediates only while the unhealthy count is at or below that result. At "50%" a group of one therefore never remediates, because half of one rounds down to zero, and a group of two remediates one unhealthy machine but not two.
 	// +kubebuilder:default:="50%"
 	MaxUnhealthy string `json:"maxUnhealthy"`
-	// Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
-	// +kubebuilder:default:="10m"
+	// Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator). The MachineHealthCheck measures it from the later of the Machine's creation and its InfrastructureReady transition, so the clock restarts when the infrastructure reports ready: a worker gets this long for the disk image import and the VM to come up, and then this long again for the guest to boot and its kubelet to register with the tenant apiserver. Either leg stretches on a host under load, and a Machine remediated here is deleted before it ever joins, so its replacement starts the same sequence from the beginning.
+	// +kubebuilder:default:="20m"
 	NodeStartupTimeout string `json:"nodeStartupTimeout"`
+	// How long a worker Node may report `Ready=False` before the MachineHealthCheck remediates the Machine. A Node that has registered but has no working CNI yet reports `Ready=False`, so this value is the whole budget a first boot gets for the CNI rollout to reach that node, and a worker deleted mid-rollout takes the rollout with it while its replacement starts over. Raising it delays replacing a worker that is genuinely dead, but not rescheduling its workload: Pods leave an unreachable Node on the node lifecycle controller's taint-based eviction and the toleration that carries, not on this timer.
+	// +kubebuilder:default:="10m"
+	ReadyFalseTimeout string `json:"readyFalseTimeout,omitempty"`
+	// How long a worker Node may report `Ready=Unknown` before the MachineHealthCheck remediates the Machine, which for a KubeVirt worker means deleting the VM. `Ready=Unknown` is what the node lifecycle controller writes once it stops hearing from a kubelet, on a grace period of its own, so the wall clock from a guest going quiet to a deleted worker is this value plus that grace period. A guest starved of CPU stops answering long before it is dead, so a value of a few tens of seconds deletes workers that would have come back on their own.
+	// +kubebuilder:default:="5m"
+	ReadyUnknownTimeout string `json:"readyUnknownTimeout,omitempty"`
 }
 
 type OIDC struct {
