@@ -30,9 +30,10 @@ POOL=md0
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Shared, case-invariant inputs. The parent's default nodeHealthCheck
-# (maxUnhealthy/nodeStartupTimeout) equals the child's per-pool defaults set
-# here, so the MachineHealthCheck stays identical without extra parent config.
+# Shared, case-invariant inputs. Neither side configures the MachineHealthCheck
+# knobs, so the MachineHealthCheck comparison below is a comparison of the two
+# charts' defaults for them -- which is the contract, and which is why pinning
+# either side's values here would defeat it.
 write_values() { # <pool-fields-file>
   local pf="$1"
   cat >"$WORK/parent.yaml" <<EOF
@@ -58,8 +59,6 @@ cluster: ${CLUSTER}
 _cluster:
   cluster-domain: cozy.local
 version: "v1.35"
-maxUnhealthy: "50%"
-nodeStartupTimeout: "10m"
 EOF
   cat "$pf" >>"$WORK/child.yaml"
 }

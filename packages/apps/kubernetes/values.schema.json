@@ -1014,14 +1014,14 @@
       ],
       "properties": {
         "maxUnhealthy": {
-          "description": "Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer (\"0\", \"1\", ...) or a percentage (\"0%\", \"50%\"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default \"50%\" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to \"0%\" once the fleet is stable on Talos workers.",
+          "description": "Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer (\"0\", \"1\", ...) or a percentage (\"0%\", \"50%\"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default \"50%\" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to \"0%\" once the fleet is stable on Talos workers. Watch how a percentage behaves in a small group: the MachineHealthCheck controller scales it against the number of machines the check covers and rounds down, then remediates only while the unhealthy count is at or below that result. At \"50%\" a group of one therefore never remediates, because half of one rounds down to zero, and a group of two remediates one unhealthy machine but not two.",
           "type": "string",
           "default": "50%"
         },
         "nodeStartupTimeout": {
-          "description": "Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).",
+          "description": "Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator). The MachineHealthCheck measures it from the later of the Machine's creation and its InfrastructureReady transition, so the clock restarts when the infrastructure reports ready: a worker gets this long for the disk image import and the VM to come up, and then this long again for the guest to boot and its kubelet to register with the tenant apiserver. Either leg stretches on a host under load, and a Machine remediated here is deleted before it ever joins, so its replacement starts the same sequence from the beginning.",
           "type": "string",
-          "default": "10m"
+          "default": "20m"
         },
         "readyFalseTimeout": {
           "description": "How long a worker Node may report `Ready=False` before the MachineHealthCheck remediates the Machine. A Node that has registered but has no working CNI yet reports `Ready=False`, so this value is the whole budget a first boot gets for the CNI rollout to reach that node, and a worker deleted mid-rollout takes the rollout with it while its replacement starts over. Raising it delays replacing a worker that is genuinely dead, but not rescheduling its workload: Pods leave an unreachable Node on the node lifecycle controller's taint-based eviction and the toleration that carries, not on this timer.",
