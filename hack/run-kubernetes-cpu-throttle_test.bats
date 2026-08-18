@@ -159,7 +159,10 @@ run_capture() {
   # sentence sends the reader to the opposite conclusion about the one collector
   # whose behaviour differs, and a comment in the source does not reach them.
   lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  warn=$(grep -n 'timeout is not on PATH' "$lib" | head -n 1 | cut -d: -f1)
+  # Anchored on the phrase unique to the phase warning itself: the bracket-pair
+  # captures write their own [bounds] notes carrying "timeout is not on PATH",
+  # so the first match of that phrase is no longer this sentence.
+  warn=$(grep -n 'run UNBOUNDED' "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$warn" ]; then
     echo "expected the phase to still warn when timeout is missing" >&2
     return 1
