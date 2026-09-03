@@ -92,23 +92,11 @@
 {{-     fail "podCpuLimit/podCpuRequest size the virt-launcher pod and are kubevirt-only" }}
 {{-   end }}
 {{- end }}
-{{- $group := dict
-      "minReplicas" .Values.minReplicas
-      "maxReplicas" .Values.maxReplicas
-      "instanceType" .Values.instanceType
-      "diskSize" .Values.diskSize
-      "storageClass" .Values.storageClass
-      "osImage" .Values.osImage
-      "roles" .Values.roles
-      "resources" .Values.resources
-      "gpus" .Values.gpus
-      "kubelet" .Values.kubelet
-      "logSerialConsole" .Values.logSerialConsole
-      "podCpuLimit" .Values.podCpuLimit
-      "podCpuRequest" .Values.podCpuRequest
-      "kernelModules" .Values.kernelModules
-}}
-{{- $_ := set $group "proxmox" .Values.proxmox }}
+{{- /* Assembled once in _helpers.tpl and read back here and in
+       talos-reconcile-job.yaml, so the TalosConfigTemplate name this file
+       hashes into configRef and the one the Job hashes into TCT_NAME cannot
+       be computed from different inputs. */}}
+{{- $group := include "kubernetes-nodes.group" . | fromYaml }}
 {{- define "proxmoxmachinetemplate" -}}
 spec:
   {{- /* Talos ships neither qemu-guest-agent nor a cloud-init status file, and

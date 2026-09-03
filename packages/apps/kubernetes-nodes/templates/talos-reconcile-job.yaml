@@ -42,24 +42,18 @@
 {{- $clusterName := include "kubernetes-nodes.clusterName" . }}
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
 {{- $dnsDomain := include "kubernetes.tenantClusterDomain" $ }}
-{{- /* kernelModules carries no entry in values.yaml, so the key is absent here
-       unless the operator set it, and `dict` keeps it nil — which
-       kubernetes-nodes.kernelModules reads as "unset", as opposed to an explicit
-       empty list that opts the pool out. Defaulting it to `list` here would
-       collapse the two. */}}
-{{- $group := dict
-      "instanceType" .Values.instanceType
-      "resources" .Values.resources
-      "gpus" .Values.gpus
-      "kubelet" .Values.kubelet
-      "osImage" .Values.osImage
-      "kernelModules" .Values.kernelModules
-}}
 {{- /* The TalosConfigTemplate spec is immutable, so it can only ever be
        created — never updated — and its name therefore carries a hash of the
        machine config it holds (see _talosconfigtemplate.tpl). nodegroup.yaml
        computes the same name for
-       MachineDeployment.spec.template.spec.bootstrap.configRef. */}}
+       MachineDeployment.spec.template.spec.bootstrap.configRef.
+
+       Both sides read the group from the same helper rather than each
+       assembling its own dict: the spec helper reads a subset of the keys, so
+       two assemblies would agree only by coincidence of that subset, and a key
+       dropped on one side alone would point the MachineDeployment at a
+       template this Job never creates. */}}
+{{- $group := include "kubernetes-nodes.group" $ | fromYaml }}
 {{- $tctArgs := dict "root" $ "group" $group }}
 {{- $tctSpec := include "kubernetes.talosConfigTemplateSpec" $tctArgs }}
 {{- $tctName := printf "%s-%s-%s" $clusterName $groupName (include "kubernetes.talosConfigTemplateHash" $tctArgs) }}
