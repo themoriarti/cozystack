@@ -41,11 +41,16 @@ tests:
       - equal:
           path: spec.dnsServers
           value: ["8.8.8.8"]
-      # Kamaji owns the endpoint on both substrates; capmox must not reconcile
-      # one of its own.
+      # Kamaji owns the endpoint, and capmox reads the FIELD for that — not the
+      # managed-by annotation, which must be absent here. With the annotation
+      # present CAPI never sets an ownerRef on this object and capmox stops at
+      # "Waiting for Cluster Controller to set OwnerRef", leaving the address
+      # pool uncreated and every worker Machine waiting on infrastructure.
       - equal:
+          path: spec.externalManagedControlPlane
+          value: true
+      - notExists:
           path: metadata.annotations["cluster.x-k8s.io/managed-by"]
-          value: kamaji
 
   - it: points the Cluster at the Proxmox infrastructure object
     template: templates/cluster.yaml
