@@ -62,6 +62,40 @@ tests:
           path: spec.infrastructureRef.kind
           value: ProxmoxCluster
 
+  - it: publishes the apiserver, which an off-cluster worker can actually reach
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.serviceType
+          value: LoadBalancer
+
+  - it: keeps the KubeVirt path on a ClusterIP, where its in-cluster workers reach it
+    template: templates/cluster.yaml
+    set:
+      substrate: kubevirt
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.serviceType
+          value: ClusterIP
+
+  - it: keeps the KubeVirt path on its own infrastructure object
+    template: templates/cluster.yaml
+    set:
+      substrate: kubevirt
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.infrastructureRef.kind
+          value: KubevirtCluster
+
   - it: drops the KubeVirt cloud-controller-manager, which has nothing to reconcile here
     template: templates/kccm/manager.yaml
     asserts:

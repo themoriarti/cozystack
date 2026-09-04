@@ -56,6 +56,9 @@
 {{-   if not $.Values.proxmox.network.bridge }}
 {{-     fail "substrate proxmox requires proxmox.network.bridge" }}
 {{-   end }}
+{{-   if not $.Values.proxmox.dnsServers }}
+{{-     fail "substrate proxmox requires proxmox.dnsServers: an off-cluster worker cannot resolve through the management cluster's CoreDNS" }}
+{{-   end }}
 {{- /* A target storage is a full-clone parameter. A linked clone always lives on
       the template's storage, and both Proxmox and capmox's CRD refuse the pair;
       refusing it here names the two values instead of an object the operator
