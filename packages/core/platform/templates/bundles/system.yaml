@@ -186,11 +186,14 @@
        present-on-cluster Package. ouroboros keeps running, the
        cleanup hook never fires, the rewrite block stays live. The
        operator must `kubectl delete package.cozystack.io
-       cozystack.ouroboros` (or add the package to
-       bundles.disabledPackages) for the chart to actually uninstall
-       and the hook to actually clean up. This guard fails the render
-       on the dangerous transition path so the operator confirms
-       they understand the asymmetry by setting
+       cozystack.ouroboros` for the chart to actually uninstall and
+       the hook to actually clean up. Adding the name to
+       bundles.disabledPackages is not a second path to that: it only
+       stops _helpers.tpl emitting the Package document, which is the
+       same suppression the flag flip already performs, and
+       resource-policy: keep leaves the live Package running. This
+       guard fails the render on the dangerous transition path so the
+       operator confirms they understand the asymmetry by setting
        publishing.proxyProtocolAcknowledgeUnclean: true.
        Known hole: an operator who manually `kubectl delete package
        cozystack.ouroboros` before flipping the flag back bypasses the
