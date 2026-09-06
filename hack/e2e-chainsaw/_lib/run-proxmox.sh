@@ -17,7 +17,7 @@
 # command into a green run, and this repository has been bitten by it.
 set -eu
 
-NS="${COZY_PROXMOX_NS:-tenant-e2e-proxmox}"
+NS="${COZY_PROXMOX_NS:-tenant-e2eproxmox}"
 CLUSTER="${COZY_PROXMOX_CLUSTER:-k8s-e2e}"
 PVE_SSH="${COZY_PVE_SSH:?COZY_PVE_SSH is required, e.g. root@192.168.20.1}"
 PVE_SSH_KEY="${COZY_PVE_SSH_KEY:-$HOME/.ssh/id_ed25519}"

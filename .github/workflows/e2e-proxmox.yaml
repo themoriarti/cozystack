@@ -36,7 +36,7 @@ jobs:
     runs-on: [self-hosted, proxmox]
     timeout-minutes: 90
     env:
-      COZY_PROXMOX_NS: tenant-e2e-proxmox
+      COZY_PROXMOX_NS: tenant-e2eproxmox
       COZY_PROXMOX_CLUSTER: k8s-e2e
       COZY_PROXMOX_STORAGE: ${{ vars.PROXMOX_STORAGE || 'vm-disks1' }}
       COZY_PVE_SSH: ${{ vars.PROXMOX_SSH || 'root@192.168.20.1' }}
@@ -95,7 +95,7 @@ jobs:
           set -eu
           kubectl delete kubernetesnodes.apps.cozystack.io -n "$COZY_PROXMOX_NS" --all --ignore-not-found
           kubectl delete kubernetes.apps.cozystack.io -n "$COZY_PROXMOX_NS" --all --ignore-not-found
-          kubectl delete tenant.apps.cozystack.io e2e-proxmox -n tenant-root --ignore-not-found
+          kubectl delete tenant.apps.cozystack.io e2eproxmox -n tenant-root --ignore-not-found
 
       - name: Remove staged credentials
         if: always()

@@ -6,10 +6,12 @@
 # _namespace.etcd, and the DataStore is created by the tenant's own etcd module
 # (packages/extra/etcd/templates/datastore.yaml) — without it the control plane
 # does not render at all.
+# Tenant names are validated as lowercase letters and digits only — no dashes —
+# so this is e2eproxmox rather than the e2e-proxmox the namespace would suggest.
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Tenant
 metadata:
-  name: e2e-proxmox
+  name: e2eproxmox
   namespace: tenant-root
 spec:
   etcd: true
@@ -23,7 +25,7 @@ apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
 metadata:
   name: k8s-e2e
-  namespace: tenant-e2e-proxmox
+  namespace: tenant-e2eproxmox
 spec:
   version: "v1.35"
   substrate: proxmox
@@ -57,7 +59,7 @@ apiVersion: apps.cozystack.io/v1alpha1
 kind: KubernetesNodes
 metadata:
   name: md0
-  namespace: tenant-e2e-proxmox
+  namespace: tenant-e2eproxmox
 spec:
   cluster: k8s-e2e
   minReplicas: 1
@@ -70,7 +72,7 @@ spec:
   proxmox:
     # capmox matches tags as a SET, not by containment: a template carrying four
     # tags is not selected by naming one of them.
-    templateTags: [capmox-template, talos, v1-13-6, nocloud]
+    templateTags: [capmox-template, cozystack, talos, talos-v1.13.6]
     # false is the default and the reason the suite asserts it on the hypervisor:
     # a full clone costs the whole template disk per worker and breaks nothing.
     full: false

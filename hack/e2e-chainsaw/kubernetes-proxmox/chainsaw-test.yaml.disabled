@@ -37,7 +37,7 @@ spec:
   catch:
   - events: {}
   - script:
-      content: hack/e2e-chainsaw/_lib/run-proxmox.sh diagnostics
+      content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox.sh diagnostics
   steps:
   - name: tenant-and-cluster
     try:
@@ -67,29 +67,29 @@ spec:
     try:
     - script:
         timeout: 3m
-        content: hack/e2e-chainsaw/_lib/run-proxmox.sh linked-clone
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox.sh linked-clone
 
   - name: tenant-node-usable
     try:
     - script:
         timeout: 10m
-        content: hack/e2e-chainsaw/_lib/run-proxmox.sh tenant-node
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox.sh tenant-node
 
   - name: storage-round-trip
     try:
     - script:
         timeout: 10m
-        content: hack/e2e-chainsaw/_lib/run-proxmox.sh pvc-round-trip
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox.sh pvc-round-trip
 
   - name: replacement-converges-unattended
     try:
     - script:
         timeout: 20m
-        content: hack/e2e-chainsaw/_lib/run-proxmox.sh replacement
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox.sh replacement
     finally:
     - script:
         content: |
           set -eu
-          kubectl delete kubernetesnodes.apps.cozystack.io -n "${COZY_PROXMOX_NS:-tenant-e2e-proxmox}" --all --ignore-not-found
-          kubectl delete kubernetes.apps.cozystack.io -n "${COZY_PROXMOX_NS:-tenant-e2e-proxmox}" --all --ignore-not-found
-          kubectl delete tenant.apps.cozystack.io e2e-proxmox -n tenant-root --ignore-not-found
+          kubectl delete kubernetesnodes.apps.cozystack.io -n "${COZY_PROXMOX_NS:-tenant-e2eproxmox}" --all --ignore-not-found
+          kubectl delete kubernetes.apps.cozystack.io -n "${COZY_PROXMOX_NS:-tenant-e2eproxmox}" --all --ignore-not-found
+          kubectl delete tenant.apps.cozystack.io e2eproxmox -n tenant-root --ignore-not-found
