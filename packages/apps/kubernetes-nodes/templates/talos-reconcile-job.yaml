@@ -71,6 +71,14 @@ rules:
   - apiGroups: ["bootstrap.cluster.x-k8s.io"]
     resources: ["talosconfigtemplates"]
     verbs: ["get", "create", "patch", "update"]
+  {{- /* delete is separate and named: the CRD marks spec immutable, so a
+         genuinely changed render can only be applied by replacing the object.
+         Restricting it to this pool's own template keeps the Job unable to
+         remove anyone else's. */}}
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["talosconfigtemplates"]
+    resourceNames: ["{{ $clusterName }}-{{ $groupName }}"]
+    verbs: ["delete"]
 ---
 {{- /* The tenant-root chart installs a default-deny egress policy on every
        pod in the tenant namespace; without an explicit allow, this Job
@@ -241,7 +249,7 @@ spec:
               # Apply the TalosConfigTemplate. ownerReference back to the parent
               # KamajiControlPlane makes the standard Kubernetes garbage collector
               # clean it up when the parent cluster is deleted.
-              cat <<EOF | kubectl apply -f -
+              cat <<EOF > /tmp/tct.yaml
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
               metadata:
@@ -385,6 +393,31 @@ spec:
                             service:
                               disabled: true
               EOF
+
+              # The CRD marks spec immutable, so apply fails the moment any input
+              # this render depends on has genuinely changed -- the apiserver
+              # address is the one that moves in practice. The object then has to
+              # be replaced rather than patched. Existing Machines are unaffected:
+              # their bootstrap data was rendered when they joined. Only Machines
+              # created afterwards read the new template, which is the intent.
+              #
+              # Every other apply failure still stops the Job. Matching on the
+              # message is narrow on purpose: silently deleting and recreating on
+              # an unrecognised error would turn an unrelated fault into worker
+              # churn.
+              if ! APPLY_OUT="$(kubectl apply -f /tmp/tct.yaml 2>&1)"; then
+                case "$APPLY_OUT" in
+                  *"is immutable"*|*"Spec is immutable"*)
+                    echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${RELEASE}-${GROUP_NAME} spec changed; replacing the immutable object"
+                    kubectl delete talosconfigtemplate "${RELEASE}-${GROUP_NAME}" -n "$NS"
+                    kubectl apply -f /tmp/tct.yaml
+                    ;;
+                  *)
+                    echo "$APPLY_OUT" >&2
+                    exit 1
+                    ;;
+                esac
+              fi
               echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${RELEASE}-${GROUP_NAME} applied"
           resources:
             requests:
