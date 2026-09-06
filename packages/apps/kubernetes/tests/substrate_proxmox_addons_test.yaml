@@ -123,6 +123,43 @@ tests:
               fstype: ext4
               reclaimPolicy: Delete
 
+  # StorageClasses are a list an operator writes by hand, and the chart maps it
+  # entry by entry. A single-entry test passes on a template that silently drops
+  # everything after the first, which is why this one carries three with
+  # different optional fields set.
+  - it: carries every storage class, not just the first
+    template: templates/helmreleases/csi-proxmox.yaml
+    set:
+      proxmox:
+        csi:
+          storageClasses:
+            - name: proxmox
+              storage: vm-disks1
+              fstype: ext4
+              reclaimPolicy: Delete
+            - name: proxmox-ssd
+              storage: fast
+              ssd: true
+            - name: proxmox-xfs
+              storage: bulk
+              fstype: xfs
+              reclaimPolicy: Retain
+    asserts:
+      - equal:
+          path: spec.values.proxmox-csi-plugin.storageClass
+          value:
+            - name: proxmox
+              storage: vm-disks1
+              fstype: ext4
+              reclaimPolicy: Delete
+            - name: proxmox-ssd
+              storage: fast
+              ssd: true
+            - name: proxmox-xfs
+              storage: bulk
+              fstype: xfs
+              reclaimPolicy: Retain
+
   # One knob, both consumers: a hypervisor that presents a verifiable
   # certificate should not need the driver and the controller flipped apart.
   - it: propagates a verifiable hypervisor certificate to both releases
