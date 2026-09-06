@@ -1,3 +1,7 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
 uploadProxyURL: ""
 
 ## @param cloneStrategyOverride Strategy CDI uses to clone DataVolumes (golden image -> VM disk).

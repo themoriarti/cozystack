@@ -1,3 +1,7 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
 # Keycloak image used by the one-shot admin-API job that enables the
 # UPDATE_EMAIL required action. Only kcadm.sh is used, so it just needs
 # to track the Keycloak server major version (packages/system/keycloak).

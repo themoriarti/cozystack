@@ -1,3 +1,7 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
 # CPU oversubscription ratio. When set, propagates to
 # spec.configuration.developerConfiguration.cpuAllocationRatio on the
 # KubeVirt CR. Driven by .Values.resources.cpuAllocationRatio at the
