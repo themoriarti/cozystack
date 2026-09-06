@@ -23,6 +23,22 @@ SHA256SUM := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || e
 
 include ../../../hack/package.mk
 
+# Phony because hack/package.mk's .PHONY line lists only the targets that file
+# defines, and hack/package-mk-phony.bats pins the omission of `test`: without
+# this, a path named `test` next to this Makefile would make the target up to
+# date and skip the recipe.
+.PHONY: test
+test:
+	helm unittest .
+	@# Nothing else ties RELEASE to the tree, because helm-unittest reads the
+	@# vendored file and cannot see this variable. Without this check a pin
+	@# bumped without re-running `update` leaves every assertion green against
+	@# the old release.
+	@if ! grep -q 'image: quay.io/kubevirt/virt-operator:$(RELEASE)$$' templates/kubevirt-operator.yaml; then \
+	  echo "ERROR: templates/kubevirt-operator.yaml carries no virt-operator image at $(RELEASE). Re-run 'make update'." >&2; \
+	  exit 1; \
+	fi
+
 update:
 	mkdir -p templates
 	@# Helm renders every file under templates/, and that directory also holds
