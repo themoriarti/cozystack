@@ -24,11 +24,12 @@ charts. See README "TLS scope" for why.
 Every template that branches on TLS calls this helper, so they cannot disagree
 about whether TLS is on; tests/tls_resolution_test.yaml pins that agreement.
 
-The `dig` on a defaulted dict is load-bearing: reading .Values.tls.enabled
-directly panics with "nil pointer evaluating interface {}.enabled" on `tls: null`,
-which values.schema.json accepts and which reaches the chart unpruned through a
-HelmRelease override. The kindIs check then covers the ordinary path, where
-`tls: {}` from values.yaml makes dig return its nil default.
+The `dig` on a defaulted dict is load-bearing: `tls: null` in a HelmRelease
+override never arrives as a null, because Helm's coalescing drops the key
+outright, so `.Values.tls` is nil rather than an empty dict and reading
+`.Values.tls.enabled` off it panics with "nil pointer evaluating interface
+{}.enabled". The kindIs check then covers the ordinary path, where `tls: {}`
+from values.yaml makes dig return its nil default.
 */}}
 {{- define "rabbitmq.tls.enabled" -}}
 {{-   $enabled := dig "enabled" nil (.Values.tls | default dict) -}}
