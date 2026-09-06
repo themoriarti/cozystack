@@ -18,8 +18,19 @@ proxmox-cloud-controller-manager:
   # Runs on tenant worker nodes, which are the only nodes a Kamaji tenant has.
   affinity: {}
   nodeSelector: {}
+  # Precisely the taint a fresh node carries, and nothing more. A blanket
+  # `operator: Exists` looks equivalent and is not: it also tolerates
+  # node.kubernetes.io/unreachable:NoExecute with no tolerationSeconds, which
+  # stops the DefaultTolerationSeconds admission plugin from adding the 300s
+  # one. The Pod then survives the death of the Node it runs on — and since the
+  # controller that removes a departed Node is this one, a single-worker pool
+  # deadlocks on machine replacement: the stale Node keeps the Pod, the new node
+  # keeps the uninitialized taint, and nothing moves until an operator deletes
+  # the Node by hand.
   tolerations:
-    - operator: Exists
+    - effect: NoSchedule
+      key: node.cloudprovider.kubernetes.io/uninitialized
+      operator: Exists
 
   # cloud-node applies the topology labels and the providerID; the lifecycle
   # controller removes Nodes whose VM is gone. Both are wanted here; the
