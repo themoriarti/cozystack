@@ -137,7 +137,7 @@ render_rbac() {
   # eval-all aggregates the documents into one result, so the Role may sit at any
   # position among them.
   kinds=$(printf '%s\n' "$rendered" | yq eval-all --output-format=json --indent=0 \
-    '[.kind]' -) || exit 1
+    '[.kind]' -)
 
   if [ "$kinds" != "$EXPECTED_RBAC_KINDS" ]; then
     echo "Unexpected RBAC kinds rendered by the rabbitmq dashboard template: $kinds" >&2
@@ -150,7 +150,7 @@ render_rbac() {
   # Fails closed on an empty list: a Role that stopped granting anything, or a
   # render that silently produced nothing, does not match the expected rules.
   rules=$(printf '%s\n' "$rendered" | yq eval-all --output-format=json --indent=0 \
-    '[select(.kind == "Role") | .rules[]]' -) || exit 1
+    '[select(.kind == "Role") | .rules[]]' -)
 
   if [ "$rules" != "$EXPECTED_ROLE_RULES" ]; then
     echo "Unexpected rules in the rabbitmq dashboard Role: $rules" >&2
@@ -175,7 +175,7 @@ render_rbac() {
   }
 
   rules=$(printf '%s\n' "$rendered" | yq eval-all --output-format=json --indent=0 \
-    '[select(.kind == "Role") | .rules[]]' -) || exit 1
+    '[select(.kind == "Role") | .rules[]]' -)
 
   if [ "$rules" != "$EXPECTED_ROLE_RULES_WITH_USER" ]; then
     echo "Unexpected rules with one declared user: $rules" >&2

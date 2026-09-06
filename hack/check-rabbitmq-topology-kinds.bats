@@ -51,8 +51,16 @@ operator_names() {
     exit 1
   fi
 
-  expected=$(operator_names | cut -d' ' -f1 | grep -v '^SuperStream$' | sort) || exit 1
-  actual=$(helper_kinds | sort) || exit 1
+  names=$(operator_names)
+  expected=$(printf '%s\n' "$names" | cut -d' ' -f1 | grep -v '^SuperStream$' | sort)
+  actual=$(helper_kinds | sort)
+
+  # A pipeline reports only its last element, so an unreadable manifest reaches
+  # here as an empty string rather than as a non-zero status.
+  if [ -z "$expected" ] || [ -z "$actual" ]; then
+    echo "Read no kinds: '$expected' from the CRDs, '$actual' from the helper." >&2
+    exit 1
+  fi
 
   if [ "$expected" != "$actual" ]; then
     echo "rabbitmq.topology.kinds does not match the operator's CRDs." >&2
@@ -78,9 +86,10 @@ operator_names() {
   # Built in the helper's own order, and with the operator's own plurals, so
   # this is the exact string the refusal prints rather than a second spelling
   # of it that happens to sort the same way.
+  names=$(operator_names)
   expected=""
   for kind in $(helper_kinds); do
-    plural=$(operator_names | awk -v k="$kind" '$1 == k { print $2 }') || exit 1
+    plural=$(printf '%s\n' "$names" | awk -v k="$kind" '$1 == k { print $2 }')
     if [ -z "$plural" ]; then
       echo "No CRD in the operator manifest declares kind $kind." >&2
       exit 1
@@ -88,7 +97,7 @@ operator_names() {
     expected="${expected:+$expected,}$plural.rabbitmq.com"
   done
 
-  actual=$(grep -o 'kubectl get [a-z.,]*\.rabbitmq\.com' "$README" | head -1 | sed 's/^kubectl get //') || exit 1
+  actual=$(grep -o 'kubectl get [a-z.,]*\.rabbitmq\.com' "$README" | head -1 | sed 's/^kubectl get //')
 
   if [ "$expected" != "$actual" ]; then
     echo "The README runbook step does not check every wedging kind." >&2
