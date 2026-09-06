@@ -51,7 +51,7 @@ VALS
         > "$work/cmd.sh"
     [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
     awk '
-      /^cat <<EOF([[:space:]]*\||[[:space:]]*>)/ { print "cat <<EOF"; inblock=1; next }
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
       inblock && /^EOF$/            { print "EOF"; inblock=0; next }
       inblock                       { print }
     ' "$work/cmd.sh" > "$work/heredoc.sh"
@@ -86,7 +86,7 @@ VALS
         > "$work/cmd.sh"
     [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
     awk '
-      /^cat <<EOF([[:space:]]*\||[[:space:]]*>)/ { print "cat <<EOF"; inblock=1; next }
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
       inblock && /^EOF$/            { print "EOF"; inblock=0; next }
       inblock                       { print }
     ' "$work/cmd.sh" > "$work/heredoc.sh"

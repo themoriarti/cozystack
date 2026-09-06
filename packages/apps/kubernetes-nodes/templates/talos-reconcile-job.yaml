@@ -249,7 +249,13 @@ spec:
               # Apply the TalosConfigTemplate. ownerReference back to the parent
               # KamajiControlPlane makes the standard Kubernetes garbage collector
               # clean it up when the parent cluster is deleted.
-              cat <<EOF > /tmp/tct.yaml
+              {{- /* Held in a variable, not a file: the container runs with
+                     readOnlyRootFilesystem, so /tmp is not writable and an
+                     earlier revision of this died on `can't create
+                     /tmp/tct.yaml`. Keeping the manifest in one variable also
+                     means the retry below applies exactly what the first
+                     attempt did. */}}
+              TCT_MANIFEST="$(cat <<EOF
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
               metadata:
@@ -393,6 +399,7 @@ spec:
                             service:
                               disabled: true
               EOF
+              )"
 
               # The CRD marks spec immutable, so apply fails the moment any input
               # this render depends on has genuinely changed -- the apiserver
@@ -405,12 +412,12 @@ spec:
               # message is narrow on purpose: silently deleting and recreating on
               # an unrecognised error would turn an unrelated fault into worker
               # churn.
-              if ! APPLY_OUT="$(kubectl apply -f /tmp/tct.yaml 2>&1)"; then
+              if ! APPLY_OUT="$(printf '%s\n' "$TCT_MANIFEST" | kubectl apply -f - 2>&1)"; then
                 case "$APPLY_OUT" in
                   *"is immutable"*|*"Spec is immutable"*)
                     echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${RELEASE}-${GROUP_NAME} spec changed; replacing the immutable object"
                     kubectl delete talosconfigtemplate "${RELEASE}-${GROUP_NAME}" -n "$NS"
-                    kubectl apply -f /tmp/tct.yaml
+                    printf '%s\n' "$TCT_MANIFEST" | kubectl apply -f -
                     ;;
                   *)
                     echo "$APPLY_OUT" >&2
