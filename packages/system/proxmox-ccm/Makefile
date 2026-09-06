@@ -5,6 +5,9 @@ CHART_VERSION=0.2.30
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	mkdir -p charts
