@@ -12,6 +12,11 @@ release:
 # is still in the namespace decides it, so every firing case below mocks the
 # objects Helm would prune only after applying the closed-listener cluster.
 #
+# The kinds come from templates/_topology.tpl, which is also what the refusal
+# prints as the confirmation command, so the scheme below has to carry all
+# twelve. The three the chart itself creates are only a subset: every kind the
+# topology operator drives through TopologyReconciler wedges the same way.
+#
 # A tenant namespace holds several RabbitMQ applications, so the objects also
 # carry `spec.rabbitmqClusterReference.name` and the guard has to read it: a
 # sibling release's User must not stop this release from closing its listeners.
@@ -27,28 +32,55 @@ tests:
         "rabbitmq.com/v1beta1/RabbitmqCluster":
           gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "rabbitmqclusters" }
           namespaced: true
+        "rabbitmq.com/v1beta1/Binding":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "bindings" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/Exchange":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "exchanges" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/Federation":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "federations" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/OperatorPolicy":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "operatorpolicies" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/Permission":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "permissions" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/Policy":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "policies" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/Queue":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "queues" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/SchemaReplication":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "schemareplications" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/Shovel":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "shovels" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/TopicPermission":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "topicpermissions" }
+          namespaced: true
         "rabbitmq.com/v1beta1/User":
           gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "users" }
           namespaced: true
         "rabbitmq.com/v1beta1/Vhost":
           gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "vhosts" }
           namespaced: true
-        "rabbitmq.com/v1beta1/Permission":
-          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "permissions" }
-          namespaced: true
       objects:
-        - &registrarUser
-          apiVersion: rabbitmq.com/v1beta1
-          kind: User
-          metadata: { name: registrar, namespace: unrelated }
-        - &registrarVhost
-          apiVersion: rabbitmq.com/v1beta1
-          kind: Vhost
-          metadata: { name: registrar, namespace: unrelated }
-        - &registrarPermission
-          apiVersion: rabbitmq.com/v1beta1
-          kind: Permission
-          metadata: { name: registrar, namespace: unrelated }
+        - &rBinding { apiVersion: rabbitmq.com/v1beta1, kind: Binding, metadata: { name: registrar, namespace: unrelated } }
+        - &rExchange { apiVersion: rabbitmq.com/v1beta1, kind: Exchange, metadata: { name: registrar, namespace: unrelated } }
+        - &rFederation { apiVersion: rabbitmq.com/v1beta1, kind: Federation, metadata: { name: registrar, namespace: unrelated } }
+        - &rOperatorPolicy { apiVersion: rabbitmq.com/v1beta1, kind: OperatorPolicy, metadata: { name: registrar, namespace: unrelated } }
+        - &rPermission { apiVersion: rabbitmq.com/v1beta1, kind: Permission, metadata: { name: registrar, namespace: unrelated } }
+        - &rPolicy { apiVersion: rabbitmq.com/v1beta1, kind: Policy, metadata: { name: registrar, namespace: unrelated } }
+        - &rQueue { apiVersion: rabbitmq.com/v1beta1, kind: Queue, metadata: { name: registrar, namespace: unrelated } }
+        - &rSchemaReplication { apiVersion: rabbitmq.com/v1beta1, kind: SchemaReplication, metadata: { name: registrar, namespace: unrelated } }
+        - &rShovel { apiVersion: rabbitmq.com/v1beta1, kind: Shovel, metadata: { name: registrar, namespace: unrelated } }
+        - &rTopicPermission { apiVersion: rabbitmq.com/v1beta1, kind: TopicPermission, metadata: { name: registrar, namespace: unrelated } }
+        - &rUser { apiVersion: rabbitmq.com/v1beta1, kind: User, metadata: { name: registrar, namespace: unrelated } }
+        - &rVhost { apiVersion: rabbitmq.com/v1beta1, kind: Vhost, metadata: { name: registrar, namespace: unrelated } }
         - &openCluster
           apiVersion: rabbitmq.com/v1beta1
           kind: RabbitmqCluster
@@ -67,14 +99,53 @@ tests:
       - failedTemplate:
           errorPattern: "cannot be turned on while this release still has topology objects in namespace tenant-test: User/myrabbitmq-alice\\."
 
-  - it: names every pending object across all three kinds
+  # The chart creates User, Vhost and Permission and nothing else, so a kind it
+  # never declares is what separates "the guard covers the objects this chart
+  # owns" from "the guard covers the objects that wedge". Dropping Queue from
+  # rabbitmq.topology.kinds turns this case red and leaves the rest green.
+  - it: refuses on a Queue, a kind the chart never creates
     kubernetesProvider:
       scheme: *topologyScheme
       objects:
-        - *registrarUser
-        - *registrarVhost
-        - *registrarPermission
-        - *openCluster
+        - *rBinding
+        - *rExchange
+        - *rFederation
+        - *rOperatorPolicy
+        - *rPermission
+        - *rPolicy
+        - *rQueue
+        - *rSchemaReplication
+        - *rShovel
+        - *rTopicPermission
+        - *rUser
+        - *rVhost
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: Queue
+          metadata: { name: orders-inbound, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: myrabbitmq } }
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "in namespace tenant-test: Queue/orders-inbound\\."
+
+  - it: names every pending object across the kinds it finds
+    kubernetesProvider:
+      scheme: *topologyScheme
+      objects:
+        - *rBinding
+        - *rExchange
+        - *rFederation
+        - *rOperatorPolicy
+        - *rPermission
+        - *rPolicy
+        - *rQueue
+        - *rSchemaReplication
+        - *rShovel
+        - *rTopicPermission
+        - *rUser
+        - *rVhost
         - apiVersion: rabbitmq.com/v1beta1
           kind: User
           metadata: { name: myrabbitmq-alice, namespace: tenant-test }
@@ -87,21 +158,33 @@ tests:
           kind: Permission
           metadata: { name: myrabbitmq-orders-alice, namespace: tenant-test }
           spec: { rabbitmqClusterReference: { name: myrabbitmq } }
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: Shovel
+          metadata: { name: myrabbitmq-mirror, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: myrabbitmq } }
     set:
       tls.enabled: true
       tls.disableNonTLSListeners: true
     asserts:
       - failedTemplate:
-          errorPattern: "User/myrabbitmq-alice, Vhost/myrabbitmq-orders, Permission/myrabbitmq-orders-alice"
+          errorPattern: "Permission/myrabbitmq-orders-alice, Shovel/myrabbitmq-mirror, User/myrabbitmq-alice, Vhost/myrabbitmq-orders"
 
   - it: refuses on a hand-written Vhost the chart never declared
     kubernetesProvider:
       scheme: *topologyScheme
       objects:
-        - *registrarUser
-        - *registrarVhost
-        - *registrarPermission
-        - *openCluster
+        - *rBinding
+        - *rExchange
+        - *rFederation
+        - *rOperatorPolicy
+        - *rPermission
+        - *rPolicy
+        - *rQueue
+        - *rSchemaReplication
+        - *rShovel
+        - *rTopicPermission
+        - *rUser
+        - *rVhost
         - apiVersion: rabbitmq.com/v1beta1
           kind: Vhost
           metadata: { name: written-by-hand, namespace: tenant-test }
@@ -117,10 +200,18 @@ tests:
     kubernetesProvider:
       scheme: *topologyScheme
       objects:
-        - *registrarUser
-        - *registrarVhost
-        - *registrarPermission
-        - *openCluster
+        - *rBinding
+        - *rExchange
+        - *rFederation
+        - *rOperatorPolicy
+        - *rPermission
+        - *rPolicy
+        - *rQueue
+        - *rSchemaReplication
+        - *rShovel
+        - *rTopicPermission
+        - *rUser
+        - *rVhost
         - apiVersion: rabbitmq.com/v1beta1
           kind: User
           metadata: { name: myrabbitmq-alice, namespace: tenant-test }
@@ -130,11 +221,13 @@ tests:
       tls.disableNonTLSListeners: true
     asserts:
       - failedTemplate:
-          errorPattern: "Remove users and vhosts in one upgrade"
+          errorPattern: "Remove them in one upgrade"
       - failedTemplate:
           errorPattern: "Setting both at once leaves those objects stuck in Terminating"
+      # The command names every kind the guard itself looks at, so an operator
+      # who reruns it sees the same set the refusal was computed from.
       - failedTemplate:
-          errorPattern: "kubectl get users\\.rabbitmq\\.com,vhosts\\.rabbitmq\\.com,permissions\\.rabbitmq\\.com --namespace tenant-test"
+          errorPattern: "kubectl get bindings\\.rabbitmq\\.com,exchanges\\.rabbitmq\\.com,federations\\.rabbitmq\\.com,operatorpolicies\\.rabbitmq\\.com,permissions\\.rabbitmq\\.com,policies\\.rabbitmq\\.com,queues\\.rabbitmq\\.com,schemareplications\\.rabbitmq\\.com,shovels\\.rabbitmq\\.com,topicpermissions\\.rabbitmq\\.com,users\\.rabbitmq\\.com,vhosts\\.rabbitmq\\.com --namespace tenant-test"
       - failedTemplate:
           errorPattern: "See README .Removing the topology objects is its own upgrade."
 
@@ -146,17 +239,25 @@ tests:
     kubernetesProvider:
       scheme: *topologyScheme
       objects:
-        - *registrarUser
-        - *registrarVhost
-        - *registrarPermission
-        - *openCluster
+        - *rBinding
+        - *rExchange
+        - *rFederation
+        - *rOperatorPolicy
+        - *rPermission
+        - *rPolicy
+        - *rQueue
+        - *rSchemaReplication
+        - *rShovel
+        - *rTopicPermission
+        - *rUser
+        - *rVhost
         - apiVersion: rabbitmq.com/v1beta1
           kind: User
           metadata: { name: othermq-alice, namespace: tenant-test }
           spec: { rabbitmqClusterReference: { name: othermq } }
         - apiVersion: rabbitmq.com/v1beta1
-          kind: Vhost
-          metadata: { name: othermq-orders, namespace: tenant-test }
+          kind: Queue
+          metadata: { name: othermq-inbound, namespace: tenant-test }
           spec: { rabbitmqClusterReference: { name: othermq } }
     set:
       tls.enabled: true
@@ -173,9 +274,18 @@ tests:
     kubernetesProvider:
       scheme: *topologyScheme
       objects:
-        - *registrarUser
-        - *registrarVhost
-        - *registrarPermission
+        - *rBinding
+        - *rExchange
+        - *rFederation
+        - *rOperatorPolicy
+        - *rPermission
+        - *rPolicy
+        - *rQueue
+        - *rSchemaReplication
+        - *rShovel
+        - *rTopicPermission
+        - *rUser
+        - *rVhost
         - apiVersion: rabbitmq.com/v1beta1
           kind: RabbitmqCluster
           metadata: { name: myrabbitmq, namespace: tenant-test }
@@ -202,9 +312,18 @@ tests:
     kubernetesProvider:
       scheme: *topologyScheme
       objects:
-        - *registrarUser
-        - *registrarVhost
-        - *registrarPermission
+        - *rBinding
+        - *rExchange
+        - *rFederation
+        - *rOperatorPolicy
+        - *rPermission
+        - *rPolicy
+        - *rQueue
+        - *rSchemaReplication
+        - *rShovel
+        - *rTopicPermission
+        - *rUser
+        - *rVhost
     set:
       tls.enabled: true
       tls.disableNonTLSListeners: true
@@ -232,9 +351,18 @@ tests:
     kubernetesProvider:
       scheme: *topologyScheme
       objects:
-        - *registrarUser
-        - *registrarVhost
-        - *registrarPermission
+        - *rBinding
+        - *rExchange
+        - *rFederation
+        - *rOperatorPolicy
+        - *rPermission
+        - *rPolicy
+        - *rQueue
+        - *rSchemaReplication
+        - *rShovel
+        - *rTopicPermission
+        - *rUser
+        - *rVhost
         - apiVersion: rabbitmq.com/v1beta1
           kind: User
           metadata: { name: myrabbitmq-alice, namespace: tenant-test }
@@ -265,3 +393,5 @@ tests:
           errorPattern: "two separate upgrades, in that order"
       - failedTemplate:
           errorPattern: "and from deleting them"
+      - failedTemplate:
+          errorPattern: "Every other kind that operator owns breaks the same way"
