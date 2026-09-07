@@ -51,7 +51,7 @@
 {{-       end }}
 {{-     end }}
 {{-     if $pending }}
-{{-       fail (printf "tls.disableNonTLSListeners cannot be turned on while this release still has topology objects in namespace %s: %s. Remove them in one upgrade, confirm `kubectl get %s --namespace %s` returns nothing, then set the flag in a second upgrade. Setting both at once leaves those objects stuck in Terminating. See README \"Removing the topology objects is its own upgrade\"." $.Release.Namespace (join ", " $pending) (include "rabbitmq.topology.resources" $) $.Release.Namespace) }}
+{{-       fail (printf "tls.disableNonTLSListeners cannot be turned on while this release still has topology objects in namespace %s: %s. Remove them in one upgrade, confirm `kubectl get %s --namespace %s` returns nothing bound to this release, then set the flag in a second upgrade. Setting both at once leaves those objects stuck in Terminating. See README \"Removing the topology objects is its own upgrade\"." $.Release.Namespace (join ", " $pending) (include "rabbitmq.topology.resources" $) $.Release.Namespace) }}
 {{-     end }}
 {{-   end }}
 {{- end }}
@@ -74,7 +74,7 @@ metadata:
 
        Expect this key on tenant-visible objects: ReconcileAndFilterAnnotations
        strips only kubernetes.io / k8s.io keys, so the operator copies it onto every
-       child it builds. See README "The plaintext management listener". */}}
+       child it builds. See README "TLS scope". */}}
   annotations:
     rabbitmq.com/operator-connection-uri: "http://{{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ include "rabbitmq.clusterDomain" . }}:15672"
   {{- end }}

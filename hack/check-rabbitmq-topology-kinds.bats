@@ -77,7 +77,7 @@ operator_names() {
 # The refusal prints this command and the README repeats it as step 2 of the
 # runbook. An operator who runs a short version of it sees an empty namespace
 # that is not empty.
-@test "the README runbook checks the same resources the guard does" {
+@test "the README runbook names the operator plural of every kind the guard iterates" {
   if [ ! -f "$README" ]; then
     echo "Chart README not found at $README -- did it move?" >&2
     exit 1
