@@ -225,7 +225,10 @@ func (c completedConfig) New() (*CozyServer, error) {
 		tenantmodulestorage.NewREST(cli, watchCli),
 	)
 	coreV1alpha1Storage["options"] = cozyregistry.RESTInPeace(
-		optionstorage.NewREST(optionstorage.DefaultProviders(dyn)),
+		optionstorage.NewRESTWithParams(
+			optionstorage.DefaultProviders(dyn),
+			optionstorage.DefaultParamProviders(dyn),
+		),
 	)
 	coreV1alpha1Storage["taps"] = cozyregistry.RESTInPeace(
 		tapstorage.NewREST(dyn),
