@@ -259,8 +259,7 @@ publishing:
   #
   #   kubectl delete package.cozystack.io cozystack.ouroboros
   #
-  # or adds the package name to bundles.disabledPackages. THAT is the
-  # path that triggers the chart's pre-delete Helm hook
+  # THAT is the path that triggers the chart's pre-delete Helm hook
   # (charts/ouroboros/templates/coredns-cleanup-hook.yaml, vendored at
   # 0.8.0) — the hook quiesces the controller, sed-strips the
   # BEGIN/END block from the live kube-system/coredns Corefile, and
@@ -268,6 +267,15 @@ publishing:
   # automatic; operators do NOT need to run a manual sed recipe in
   # the normal disable path. Documentation of the hook's exact
   # behaviour lives in the upstream chart's README.
+  #
+  # bundles.disabledPackages does NOT do this. Putting this name in
+  # that list only makes templates/_helpers.tpl skip emitting the
+  # Package document — the same suppression as leaving proxyProtocol
+  # false — and resource-policy: keep then stops Helm pruning a
+  # Package it no longer renders. The Package CR stays, so does the
+  # HelmRelease it owns, ouroboros keeps running, and the pre-delete
+  # hook never fires. No platform values setting reaches that hook:
+  # the operator has to delete the Package CR.
   #
   # Manual cleanup recipe (only if the chart's pre-delete hook fails
   # to land — controller pod stuck in CrashLoop blocking the quiesce
