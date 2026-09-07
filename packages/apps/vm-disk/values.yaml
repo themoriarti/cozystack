@@ -34,3 +34,6 @@ storage: 5Gi
 ## @immutable
 ## @x-cozystack-options {source: storageclass}
 storageClass: replicated
+
+## @param {bool} bindImmediately - Provision the volume at disk creation instead of waiting for a consumer.
+bindImmediately: true

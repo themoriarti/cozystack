@@ -93,6 +93,11 @@
       "x-cozystack-options": {
         "source": "storageclass"
       }
+    },
+    "bindImmediately": {
+      "description": "Provision the volume at disk creation instead of waiting for a consumer.",
+      "type": "boolean",
+      "default": true
     }
   }
 }

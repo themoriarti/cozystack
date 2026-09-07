@@ -90,8 +90,23 @@ apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
 metadata:
   annotations:
-    {{- if hasKey (.Values.source | default dict) "upload" }}
-    cdi.kubevirt.io/storage.bind.immediate.requested: ""
+    {{- /* A `#` comment here would be part of the rendered DataVolume, so the
+           explanation lives in a template comment and the operator-facing half
+           in README.md.
+
+           On by default, for every source type, and on the existing-DV path as
+           well: a VMDisk is a standalone object populated before any VM consumes
+           it, so on a WaitForFirstConsumer class a disk nothing has attached
+           would never populate at all. CDI reads the annotation by presence.
+
+           Off is the placement-correct path for a disk a VMInstance will
+           consume: KubeVirt renders a temporary launcher pod carrying the VM's
+           own affinity and nodeSelector, so the volume binds where the VM can
+           actually run. The two cases want opposite defaults and only the
+           operator knows which one a given disk is. `replicated`, the chart
+           default, binds Immediate either way, so neither setting moves it. */}}
+    {{- if .Values.bindImmediately }}
+    cdi.kubevirt.io/storage.bind.immediate.requested: "true"
     {{- end }}
     {{- if $existingDV }}
     {{- if hasKey ($existingDV.metadata.annotations | default dict) $sourceAnnotation }}
