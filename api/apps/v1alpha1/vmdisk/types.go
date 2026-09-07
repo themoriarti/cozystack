@@ -31,6 +31,9 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
+	// Provision the volume at disk creation instead of waiting for a consumer.
+	// +kubebuilder:default:=true
+	BindImmediately bool `json:"bindImmediately"`
 }
 
 type Source struct {
