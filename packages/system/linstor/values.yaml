@@ -70,6 +70,11 @@ linstorCSI:
   ## can place two importers on a node that cannot hold both disks plus both
   ## scratch volumes, and the second scratch is then placed elsewhere.
   ##
+  ## Measured on the wire, on a three-node dev stand: the CreateVolume request
+  ## for a WaitForFirstConsumer volume carries `requisite` as the single segment
+  ## the scheduler chose when the flag is set, and all three node segments when
+  ## it is not, the chosen one merely first in `preferred`.
+  ##
   ## Reproduced and fixed by measurement 2026-08-25 on a three-node cluster: with
   ## the flag absent the scratch PV landed on a different node than its disk and
   ## the import hung indefinitely at ImportScheduled with no error anywhere; with
@@ -79,9 +84,11 @@ linstorCSI:
   ## self-correcting wait.
   ##
   ## Verified for node-pinned (`local`) volumes, which is what the cluster
-  ## default uses. For `replicated` volumes the PV is remotely accessible, so the
-  ## constraint is satisfiable wherever the pod lands; that case is reasoned
-  ## rather than measured, hence the switch.
+  ## default uses. `replicated` is untouched for a sharper reason than its PV
+  ## being remotely accessible: it binds `Immediate`, and external-provisioner
+  ## scopes strict topology to late binding, so the flag never reaches that
+  ## path at all. The switch stays because the flag is an upstream default this
+  ## chart overrides, not because the other class is in doubt.
   strictTopology: true
   image:
     repository: ghcr.io/cozystack/cozystack/linstor-csi
