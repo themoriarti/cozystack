@@ -11,10 +11,11 @@ linstor_drbd_enabled=${COZY_LINSTOR_DRBD_ENABLED:-true}
 # to 4Gi and the request from 60M to 256Mi, for the reason stated above that
 # override below.
 #
-# The consequence is worth stating where it is made: the merge-gating lane
-# therefore does not exercise the shipped CDI default. Whether a tenant worker
-# disk imports at 600M is answered by the QEMU lanes (nightly.yaml, e2e-tag.yaml),
-# which take no override, and not here.
+# The consequence is worth stating where it is made, and it applies to both:
+# the merge-gating lane exercises neither the shipped CDI default nor
+# `drbd.enabled: true`. Whether a tenant worker disk imports at 600M, and
+# whether the DRBD path works at all, are answered by the QEMU lanes
+# (nightly.yaml, e2e-tag.yaml), which take no override, and not here.
 case "$linstor_drbd_enabled" in
   true|false) ;;
   *)

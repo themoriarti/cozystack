@@ -444,9 +444,14 @@ jobs:
           path: _out/oci/*.oci.tar
           if-no-files-found: error
 
-  # Talos is its own leg: the nocloud disk and the installer tarball are heavy
-  # and shared through _out/assets, so the talos image and the disk are built in
-  # one job. Always runs on non-docs PRs — e2e needs the disk regardless of the
+  # Talos is its own leg: the installer tarball is heavy and the talos image is
+  # built from it, so both live in one job. No nocloud disk is built here any
+  # more, and e2e no longer downloads one -- the container lane boots the Talos
+  # image directly. `images/talos/profiles/nocloud.yaml` is therefore compiled
+  # by nightly.yaml and by the tag build's `make assets` rather than per PR;
+  # what a PR still compiles is installer.yaml, which shares every input with it
+  # bar the platform and the output format. Always runs on non-docs PRs, because
+  # the patch fragment and the installer chain need it regardless of the
   # per-package matrix scope.
   build-talos:
     name: Build Talos
@@ -1168,12 +1173,13 @@ jobs:
       #   implies maintainer authorship). authorized-users is kept as a second
       #   defense layer controlling who may actually SSH in.
       #
-      #   A node-join red the lane decided not to block on reaches here as a
-      #   SUCCESSFUL job, so `failure()` alone would skip the step on the one
-      #   failure whose sandbox is worth attaching to. The E2E step records that
-      #   decision and this reads it back. Being label-gated is what makes that
-      #   affordable: the session opens for a PR someone deliberately marked for
-      #   debugging, not on every softened run.
+      #   `failure()` is the whole condition now. It used to be joined by a
+      #   soft-red output, because a node-join red the lane decided not to block
+      #   on arrived here as a SUCCESSFUL job and would have been skipped. That
+      #   carve-out is gone with the QEMU substrate: the node-join deadline
+      #   fails its suite like any other deadline, so a sandbox worth attaching
+      #   to always belongs to a failed job. Label-gating is what keeps this
+      #   affordable, and it is unchanged.
       #
       #   Uses cozystack/breakpoint-action (fork of namespacelabs/breakpoint-action)
       #   pinned by SHA. The fork adds: pause-idle mode (initial grace period for
@@ -1229,10 +1235,19 @@ jobs:
       - name: Tear down sandbox
         if: always()
         run: |
+          # Loud, but never the job's verdict. A failed teardown means a dirty
+          # host, and this runner is discarded after the job, so there is no next
+          # run to protect -- while failing the job here posts the required
+          # "E2E Tests" status as a failure that no reader can tell apart from a
+          # real one. The annotation is what a reused host (a developer machine)
+          # needs; `delete-cluster-container` returning non-zero is not evidence
+          # about the product.
           cleanup_rc=0
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-          exit "$cleanup_rc"
+          if [ "$cleanup_rc" -ne 0 ]; then
+            echo "::error title=sandbox teardown::teardown exited $cleanup_rc; the host may hold a stale compose project or zpool"
+          fi
 
   # Report the required "E2E Tests" gate as a commit status rather than relying
   # on a job named "E2E Tests". A required *job* that is skipped counts
