@@ -2,7 +2,7 @@
 
 This document describes how to configure the GPU Operator package with NVIDIA vGPU support so that a single physical GPU can be sliced and shared across multiple virtual machines.
 
-**Last verified:** 2026-04-29 against KubeVirt `main` (`virt-handler` nightly `20260429_74d7c52588`) + this PR's `vgpu` variant + NVIDIA vGPU 20.0 host driver `595.58.02` + GRID guest driver `595.58.03`.
+**Last verified:** 2026-04-29 against KubeVirt `main` (`virt-handler` nightly `20260429_74d7c52588`) + the `vgpu` variant + NVIDIA vGPU 20.0 host driver `595.58.02` + GRID guest driver `595.58.03`.
 
 ## Two driver models
 
@@ -41,7 +41,7 @@ The `default` (passthrough) variant assumes the GPU is **owned by the host kerne
 
 **Current mitigation.** The only mitigation that keeps VM passthrough working is to remove the host NVIDIA stack before enabling the variant (the "Clean-host workaround" section below).
 
-**Alternatives and scope.** The `container` variant of `cozystack.gpu-operator` is the no-purge path: it keeps the host driver and exposes GPUs to pods rather than VMs, so it does not replace passthrough for anyone who actually needs a GPU inside a VM. Talos is unaffected because the Talos image ships only the `vfio-pci` extension; this section applies to Linux distributions where you installed the host driver yourself (typically Ubuntu / Debian / RHEL with `apt install nvidia-driver-*` or equivalent). See also [`packages/system/gpu-operator/examples/README.md`](../packages/system/gpu-operator/examples/README.md) for the native-pod-workload reference flow that predates the `container` variant.
+**Alternatives and scope.** The `container` variant of `cozystack.gpu-operator` is the no-purge path: it keeps the host driver and exposes GPUs to pods rather than VMs, so it does not replace passthrough for anyone who actually needs a GPU inside a VM. Talos is unaffected because the Talos image ships only the `vfio-pci` extension; this section applies to Linux distributions where you installed the host driver yourself (typically Ubuntu / Debian / RHEL with `apt install nvidia-driver-*` or equivalent). See also [`packages/system/gpu-operator/examples/README.md`](../packages/system/gpu-operator/examples/README.md) for the Talos native-pod-workload reference flow.
 
 ### Symptom
 
