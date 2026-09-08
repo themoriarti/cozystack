@@ -12,3 +12,10 @@ opensearch-operator:
     image:
       # gcr.io/kubebuilder/kube-rbac-proxy was sunset; use the original upstream
       repository: "quay.io/brancz/kube-rbac-proxy"
+
+sysctl:
+  # busybox carries the sysctl applet and doubles as the idle main container.
+  # Third-party pass-through pinned by digest, the same reference the kubernetes
+  # package vendors; docs/agents/image-refs.md covers why such a ref is neither
+  # retagged nor mirrored.
+  image: docker.io/library/busybox:1.37.0@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
