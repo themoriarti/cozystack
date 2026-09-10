@@ -39,7 +39,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -346,6 +345,16 @@ func TestGoldenImageHelmReleasesWaitForImport(t *testing.T) {
 	}
 }
 
+// Memory policy state lives on a Namespace, which fake clients do not create
+// implicitly when a namespaced fixture is added.
+func memoryTestClientBuilder(scheme *runtime.Scheme) *fake.ClientBuilder {
+	objects := []client.Object{}
+	for _, name := range []string{"cozy-monitoring", "cozy-metallb", "cozy-active", "cozy-orphaned", "cozy-first", "cozy-second"} {
+		objects = append(objects, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...)
+}
+
 func TestSystemDefaultsLimitRange(t *testing.T) {
 	r := &PackageReconciler{
 		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
@@ -405,7 +414,7 @@ func TestReconcileSystemDefaultsLimitRangeDisabledRemovesStale(t *testing.T) {
 	existing := (&PackageReconciler{}).systemDefaultsLimitRange("cozy-metallb", resource.MustParse("4Gi"))
 
 	var deletes int
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).
+	cl := memoryTestClientBuilder(scheme).WithObjects(existing).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 				deletes++
@@ -469,7 +478,7 @@ func TestReconcileSystemDefaultsLimitRangeDisabledLeavesAForeignObjectAlone(t *t
 			}},
 		},
 	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreign).Build()
+	cl := memoryTestClientBuilder(scheme).WithObjects(foreign).Build()
 
 	r := &PackageReconciler{Client: cl, Scheme: scheme}
 
@@ -647,7 +656,7 @@ func limitRangeDefaultMemory(t *testing.T, cl client.Client, ns string) resource
 func TestReconcileSystemDefaultsLimitRangeAppliesWhenLargeRequestCarriesItsOwnLimit(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
-	cl := fake.NewClientBuilder().WithScheme(scheme).
+	cl := memoryTestClientBuilder(scheme).
 		WithObjects(systemPod("vmstorage-0", "8Gi", "8Gi")).Build()
 
 	r := &PackageReconciler{
@@ -716,7 +725,7 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.
 					},
 				},
 			}
-			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(seed...).
+			cl := memoryTestClientBuilder(scheme).WithObjects(seed...).
 				WithInterceptorFuncs(interceptor.Funcs{
 					List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, _ ...client.ListOption) error {
 						if reflect.TypeOf(list) == reflect.TypeOf(tt.list) {
@@ -759,14 +768,16 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.
 // counts the writes it made, so a test can prove which half of the scan ran rather than
 // merely that it reached the same answer.
 func scanRecordingClient(scheme *runtime.Scheme, listed *[]string, writes *int, objects ...client.Object) client.WithWatch {
-	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).
+	return memoryTestClientBuilder(scheme).WithObjects(objects...).
 		WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 				*listed = append(*listed, fmt.Sprintf("%T", list))
 				return c.List(ctx, list, opts...)
 			},
 			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-				*writes++
+				if _, ok := obj.(*corev1.LimitRange); ok {
+					*writes++
+				}
 				return c.Patch(ctx, obj, patch, opts...)
 			},
 			Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
@@ -859,7 +870,7 @@ func TestReconcileSystemDefaultsLimitRangeForcesOnlyAnOwnedObject(t *testing.T) 
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			builder := fake.NewClientBuilder().WithScheme(scheme)
+			builder := memoryTestClientBuilder(scheme)
 			if tt.seed != nil {
 				builder = builder.WithObjects(tt.seed)
 			}
@@ -885,6 +896,15 @@ func TestReconcileSystemDefaultsLimitRangeForcesOnlyAnOwnedObject(t *testing.T) 
 				t.Fatalf("reconcile: %v", err)
 			}
 
+			if !tt.wantForce {
+				if applyCalls != 0 {
+					t.Fatal("absent object must use conditional Create, not SSA")
+				}
+				if !limitRangeExists(t, cl, "cozy-monitoring") {
+					t.Fatal("Create did not write the LimitRange")
+				}
+				return
+			}
 			if applyCalls != 1 {
 				t.Fatalf("Apply calls = %d, want 1", applyCalls)
 			}
@@ -915,7 +935,7 @@ func TestReconcileNamespacesLeavesTenantNamespacesAlone(t *testing.T) {
 		t.Fatalf("add cozyv1alpha1 to scheme: %v", err)
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	cl := memoryTestClientBuilder(scheme).Build()
 
 	r := &PackageReconciler{
 		Client:                       cl,
@@ -977,7 +997,7 @@ func TestReconcileNamespacesDisabledSweepsManagedLimitRanges(t *testing.T) {
 
 	var deletes int
 	var perNamespaceGets int
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(active, orphaned, foreign).
+	cl := memoryTestClientBuilder(scheme).WithObjects(active, orphaned, foreign).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 				if _, ok := obj.(*corev1.LimitRange); ok {
@@ -1004,8 +1024,8 @@ func TestReconcileNamespacesDisabledSweepsManagedLimitRanges(t *testing.T) {
 	if err := r.reconcileNamespaces(t.Context(), pkg, variant); err != nil {
 		t.Fatalf("reconcileNamespaces: %v", err)
 	}
-	if perNamespaceGets != 0 {
-		t.Errorf("disabled reconcile made %d per-namespace LimitRange Gets after the global sweep, want 0", perNamespaceGets)
+	if perNamespaceGets != 2 {
+		t.Errorf("disabled reconcile made %d ownership reads, want one fresh read per managed object", perNamespaceGets)
 	}
 	if deletes != 2 {
 		t.Errorf("deleted %d LimitRanges, want the 2 managed objects", deletes)
@@ -1032,7 +1052,7 @@ func TestDeleteManagedSystemDefaultsLimitRangesContinuesAfterDeleteFailure(t *te
 
 	var deleteCalls int
 	var failedKey, deletedKey types.NamespacedName
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(first, second).
+	cl := memoryTestClientBuilder(scheme).WithObjects(first, second).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 				deleteCalls++
@@ -1073,7 +1093,7 @@ func TestReconcileNamespacesSurvivesDisabledLimitRangeSweepFailure(t *testing.T)
 		t.Fatalf("add cozyv1alpha1 to scheme: %v", err)
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(scheme).
+	cl := memoryTestClientBuilder(scheme).
 		WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 				if _, ok := list.(*corev1.LimitRangeList); ok {
@@ -1112,16 +1132,16 @@ func TestReconcileNamespacesSurvivesLimitRangeFailure(t *testing.T) {
 	}
 
 	var rejected int
-	cl := fake.NewClientBuilder().WithScheme(scheme).
+	cl := memoryTestClientBuilder(scheme).
 		WithInterceptorFuncs(interceptor.Funcs{
-			Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
-				if _, ok := obj.(*corev1ac.LimitRangeApplyConfiguration); ok {
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*corev1.LimitRange); ok {
 					rejected++
 					return apierrors.NewForbidden(
 						corev1.Resource("limitranges"), SystemDefaultsLimitRangeName,
 						fmt.Errorf("denied by policy"))
 				}
-				return c.Apply(ctx, obj, opts...)
+				return c.Create(ctx, obj, opts...)
 			},
 		}).Build()
 
@@ -1146,7 +1166,7 @@ func TestReconcileNamespacesSurvivesLimitRangeFailure(t *testing.T) {
 		t.Fatalf("a rejected LimitRange must not fail namespace reconciliation: %v", err)
 	}
 	if rejected != 1 {
-		t.Fatalf("injected LimitRange Apply failures = %d, want 1", rejected)
+		t.Fatalf("injected LimitRange Create failures = %d, want 1", rejected)
 	}
 
 	ns := &corev1.Namespace{}
@@ -1462,7 +1482,7 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tt.objects...).Build()
+			cl := memoryTestClientBuilder(scheme).WithObjects(tt.objects...).Build()
 			r := &PackageReconciler{
 				Client:                     cl,
 				APIReader:                  cl,
@@ -1561,7 +1581,7 @@ func TestReconcileSystemDefaultsLimitRangeStaysUnderAForeignContainerMemoryMax(t
 	scheme := limitRangeScheme(t)
 
 	admin := foreignLimitRange("tight-ceiling", corev1.LimitTypeContainer, "max", "memory", "2Gi")
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(admin).Build()
+	cl := memoryTestClientBuilder(scheme).WithObjects(admin).Build()
 
 	r := &PackageReconciler{
 		Client:                       cl,
@@ -1595,7 +1615,7 @@ func TestReconcileSystemDefaultsLimitRangeWithdrawsWhenAForeignPolicyAppears(t *
 		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
 	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("32Gi"))
 	admin := foreignLimitRange("platform-defaults", corev1.LimitTypeContainer, "default", "memory", "512Mi")
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ours, admin).Build()
+	cl := memoryTestClientBuilder(scheme).WithObjects(ours, admin).Build()
 
 	r := &PackageReconciler{
 		Client:                       cl,
@@ -1644,7 +1664,7 @@ func TestReconcileSystemDefaultsLimitRangeIgnoresLimitRangesThatDoNotTouchMemory
 		{"persistent volume claim memory max", pvcPolicy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.foreign).Build()
+			cl := memoryTestClientBuilder(scheme).WithObjects(tc.foreign).Build()
 
 			r := &PackageReconciler{
 				Client:                       cl,
@@ -1693,7 +1713,7 @@ func TestReconcileSystemDefaultsLimitRangeWithholdsForAnyForeignMemoryPolicy(t *
 		{"pod memory min", foreignLimitRange("pod-mem-min", corev1.LimitTypePod, "min", "memory", "1Gi")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.foreign).Build()
+			cl := memoryTestClientBuilder(scheme).WithObjects(tc.foreign).Build()
 
 			r := &PackageReconciler{
 				Client:                       cl,
@@ -1740,7 +1760,7 @@ func TestReconcileSystemDefaultsLimitRangeDoesNotOverwriteAForeignObjectSharingI
 			}},
 		},
 	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreign).Build()
+	cl := memoryTestClientBuilder(scheme).WithObjects(foreign).Build()
 
 	r := &PackageReconciler{
 		Client:                       cl,
@@ -1854,7 +1874,7 @@ func TestReconcileSystemDefaultsLimitRangeWithholdsFromAnOversizedRequest(t *tes
 					SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
 				}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4Gi")))
 			}
-			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+			cl := memoryTestClientBuilder(scheme).WithObjects(objects...).Build()
 
 			r := &PackageReconciler{
 				Client:                       cl,
@@ -1880,14 +1900,12 @@ func TestReconcileSystemDefaultsLimitRangeWithholdsFromAnOversizedRequest(t *tes
 	}
 }
 
-// And it self-heals with no state and no timer, which is the whole reason withholding replaced
-// the raise: once the oversized request is gone the scan finds nothing and the default is
-// applied on the next reconcile. Nothing has to be remembered between the two.
-func TestReconcileSystemDefaultsLimitRangeAppliesOnceTheOversizedRequestIsGone(t *testing.T) {
+// Deleting a Pod can be a controller recreation gap. An empty scan cannot release its hold.
+func TestReconcileSystemDefaultsLimitRangeHoldsAfterTheOversizedRequestDisappears(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
 	blocker := systemPod("keycloak-db-1", "8Gi", "")
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(blocker).Build()
+	cl := memoryTestClientBuilder(scheme).WithObjects(blocker).Build()
 
 	r := &PackageReconciler{
 		Client:                       cl,
@@ -1913,7 +1931,7 @@ func TestReconcileSystemDefaultsLimitRangeAppliesOnceTheOversizedRequestIsGone(t
 	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
 		t.Fatalf("reconcile after the blocker went: %v", err)
 	}
-	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
-		t.Errorf("default memory = %s, want the configured 4Gi applied once nothing blocks it", got.String())
+	if limitRangeExists(t, cl, "cozy-monitoring") {
+		t.Fatal("empty scan silently released the memory hold")
 	}
 }
