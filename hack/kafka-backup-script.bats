@@ -34,6 +34,9 @@ init_stubs() {
   BINDIR="$STATE/bin"
   PATHDIR="$STATE/path"
   mkdir -p "$BINDIR" "$PATHDIR"
+  # Per-test metadata scratch file so a run cannot read back records a prior
+  # test left in the script's default /tmp/kafka-metadata.txt.
+  export METADATA_FILE="$STATE/metadata.txt"
 
   cat > "$BINDIR/kafka-topics.sh" <<STUB
 #!/usr/bin/env bash
@@ -262,11 +265,18 @@ write_backup_object() {
   printf 'T\tpay.events\t7\t1\n' > "$STATE/s3_object"   # backup wants 7 partitions
   printf 'pay.events\npay-events\n' > "$STATE/topics"    # both live -> the collision
   printf 'Topic: pay.events\tPartitionCount: 2\tReplicationFactor: 1\n' > "$STATE/desc.pay.events"
-  printf 'Topic: pay-events\tPartitionCount: 2\tReplicationFactor: 1\n' > "$STATE/desc.pay-events"
+  # The colliding sibling is given a distinct, larger partition count so the two
+  # describe/alter \Q guards are pinned independently: a stripped \Q on the
+  # restore --describe (line 166) matches this sibling first (glob-order
+  # `desc.pay-events` precedes `desc.pay.events`), reads 9 > the backup's 7, and
+  # aborts with "cannot decrease partitions" — no alter is recorded, so the
+  # assertion below reddens.
+  printf 'Topic: pay-events\tPartitionCount: 9\tReplicationFactor: 1\n' > "$STATE/desc.pay-events"
   MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
-  # The alter must target the literal topic (\Q...\E). A stripped wrapper sends a
-  # regex that re-partitions the colliding sibling permanently — the destructive
-  # bug this guards. Dropping \Q on the restore --alter reddens here.
+  # The alter must target the literal topic (\Q...\E). A stripped wrapper on the
+  # --describe misroutes to the sibling (above); a stripped wrapper on the --alter
+  # sends a regex that re-partitions the colliding sibling permanently — the
+  # destructive bug this guards. Dropping \Q on either call reddens here.
   grep -qxF 'alter \Qpay.events\E 7' "$STATE/actions"
 }
 
