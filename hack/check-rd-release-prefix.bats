@@ -28,38 +28,38 @@
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
 @test "every resourceNames selector carries its release prefix" {
-  run python3 - "$REPO_ROOT" <<'PY'
-import glob, os, sys, yaml
+  command -v yq >/dev/null || { echo "yq (mikefarah v4+) is required" >&2; exit 1; }
 
-root = sys.argv[1]
-violations = []
+  violations=""
+  total=0
+  for f in "$REPO_ROOT"/packages/system/*-rd/cozyrds/*.yaml; do
+    [ -f "$f" ] || continue
+    prefix="$(yq -r '.spec.release.prefix // ""' "$f")"
+    [ -n "$prefix" ] || continue
 
-for path in sorted(glob.glob(os.path.join(root, "packages/system/*-rd/cozyrds/*.yaml"))):
-    with open(path) as fh:
-        doc = yaml.safe_load(fh)
-    if not doc:
-        continue
-    spec = doc.get("spec") or {}
-    prefix = ((spec.get("release") or {}).get("prefix") or "")
-    if not prefix:
-        continue
-    needle = prefix + "{{ .name }}"
-    for section in ("secrets", "services", "ingresses"):
-        selectors = spec.get(section) or {}
-        for half in ("include", "exclude"):
-            for selector in (selectors.get(half) or []):
-                for name in ((selector or {}).get("resourceNames") or []):
-                    if needle not in name:
-                        rel = os.path.relpath(path, root)
-                        violations.append(f"{rel}: {section}.{half}: {name!r} does not contain {needle!r}")
+    # One "<section>.<include|exclude>: <name>" row per selector entry.
+    names="$(yq -r '
+      .spec | (.secrets, .services, .ingresses) | select(. != null)
+      | (.include, .exclude) | select(. != null) | .[]
+      | .resourceNames | select(. != null) | .[]
+      | (path | .[1] + "." + .[2]) + ": " + .
+    ' "$f")"
+    [ -n "$names" ] || continue
+    total=$(( total + $(printf '%s\n' "$names" | grep -c .) ))
 
-if violations:
-    print("\n".join(violations))
-    sys.exit(1)
-PY
-  [ "$status" -eq 0 ] || {
-    echo "resourceNames selectors that can never match the objects their chart creates:"
-    echo "$output"
-    false
-  }
+    bad="$(printf '%s\n' "$names" | grep -vF "${prefix}{{ .name }}" || true)"
+    [ -z "$bad" ] || violations="$violations$(printf '%s\n' "$bad" | sed "s|^|${f#"$REPO_ROOT"/}: |")
+"
+  done
+
+  # A glob that matched nothing, or a yq that stopped returning names, would
+  # otherwise pass silently.
+  [ "$total" -ge 1 ] || { echo "inspected zero selectors; this test is broken" >&2; exit 1; }
+
+  if [ -n "$violations" ]; then
+    echo "resourceNames selectors that can never match the object their chart creates:" >&2
+    printf '%s' "$violations" >&2
+    echo "Fix: spell the release prefix out, e.g. \"harbor-{{ .name }}-credentials\"." >&2
+    exit 1
+  fi
 }
