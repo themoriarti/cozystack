@@ -66,7 +66,8 @@ spec:
                     - `.Application` — the live application object.
                     - `.Release.Name` and `.Release.Namespace` — the application's name and
                       namespace (the TARGET on restore).
-                    - `.Mode` — `"backup"` or `"restore"`.
+                    - `.Mode` — `"backup"`, `"restore"`, or `"cleanup"` (delete the object
+                      of a removed Backup), identifying the run.
                     - `.BackupName` — the per-run identity: the BackupJob name on backup,
                       the source Backup name on restore. Use it to scope the object key so
                       distinct backups of one application do not overwrite each other.

@@ -71,8 +71,11 @@ spec:
           # The driver script is kept as a standalone shell file and
           # embedded verbatim so hack/kafka-backup-script.bats can execute
           # it against stubbed kafka CLIs + S3 (the shell logic is otherwise
-          # untestable at the chart layer). It reads only env vars, never
-          # Helm/controller values, so no tpl is applied.
+          # untestable at the chart layer). The controller renders every string
+          # leaf of this PodTemplateSpec through internal/template, args[0]
+          # included, so a Go-template action embedded in the script is
+          # substituted at render (only the .Mode action is); runtime inputs
+          # otherwise arrive as env vars.
           args:
             - |
 {{ .Files.Get "files/kafka-backup.sh" | indent 14 }}
