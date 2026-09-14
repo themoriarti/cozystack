@@ -147,14 +147,24 @@ func kafkaStrategyParameters(b *backupsv1alpha1.Backup) map[string]string {
 
 // kafkaRunDeadline resolves the wall-clock bound for a run from its parameters,
 // falling back to kafkaDefaultBackupDeadline when unset, unparseable, or below
-// the floor.
-func kafkaRunDeadline(parameters map[string]string) time.Duration {
-	if v := parameters[kafkaBackupTimeoutParam]; v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d >= kafkaMinBackupDeadline {
-			return d
-		}
+// the floor. When a backupTimeout is set but rejected, the second return value is
+// a message naming the rejected value and the deadline actually applied, so the
+// silent fallback becomes a Warning Event the caller records; it is empty when the
+// value is honoured or unset.
+func kafkaRunDeadline(parameters map[string]string) (time.Duration, string) {
+	v := parameters[kafkaBackupTimeoutParam]
+	if v == "" {
+		return kafkaDefaultBackupDeadline, ""
 	}
-	return kafkaDefaultBackupDeadline
+	d, err := time.ParseDuration(v)
+	switch {
+	case err != nil:
+		return kafkaDefaultBackupDeadline, fmt.Sprintf("backupTimeout %q is not a valid Go duration; applying the default %s", v, kafkaDefaultBackupDeadline)
+	case d < kafkaMinBackupDeadline:
+		return kafkaDefaultBackupDeadline, fmt.Sprintf("backupTimeout %q is below the %s floor; applying the default %s", v, kafkaMinBackupDeadline, kafkaDefaultBackupDeadline)
+	default:
+		return d, ""
+	}
 }
 
 // kafkaRenderContext builds the template context. Unlike the Job strategy it
@@ -263,7 +273,10 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 		return r.markBackupJobFailed(ctx, j, err.Error())
 	}
 
-	deadline := kafkaRunDeadline(resolved.Parameters)
+	deadline, deadlineWarn := kafkaRunDeadline(resolved.Parameters)
+	if deadlineWarn != "" && r.Recorder != nil {
+		r.Recorder.Event(j, corev1.EventTypeWarning, "BackupTimeoutInvalid", deadlineWarn)
+	}
 
 	// First-reconcile bookkeeping (refetch guards against a stale informer
 	// sliding StartedAt forward). Mirrors reconcileJob.
@@ -545,7 +558,10 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 
 	// The deadline round-trips from backup time via the Backup's parameters, so a
 	// restore is bounded by the same value the operator set for the backup.
-	deadline := kafkaRunDeadline(kafkaStrategyParameters(backup))
+	deadline, deadlineWarn := kafkaRunDeadline(kafkaStrategyParameters(backup))
+	if deadlineWarn != "" && r.Recorder != nil {
+		r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "BackupTimeoutInvalid", deadlineWarn)
+	}
 
 	// A Backup with no recorded object can never restore; fail fast, before the
 	// readiness gate, so it does not wait out the whole deadline and then report a

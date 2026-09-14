@@ -551,19 +551,24 @@ func getKafkaJob(t *testing.T, c client.Client, namespace, name string) *batchv1
 
 func TestKafkaRunDeadline(t *testing.T) {
 	cases := []struct {
-		name   string
-		params map[string]string
-		want   time.Duration
+		name     string
+		params   map[string]string
+		want     time.Duration
+		wantWarn bool // a rejected value must surface a non-empty warning
 	}{
-		{"unset falls back to default", nil, kafkaDefaultBackupDeadline},
-		{"valid override honoured", map[string]string{kafkaBackupTimeoutParam: "2h"}, 2 * time.Hour},
-		{"below floor falls back", map[string]string{kafkaBackupTimeoutParam: "10s"}, kafkaDefaultBackupDeadline},
-		{"unparseable falls back", map[string]string{kafkaBackupTimeoutParam: "nope"}, kafkaDefaultBackupDeadline},
+		{"unset falls back to default", nil, kafkaDefaultBackupDeadline, false},
+		{"valid override honoured", map[string]string{kafkaBackupTimeoutParam: "2h"}, 2 * time.Hour, false},
+		{"below floor falls back and warns", map[string]string{kafkaBackupTimeoutParam: "10s"}, kafkaDefaultBackupDeadline, true},
+		{"unparseable falls back and warns", map[string]string{kafkaBackupTimeoutParam: "nope"}, kafkaDefaultBackupDeadline, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := kafkaRunDeadline(tc.params); got != tc.want {
+			got, warn := kafkaRunDeadline(tc.params)
+			if got != tc.want {
 				t.Fatalf("kafkaRunDeadline(%v) = %s, want %s", tc.params, got, tc.want)
+			}
+			if (warn != "") != tc.wantWarn {
+				t.Fatalf("kafkaRunDeadline(%v) warn = %q, wantWarn %v", tc.params, warn, tc.wantWarn)
 			}
 		})
 	}
