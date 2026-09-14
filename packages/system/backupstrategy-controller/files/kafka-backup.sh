@@ -5,7 +5,10 @@ set -euo pipefail
 # kafka-topics.sh / kafka-configs.sh; the Job never sets it.
 BIN="${BIN:-/opt/kafka/bin}"
 TAB=$(printf '\t')
-file=/tmp/kafka-metadata.txt
+# Overridable for the same reason as BIN: hack/kafka-backup-script.bats points it
+# at a per-test path so runs cannot read back a previous test's records. The Job
+# never sets it.
+file="${METADATA_FILE:-/tmp/kafka-metadata.txt}"
 
 # Validate MODE up front and fail closed on anything unexpected. internal/
 # template renders the input unchanged when it fails, so a broken env render
@@ -161,8 +164,12 @@ else
       # fail loudly, like the unrecognised-record-kind guard below.
       case "${parts}" in ''|*[!0-9]*) echo "unparsable recorded partition count for ${t}: '${parts}'" >&2; exit 1 ;; esac
       case "${rf}" in ''|*[!0-9]*) echo "unparsable recorded replication factor for ${t}: '${rf}'" >&2; exit 1 ;; esac
-      # grep -F -x: literal whole-line match against the live list.
-      if printf '%s\n' "${live}" | grep -qxF -- "${t}"; then
+      # grep -F -x: literal whole-line match against the live list. Here-string,
+      # not a pipe: `grep -q` exits at the first match, and a pipe would SIGPIPE
+      # the producer once the topic's line is far enough from the end of a large
+      # list, which pipefail turns into a false "not found" that misroutes an
+      # existing topic into --create.
+      if grep -qxF -- "${t}" <<<"${live}"; then
         if ! desc=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --describe --topic "\Q${t}\E"); then
           echo "cannot describe existing topic ${t}" >&2; exit 1
         fi
