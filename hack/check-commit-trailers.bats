@@ -28,6 +28,7 @@ make_repo() {
     git config user.email ci@example.invalid
     git config user.name CI
     git config commit.gpgsign false
+    git config tag.gpgsign false
     git config core.hooksPath /dev/null
     echo seed > file
     git add file
