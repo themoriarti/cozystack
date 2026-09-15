@@ -217,3 +217,39 @@
     echo ":buildcache ref races build-main.yaml on the cache manifest." >&2
     exit 1; }
 }
+
+# A drifted file keeps its committed release ref, which is the safe choice, but
+# it also means that component runs a release image in a lane meant to exercise
+# the tree under review. That used to be one line among hundreds, so three
+# separate PRs each spent a round establishing that a red backup suite was not
+# theirs (#4257).
+@test "drift is summarised as a GitHub annotation naming the packages" {
+  root=$(pwd)
+  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  mkdir -p "$w/packages/system/alpha" "$w/main/system/alpha"
+  mkdir -p "$w/packages/system/beta" "$w/main/system/beta"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/alpha:v1.5.0@sha256:aaaa\n' > "$w/packages/system/alpha/values.yaml"
+  printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/alpha:main@sha256:bbbb\n'        > "$w/main/system/alpha/values.yaml"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/beta:v1.5.0@sha256:cccc\n'  > "$w/packages/system/beta/values.yaml"
+  printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/beta:main@sha256:dddd\n'         > "$w/main/system/beta/values.yaml"
+  cd "$w"
+  "$root/hack/overlay-main-images.sh" main '[]' > out.txt
+  # Read the names out of the ANNOTATION line, not the whole log: every drifted
+  # file already prints its own path above, so grepping the log would pass even
+  # if the summary named nothing.
+  grep '::warning title=Image overlay drift' out.txt > ann.txt
+  grep -q 'system/alpha' ann.txt
+  grep -q 'system/beta' ann.txt
+  grep -q '2 package(s)' ann.txt
+}
+
+@test "no annotation when nothing drifted" {
+  root=$(pwd)
+  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  mkdir -p "$w/packages/system/clean" "$w/main/system/clean"
+  printf 'image: ghcr.io/cozystack/cozystack/clean:v1.5.0@sha256:aaaa\n' > "$w/packages/system/clean/values.yaml"
+  printf 'image: iad.ocir.io/x/cozystack/clean:main@sha256:bbbb\n'       > "$w/main/system/clean/values.yaml"
+  cd "$w"
+  "$root/hack/overlay-main-images.sh" main '[]' > out.txt
+  ! grep -q '::warning title=Image overlay drift' out.txt
+}

@@ -83,6 +83,7 @@ overlaid=0
 same=0
 skipped=0
 drift=0
+drift_files=""
 failed=0
 # Walk the artifact's ref-bearing files, pruning vendored charts/ subtrees.
 # `for … in $(find)` (not a pipe) keeps the counters in this shell; package
@@ -107,6 +108,7 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
   if diff "$cur" "$new" | sed -n 's/^[<>] //p' | grep -qvE "$img_line"; then
     echo "drift (non-ref change) in $cur -> keeping committed ref"
     drift=$((drift + 1))
+    drift_files="$drift_files $(dirname "${cur#packages/}")"
     continue
   fi
 
@@ -120,3 +122,15 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
 done
 
 echo "Overlay current-main images: overlaid=$overlaid same=$same skipped(rebuilt/owned/edited)=$skipped drift=$drift failed=$failed"
+
+# Keeping the committed ref is the safe answer to a config that does not match
+# the artifact, but it is not a neutral one: that component then runs its last
+# RELEASE image in a lane whose job is to exercise the tree under review. Said
+# once per file among hundreds of overlay lines, it reads as bookkeeping. Said
+# once at the end, with the packages named, it is the first thing to check when
+# a suite fails on behaviour the diff plainly contains — which is what #4257
+# cost three unrelated PRs, one round each.
+if [ "$drift" -gt 0 ]; then
+  printf '::warning title=Image overlay drift::%s package(s) kept committed release refs, so they run release images in this lane rather than current main:%s\n' \
+    "$drift" "$(echo "$drift_files" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/  */ /g; s/ $//')"
+fi
