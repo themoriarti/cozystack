@@ -77,7 +77,6 @@ HOOK
     gpgsign = true
 [tag]
     gpgsign = true
-    forceSignAnnotated = true
 [gpg]
     program = false
 [core]
