@@ -240,11 +240,12 @@
   rm -rf "$w"
 }
 
-# imagePullPolicy and imagePullSecrets END in something else, and the classifier
-# accepts a prefix before `image` only up to a colon for exactly that reason. A
-# file differing on one of them differs on CONFIG, so it must keep its committed
-# ref rather than be overlaid: drop the colon from the key branch and this file
-# is overlaid on a policy change, silently replacing the ref the PR asked for.
+# A file differing on imagePullPolicy differs on CONFIG, so it must keep its
+# committed ref rather than be overlaid. What keeps both pull-policy keys out is
+# the letter the key branch demands BEFORE `image`, which a key beginning with
+# `image` has nothing to supply: neither matches with the trailing colon or
+# without it, even when the value carries a slash. The colon belongs to the
+# other side of the branch and is held by "a suffixed image key is a ref".
 @test "a key merely STARTING with image is config, not a ref" {
   root=$(pwd)
   w=$(mktemp -d)
@@ -254,7 +255,7 @@
   ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
   grep -q 'drift (non-ref change) in packages/system/delta/values.yaml' "$w/out.txt"
   if grep -q 'overlay: packages/system/delta/values.yaml' "$w/out.txt"; then
-    echo "FAIL: a PR-edited package was overlaid from the artifact" >&2
+    echo "FAIL: a changed imagePullPolicy was read as a ref and the file overlaid" >&2
     cat "$w/out.txt" >&2
     exit 1
   fi

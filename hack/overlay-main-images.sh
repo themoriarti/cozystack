@@ -90,10 +90,14 @@ skip=" packages/core/talos packages/core/installer $(echo "$BUILT_JSON" | tr -d 
 # backupstrategy-controller kept serving a release image two months older than
 # the tree in every lane that did not rebuild it (#4257).
 #
-# Two things keep that branch narrow. The key has to END at `image`, so
-# `imagePullPolicy:` and `imagePullSecrets:` still do not match. And the value
-# has to contain a `/`, which a repository path always does and an
-# operator-settable knob named after an image does not: `vddkImage: ""`
+# Two things keep that branch narrow, and neither is the trailing `:`. The
+# `[A-Za-z]+` demands a letter BEFORE `image`, which a key that begins with it
+# has nothing to put there — that, not the colon, is why `imagePullPolicy:` and
+# `imagePullSecrets:` do not match, with the colon or without it. The colon
+# earns its place on the other side: it is where the value scan starts, so
+# `clientImage: "ghcr.io/…"` stops matching if it goes, which is what the test
+# named "a suffixed image key is a ref, not a config change" holds. And the value has to contain a `/`, which a repository path always
+# does and an operator-settable knob named after an image does not: `vddkImage: ""`
 # (core/platform, migration-controller) is configuration the build never
 # stamps, and taking it from the artifact in silence is the opposite of what
 # this script is for. The exact-key branch keeps no such requirement, because
