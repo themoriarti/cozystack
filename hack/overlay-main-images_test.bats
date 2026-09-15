@@ -223,6 +223,22 @@
 # the tree under review. That used to be one line among hundreds, so three
 # separate PRs each spent a round establishing that a red backup suite was not
 # theirs (#4257).
+# A ref whose key merely ENDS in Image, and which carries no digest to fall back
+# on, used to read as a config change and cost its whole file the overlay. That
+# is how backupstrategy-controller ran a release image two months older than the
+# tree in every lane that did not rebuild it (#4257): one such line sat beside
+# digest-pinned siblings the classifier did recognise.
+@test "a suffixed image key is a ref, not a config change" {
+  root=$(pwd)
+  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  mkdir -p "$w/packages/system/gamma" "$w/main/system/gamma"
+  printf 'gamma:\n  image: "ghcr.io/cozystack/cozystack/gamma:v1.6.0@sha256:aaaa"\n  clientImage: "ghcr.io/cozystack/cozystack/client:v1.6.0"\n' > "$w/packages/system/gamma/values.yaml"
+  printf 'gamma:\n  image: "iad.ocir.io/x/cozystack/gamma:main@sha256:cccc"\n  clientImage: "iad.ocir.io/x/cozystack/client:main"\n' > "$w/main/system/gamma/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q 'overlay: packages/system/gamma/values.yaml' "$w/out.txt"
+  grep -q 'iad.ocir.io/x/cozystack/client:main' "$w/packages/system/gamma/values.yaml"
+}
+
 @test "drift is summarised as a GitHub annotation naming the packages" {
   root=$(pwd)
   w=$(mktemp -d); trap 'rm -rf "$w"' EXIT

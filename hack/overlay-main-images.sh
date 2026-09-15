@@ -77,7 +77,17 @@ skip=" packages/core/talos packages/core/installer $(echo "$BUILT_JSON" | tr -d 
 
 # A changed line is image-reference-bearing if it carries a full ref (@sha256:),
 # is a split ref key (image/repository/registry/tag/digest), or a `--…-image=` arg.
-img_line='(@sha256:|^[[:space:]]*(- )?(image|repository|registry|tag|digest):|--[A-Za-z-]*image=)'
+#
+# The key match accepts a prefix before `image` because a chart that renders
+# several images names the extra ones after what they are for —
+# chBackupClientImage, rabbitmqBackupClientImage, redisBackupClientImage. Those
+# used to pass only through the `@sha256:` branch, so one pinned by tag alone
+# read as a config change and cost its WHOLE file the overlay: that is how
+# backupstrategy-controller kept serving a release image two months older than
+# the tree in every lane that did not rebuild it (#4257). The trailing `:` is
+# what keeps this narrow — `imagePullPolicy:` and `imagePullSecrets:` still do
+# not match, because the key has to END at `image`.
+img_line='(@sha256:|^[[:space:]]*(- )?([A-Za-z]*[Ii]mage|repository|registry|tag|digest):|--[A-Za-z-]*image=)'
 
 overlaid=0
 same=0
