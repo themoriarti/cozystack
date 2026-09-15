@@ -258,6 +258,39 @@
   rm -rf "$w"
 }
 
+# `yq -i` re-emits the document when the build stamps a digest, and a blank
+# line separating two top-level keys does not survive that. So the artifact copy
+# of a file the PR never touched differs from the committed one by a line
+# carrying no configuration, and treating that as a config change costs the file
+# its overlay. Five packages drifted on nothing else (#4265).
+@test "a blank line lost to yq is not a config change" {
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/epsilon" "$w/main/system/epsilon"
+  printf '_cluster: {}\n\nepsilon:\n  image: "ghcr.io/cozystack/cozystack/epsilon:v1.6.0@sha256:aaaa"\n' > "$w/packages/system/epsilon/values.yaml"
+  printf '_cluster: {}\nepsilon:\n  image: "iad.ocir.io/x/cozystack/epsilon:main@sha256:bbbb"\n' > "$w/main/system/epsilon/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q 'overlay: packages/system/epsilon/values.yaml' "$w/out.txt"
+  ! grep -q 'drift (non-ref change)' "$w/out.txt"
+  grep -q 'iad.ocir.io/x/cozystack/epsilon:main' "$w/packages/system/epsilon/values.yaml"
+  rm -rf "$w"
+}
+
+# A blank line is discounted, a line with CONTENT is not: the guard that keeps
+# a real config difference from riding along with the ref lines is the same one,
+# so it needs its own case rather than trusting the blank-line test above.
+@test "a real config line still counts as drift alongside a blank line" {
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/zeta" "$w/main/system/zeta"
+  printf '_cluster: {}\n\nzeta:\n  image: "ghcr.io/cozystack/cozystack/zeta:v1.6.0@sha256:aaaa"\n  replicas: 2\n' > "$w/packages/system/zeta/values.yaml"
+  printf '_cluster: {}\nzeta:\n  image: "iad.ocir.io/x/cozystack/zeta:main@sha256:bbbb"\n  replicas: 3\n' > "$w/main/system/zeta/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q 'drift (non-ref change) in packages/system/zeta/values.yaml' "$w/out.txt"
+  grep -q 'replicas: 2' "$w/packages/system/zeta/values.yaml"
+  rm -rf "$w"
+}
+
 @test "drift is summarised as a GitHub annotation naming the packages" {
   root=$(pwd)
   w=$(mktemp -d)

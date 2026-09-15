@@ -115,7 +115,16 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
   [ -f "$cur" ] || continue           # not in the PR tree -> don't introduce it
   cmp -s "$cur" "$new" && { same=$((same + 1)); continue; }
 
-  if diff "$cur" "$new" | sed -n 's/^[<>] //p' | grep -qvE "$img_line"; then
+  # Blank lines are dropped before the test. `yq -i` does not preserve them:
+  # stamping a digest re-emits the document, and a blank line separating two
+  # top-level keys does not come back. The stamp therefore changes a file the
+  # PR never touched, on a line carrying no configuration at all, and the whole
+  # file loses its overlay for it. That is not a corner case -- on the run
+  # behind #4265 it was the entire remaining drift list: core/platform,
+  # cozystack-api, dashboard, kubeovn-webhook and linstor-gui each differed
+  # from the artifact by one blank line and their own ref, nothing else.
+  if diff "$cur" "$new" | sed -n 's/^[<>] //p' \
+      | grep -vE '^[[:space:]]*$' | grep -qvE "$img_line"; then
     echo "drift (non-ref change) in $cur -> keeping committed ref"
     drift=$((drift + 1))
     drift_files="$drift_files $(dirname "${cur#packages/}")"
