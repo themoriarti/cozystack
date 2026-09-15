@@ -1,0 +1,111 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-57-http-cache-detach.bats. It serves only the
+# calls migration 57 (and lib/cozystack-version.sh) make; behaviour is driven by
+# FAKE_* env and every invocation is appended to $FAKE_CMDLOG so the test can
+# assert what was detached, what was deleted on the platform side, and in what
+# order. Modelled on hack/testdata/migration-55-fluxcd/kubectl.
+#
+#   FAKE_CMDLOG           file to append a one-line record of each call to
+#   FAKE_HRS              newline list of "<ns> <name> <chartRef.name> [<kind>]",
+#                         one per HelmRelease the fleet scan reports; <kind> is
+#                         the apps.cozystack.io/application.kind label, "-" or
+#                         absent for none. Selection is the migration's jq, so
+#                         non-matching rows must be listed and then ignored.
+#   FAKE_LIST_FAIL        non-empty => the fleet scan exits 1 with this stderr
+#   FAKE_FINALIZER_STICKS non-empty => the verify read returns a finalizer
+#   FAKE_VERIFY_READ_FAIL non-empty => the verify read exits 1 with this stderr
+#   FAKE_PLATFORM_DELETE_FAIL non-empty => deleting the Package exits 1
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+
+arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
+
+case "$args" in
+  *"apply --filename -"*)
+    manifest=$(cat)
+    v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+    log "STAMP ${v:-unknown}"
+    exit 0
+    ;;
+
+  # Finalizer verify read. Shares the fleet scan's resource token, so it is
+  # matched first and told apart by its jsonpath selector.
+  *"get helmreleases.helm.toolkit.fluxcd.io"*"jsonpath"*)
+    if [ -n "${FAKE_VERIFY_READ_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_VERIFY_READ_FAIL" >&2
+      exit 1
+    fi
+    if [ -n "${FAKE_FINALIZER_STICKS:-}" ]; then
+      printf '%s' '["helm.toolkit.fluxcd.io/finalizer"]'
+    fi
+    exit 0
+    ;;
+
+  *"get helmreleases.helm.toolkit.fluxcd.io"*)
+    if [ -n "${FAKE_LIST_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_LIST_FAIL" >&2
+      exit 1
+    fi
+    printf '{"items":['
+    printf '%s\n' "${FAKE_HRS:-}" | {
+      sep=""
+      while read -r ns name chart kind; do
+        [ -n "$ns" ] || continue
+        if [ -n "${kind:-}" ] && [ "$kind" != "-" ]; then
+          labels=$(printf '{"apps.cozystack.io/application.kind":"%s"}' "$kind")
+        else
+          labels=null
+        fi
+        printf '%s{"metadata":{"namespace":"%s","name":"%s","labels":%s},"spec":{"chartRef":{"name":"%s"}}}' \
+          "$sep" "$ns" "$name" "$labels" "$chart"
+        sep=","
+      done
+    }
+    printf ']}\n'
+    exit 0
+    ;;
+
+  *"patch helmreleases.helm.toolkit.fluxcd.io"*)
+    ns=$(arg_after -n "$@")
+    name=$(arg_after helmreleases.helm.toolkit.fluxcd.io "$@")
+    case "$args" in
+      *suspend*)    log "SUSPEND $ns $name" ;;
+      *finalizers*) log "FINALIZER-PATCH $ns $name" ;;
+    esac
+    exit 0
+    ;;
+
+  *"delete helmreleases.helm.toolkit.fluxcd.io"*)
+    ns=$(arg_after -n "$@")
+    name=$(arg_after helmreleases.helm.toolkit.fluxcd.io "$@")
+    log "DELETE-HR $ns $name"
+    exit 0
+    ;;
+
+  *"delete packages.cozystack.io"*)
+    if [ -n "${FAKE_PLATFORM_DELETE_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_PLATFORM_DELETE_FAIL" >&2
+      exit 1
+    fi
+    log "DELETE-PACKAGE $(arg_after packages.cozystack.io "$@")"
+    exit 0
+    ;;
+
+  *"delete applicationdefinitions.cozystack.io"*)
+    log "DELETE-APPDEF $(arg_after applicationdefinitions.cozystack.io "$@")"
+    exit 0
+    ;;
+
+  *"delete secret"*)
+    log "DELETE-SECRETS $(arg_after -n "$@") $(arg_after -l "$@")"
+    exit 0
+    ;;
+esac
+
+log "UNHANDLED $args"
+printf 'fake kubectl: unmodelled call: %s\n' "$args" >&2
+exit 1

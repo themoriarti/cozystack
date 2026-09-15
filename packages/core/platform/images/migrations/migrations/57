@@ -1,0 +1,72 @@
+#!/bin/sh
+# Migration 57 --> 58
+# Detach surviving HTTPCache instances from Cozystack and remove what the
+# application leaves behind on the platform side.
+#
+# HTTPCache is no longer shipped. Its PackageSource carries no keep annotation,
+# so Helm prunes it on upgrade, and the ArtifactGenerator it owns takes both
+# ExternalArtifacts with it. Left alone, every http-cache HelmRelease would lose
+# its chart and stay Ready=False for good, and HelmReleaseNotReady would fire on
+# every cluster with the naas bundle.
+#
+# So each tenant release is orphaned instead: suspend it, drop the Flux
+# finalizer so the delete does NOT run a Helm uninstall, verify the finalizer is
+# gone, then delete. The Deployments, Services and ConfigMaps it rendered stay
+# in the tenant namespace as plain objects, since nothing in them points back at
+# the HelmRelease. This is the orphan idiom of migrations 29 and 55.
+#
+# The platform side goes after, Package first. The operator owns
+# hr/http-cache-rd and re-creates it on delete for as long as its Package
+# exists, so deleting the release first would only race the operator; deleting
+# the Package garbage-collects the release through its controller
+# ownerReference. The ApplicationDefinition and the release's Helm storage are
+# deleted explicitly too, so the kind stops being served whether or not
+# helm-controller has run the uninstall by the time the upgrade goes on.
+#
+# Fail-closed for the same reason as migration 55: migrations never re-run, so a
+# swallowed error would stamp the version past a half-detached fleet. Every step
+# runs under `set -euo pipefail` with no `|| true`, and each tenant delete is
+# gated on a finalizer read that aborts on any API error.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+# Match on the chart the release renders from, and on the application label
+# migration 22 put on every tenant release, so a release whose chartRef was
+# never rewritten is still found.
+hrs=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces -o json \
+  | jq -r '.items[]
+      | select(.spec.chartRef.name == "cozystack-http-cache-application-default-http-cache"
+            or .metadata.labels["apps.cozystack.io/application.kind"] == "HTTPCache")
+      | "\(.metadata.namespace) \(.metadata.name)"')
+
+# Heredoc, not a pipe, so the loop runs in this shell and `exit 1` aborts the
+# migration rather than a subshell.
+if [ -n "$hrs" ]; then
+  while read -r ns name; do
+    [ -n "$ns" ] || continue
+    echo "Detaching HTTPCache instance ${ns}/${name} from Cozystack"
+    kubectl -n "$ns" patch helmreleases.helm.toolkit.fluxcd.io "$name" --type=merge \
+      -p '{"spec":{"suspend":true}}'
+    kubectl -n "$ns" patch helmreleases.helm.toolkit.fluxcd.io "$name" --type=merge \
+      -p '{"metadata":{"finalizers":null}}'
+    remaining=$(kubectl -n "$ns" get helmreleases.helm.toolkit.fluxcd.io "$name" \
+      --ignore-not-found -o jsonpath='{.metadata.finalizers}')
+    if [ -n "$remaining" ]; then
+      echo "ERROR: finalizer still present on ${ns}/${name} after patch (${remaining}); refusing to delete" >&2
+      exit 1
+    fi
+    kubectl -n "$ns" delete helmreleases.helm.toolkit.fluxcd.io "$name" --ignore-not-found --wait=false
+  done <<EOF
+$hrs
+EOF
+fi
+
+kubectl delete packages.cozystack.io cozystack.http-cache-application --ignore-not-found --wait=false
+kubectl -n cozy-system delete helmreleases.helm.toolkit.fluxcd.io http-cache-rd --ignore-not-found --wait=false
+kubectl delete applicationdefinitions.cozystack.io http-cache --ignore-not-found
+kubectl -n cozy-system delete secret -l owner=helm,name=http-cache-rd --ignore-not-found
+
+stamp_cozystack_version 58
