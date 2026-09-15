@@ -53,6 +53,59 @@ cleanup() {
     rm -rf "$dir"
 }
 
+# The three `git config` lines in make_repo are there because a contributor's
+# global configuration reaches a fresh repository, and a runner carries no such
+# configuration: a guard that goes missing stays green in CI and turns red only
+# on the machine of whoever signs their commits or tags, which is how tag.gpgsign
+# came to be missing in the first place. This test brings the hostile
+# configuration with it, so the guards are held by the suite rather than by
+# whichever machine happens to run it. gpg.program is a command that always
+# fails, so an attempt to sign is a deterministic error rather than a question
+# about which keys the host holds.
+@test "make_repo holds against a hostile global configuration" {
+    home="$(mktemp -d)"
+    mkdir -p "$home/hooks"
+    cat > "$home/hooks/commit-msg" <<'HOOK'
+#!/bin/sh
+echo "rewritten by a global hook" > "$1"
+HOOK
+    chmod +x "$home/hooks/commit-msg"
+    cat > "$home/.gitconfig" <<CONFIG
+[user]
+    signingkey = 0000000000000000
+[commit]
+    gpgsign = true
+[tag]
+    gpgsign = true
+    forceSignAnnotated = true
+[gpg]
+    program = false
+[core]
+    hooksPath = $home/hooks
+CONFIG
+    export HOME="$home"
+    export XDG_CONFIG_HOME="$home/.config"
+    unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
+
+    make_repo
+
+    # tag.gpgsign: a signed tag is an object of its own, a lightweight one
+    # resolves straight to the commit it names.
+    if [ "$(git cat-file -t "$(git rev-parse start)")" != commit ]; then
+        echo "expected start to be a lightweight tag" >&2
+        exit 1
+    fi
+    # core.hooksPath: the global commit-msg hook would have rewritten the
+    # message, and commit.gpgsign would have failed the commit outright.
+    if [ "$(git log -1 --format=%s base)" != seed ]; then
+        echo "expected the global commit-msg hook to be inert" >&2
+        exit 1
+    fi
+
+    cleanup
+    rm -rf "$home"
+}
+
 @test "accepts the documented Assisted-by: LLM trailer" {
     make_repo
     commit <<'EOF'
