@@ -230,18 +230,37 @@
 # digest-pinned siblings the classifier did recognise.
 @test "a suffixed image key is a ref, not a config change" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/system/gamma" "$w/main/system/gamma"
   printf 'gamma:\n  image: "ghcr.io/cozystack/cozystack/gamma:v1.6.0@sha256:aaaa"\n  clientImage: "ghcr.io/cozystack/cozystack/client:v1.6.0"\n' > "$w/packages/system/gamma/values.yaml"
   printf 'gamma:\n  image: "iad.ocir.io/x/cozystack/gamma:main@sha256:cccc"\n  clientImage: "iad.ocir.io/x/cozystack/client:main"\n' > "$w/main/system/gamma/values.yaml"
   ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
   grep -q 'overlay: packages/system/gamma/values.yaml' "$w/out.txt"
   grep -q 'iad.ocir.io/x/cozystack/client:main' "$w/packages/system/gamma/values.yaml"
+  rm -rf "$w"
+}
+
+# imagePullPolicy and imagePullSecrets END in something else, and the classifier
+# accepts a prefix before `image` only up to a colon for exactly that reason. A
+# file differing on one of them differs on CONFIG, so it must keep its committed
+# ref rather than be overlaid: drop the colon from the key branch and this file
+# is overlaid on a policy change, silently replacing the ref the PR asked for.
+@test "a key merely STARTING with image is config, not a ref" {
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/delta" "$w/main/system/delta"
+  printf 'delta:\n  image: "ghcr.io/cozystack/cozystack/delta:v1.6.0@sha256:aaaa"\n  imagePullPolicy: IfNotPresent\n' > "$w/packages/system/delta/values.yaml"
+  printf 'delta:\n  image: "ghcr.io/cozystack/cozystack/delta:v1.6.0@sha256:aaaa"\n  imagePullPolicy: Always\n' > "$w/main/system/delta/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q 'drift (non-ref change) in packages/system/delta/values.yaml' "$w/out.txt"
+  ! grep -q 'overlay: packages/system/delta/values.yaml' "$w/out.txt"
+  grep -q 'imagePullPolicy: IfNotPresent' "$w/packages/system/delta/values.yaml"
+  rm -rf "$w"
 }
 
 @test "drift is summarised as a GitHub annotation naming the packages" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/system/alpha" "$w/main/system/alpha"
   mkdir -p "$w/packages/system/beta" "$w/main/system/beta"
   printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/alpha:v1.5.0@sha256:aaaa\n' > "$w/packages/system/alpha/values.yaml"
@@ -257,15 +276,19 @@
   grep -q 'system/alpha' ann.txt
   grep -q 'system/beta' ann.txt
   grep -q '2 package(s)' ann.txt
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "no annotation when nothing drifted" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/system/clean" "$w/main/system/clean"
   printf 'image: ghcr.io/cozystack/cozystack/clean:v1.5.0@sha256:aaaa\n' > "$w/packages/system/clean/values.yaml"
   printf 'image: iad.ocir.io/x/cozystack/clean:main@sha256:bbbb\n'       > "$w/main/system/clean/values.yaml"
   cd "$w"
   "$root/hack/overlay-main-images.sh" main '[]' > out.txt
   ! grep -q '::warning title=Image overlay drift' out.txt
+  cd "$root"
+  rm -rf "$w"
 }
