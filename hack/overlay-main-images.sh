@@ -35,8 +35,11 @@
 # registry (OCIR), so refs differ in registry host / tag / digest — and charts
 # split those across separate lines (`repository:`, `tag:`, `digest:`), not all
 # of which carry '@sha256:'. So a changed line counts as image-related if it
-# carries '@sha256:' OR its key is image/repository/registry/tag/digest (or it
-# is a `--…-image=` arg). If any OTHER line differs — the PR branched from a
+# carries '@sha256:', its key is image/repository/registry/tag/digest, its key
+# ends in `image`/`Image` and its value holds a repository path, or it is a
+# `--…-image=` arg (see the img_line comment for why each). A blank line is not
+# a change: `yq -i`, which every `make image` uses to stamp the ref, drops one.
+# If any OTHER line differs — the PR branched from a
 # main whose config for that file differs from the artifact's base — the file is
 # left on its committed ref (safe degradation, logged, never fatal). CI checks
 # out the pull_request merge commit (current main + PR), so for an unbuilt file
@@ -76,18 +79,26 @@ fi
 skip=" packages/core/talos packages/core/installer $(echo "$BUILT_JSON" | tr -d '[]"' | tr ',' ' ') $TOUCHED "
 
 # A changed line is image-reference-bearing if it carries a full ref (@sha256:),
-# is a split ref key (image/repository/registry/tag/digest), or a `--…-image=` arg.
+# is a split ref key (image/repository/registry/tag/digest), a prefixed *Image
+# key holding a repository path, or a `--…-image=` arg.
 #
-# The key match accepts a prefix before `image` because a chart that renders
-# several images names the extra ones after what they are for —
-# chBackupClientImage, rabbitmqBackupClientImage, redisBackupClientImage. Those
-# used to pass only through the `@sha256:` branch, so one pinned by tag alone
-# read as a config change and cost its WHOLE file the overlay: that is how
+# The prefixed-key branch exists because a chart that renders several images
+# names the extra ones after what they are for — chBackupClientImage,
+# rabbitmqBackupClientImage, redisBackupClientImage. Those used to pass only
+# through the `@sha256:` branch, so one pinned by tag alone read as a config
+# change and cost its WHOLE file the overlay: that is how
 # backupstrategy-controller kept serving a release image two months older than
-# the tree in every lane that did not rebuild it (#4257). The trailing `:` is
-# what keeps this narrow — `imagePullPolicy:` and `imagePullSecrets:` still do
-# not match, because the key has to END at `image`.
-img_line='(@sha256:|^[[:space:]]*(- )?([A-Za-z]*[Ii]mage|repository|registry|tag|digest):|--[A-Za-z-]*image=)'
+# the tree in every lane that did not rebuild it (#4257).
+#
+# Two things keep that branch narrow. The key has to END at `image`, so
+# `imagePullPolicy:` and `imagePullSecrets:` still do not match. And the value
+# has to contain a `/`, which a repository path always does and an
+# operator-settable knob named after an image does not: `vddkImage: ""`
+# (core/platform, migration-controller) is configuration the build never
+# stamps, and taking it from the artifact in silence is the opposite of what
+# this script is for. The exact-key branch keeps no such requirement, because
+# `tag:` and `digest:` legitimately hold values with no slash in them.
+img_line='(@sha256:|^[[:space:]]*(- )?(image|repository|registry|tag|digest):|^[[:space:]]*(- )?[A-Za-z]+[Ii]mage:[[:space:]]*"?[^"[:space:]]*/|--[A-Za-z-]*image=)'
 
 overlaid=0
 same=0
@@ -127,7 +138,11 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
       | grep -vE '^[[:space:]]*$' | grep -qvE "$img_line"; then
     echo "drift (non-ref change) in $cur -> keeping committed ref"
     drift=$((drift + 1))
-    drift_files="$drift_files $(dirname "${cur#packages/}")"
+    # Name the PACKAGE, not the directory the file happens to sit in: an
+    # images/*.tag drift would otherwise read as "<pkg>/images", which is not
+    # something anyone can go and look at.
+    d=$(dirname "${cur#packages/}")
+    drift_files="$drift_files ${d%/images}"
     continue
   fi
 
@@ -150,6 +165,8 @@ echo "Overlay current-main images: overlaid=$overlaid same=$same skipped(rebuilt
 # a suite fails on behaviour the diff plainly contains — which is what #4257
 # cost three unrelated PRs, one round each.
 if [ "$drift" -gt 0 ]; then
-  printf '::warning title=Image overlay drift::%s package(s) kept committed release refs, so they run release images in this lane rather than current main:%s\n' \
-    "$drift" "$(echo "$drift_files" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/  */ /g; s/ $//')"
+  drift_pkgs=$(echo "$drift_files" | tr ' ' '\n' | grep -v '^$' | sort -u)
+  printf '::warning title=Image overlay drift::%s package(s) kept committed release refs, so they run release images in this lane rather than current main: %s\n' \
+    "$(printf '%s\n' "$drift_pkgs" | wc -l | tr -d ' ')" \
+    "$(printf '%s' "$drift_pkgs" | tr '\n' ' ' | sed 's/ $//')"
 fi

@@ -253,7 +253,11 @@
   printf 'delta:\n  image: "ghcr.io/cozystack/cozystack/delta:v1.6.0@sha256:aaaa"\n  imagePullPolicy: Always\n' > "$w/main/system/delta/values.yaml"
   ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
   grep -q 'drift (non-ref change) in packages/system/delta/values.yaml' "$w/out.txt"
-  ! grep -q 'overlay: packages/system/delta/values.yaml' "$w/out.txt"
+  if grep -q 'overlay: packages/system/delta/values.yaml' "$w/out.txt"; then
+    echo "FAIL: a PR-edited package was overlaid from the artifact" >&2
+    cat "$w/out.txt" >&2
+    exit 1
+  fi
   grep -q 'imagePullPolicy: IfNotPresent' "$w/packages/system/delta/values.yaml"
   rm -rf "$w"
 }
@@ -271,7 +275,11 @@
   printf '_cluster: {}\nepsilon:\n  image: "iad.ocir.io/x/cozystack/epsilon:main@sha256:bbbb"\n' > "$w/main/system/epsilon/values.yaml"
   ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
   grep -q 'overlay: packages/system/epsilon/values.yaml' "$w/out.txt"
-  ! grep -q 'drift (non-ref change)' "$w/out.txt"
+  if grep -q 'drift (non-ref change)' "$w/out.txt"; then
+    echo "FAIL: a blank line lost to yq was counted as a config change" >&2
+    cat "$w/out.txt" >&2
+    exit 1
+  fi
   grep -q 'iad.ocir.io/x/cozystack/epsilon:main' "$w/packages/system/epsilon/values.yaml"
   rm -rf "$w"
 }
@@ -321,7 +329,66 @@
   printf 'image: iad.ocir.io/x/cozystack/clean:main@sha256:bbbb\n'       > "$w/main/system/clean/values.yaml"
   cd "$w"
   "$root/hack/overlay-main-images.sh" main '[]' > out.txt
-  ! grep -q '::warning title=Image overlay drift' out.txt
+  if grep -q '::warning title=Image overlay drift' out.txt; then
+    echo "FAIL: the annotation was emitted on a clean run" >&2
+    cat out.txt >&2
+    exit 1
+  fi
+  cd "$root"
+  rm -rf "$w"
+}
+
+@test "two drifted files in one package are one package, named without /images" {
+  # The counter counts ref-bearing FILES; the annotation speaks of packages. A
+  # package whose values.yaml and images/*.tag both drift is still one package,
+  # and `<pkg>/images` is not something anyone can go and look at.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/apps/omega/images" "$w/main/apps/omega/images"
+  printf 'image: ghcr.io/cozystack/cozystack/omega:v1.5.0@sha256:aaaa\nreplicas: 1\n' \
+    > "$w/packages/apps/omega/values.yaml"
+  printf 'image: iad.ocir.io/x/cozystack/omega:main@sha256:bbbb\nreplicas: 2\n' \
+    > "$w/main/apps/omega/values.yaml"
+  printf 'ghcr.io/cozystack/cozystack/t:v1.5.0@sha256:cccc\n' \
+    > "$w/packages/apps/omega/images/t.tag"
+  printf 'iad.ocir.io/x/cozystack/t:main@sha256:dddd\ntrailing\n' \
+    > "$w/main/apps/omega/images/t.tag"
+  cd "$w"
+  "$root/hack/overlay-main-images.sh" main '[]' > out.txt
+  ann=$(grep '::warning title=Image overlay drift' out.txt)
+  if ! printf '%s\n' "$ann" | grep -q '1 package(s)'; then
+    echo "FAIL: two files in one package were not counted as one package" >&2
+    printf '%s\n' "$ann" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$ann" | grep -q 'omega/images'; then
+    echo "FAIL: the annotation named a directory instead of the package" >&2
+    printf '%s\n' "$ann" >&2
+    exit 1
+  fi
+  cd "$root"
+  rm -rf "$w"
+}
+
+@test "an *Image key holding operator config, not a path, is still a config change" {
+  # `vddkImage: ""` (core/platform, migration-controller) is named after an
+  # image but is an operator-supplied knob the build never stamps. The prefixed
+  # -key branch must not absorb it: taking it from the artifact in silence is
+  # the failure this script exists to make loud.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/vm" "$w/main/system/vm"
+  printf 'image: ghcr.io/cozystack/cozystack/vm:v1.5.0@sha256:aaaa\nvddkImage: ""\n' \
+    > "$w/packages/system/vm/values.yaml"
+  printf 'image: iad.ocir.io/x/cozystack/vm:main@sha256:bbbb\nvddkImage: "someone/else"\n' \
+    > "$w/main/system/vm/values.yaml"
+  cd "$w"
+  "$root/hack/overlay-main-images.sh" main '[]' > out.txt
+  if ! grep -q 'drift (non-ref change) in packages/system/vm/values.yaml' out.txt; then
+    echo "FAIL: a changed vddkImage was taken from the artifact instead of drifting" >&2
+    cat out.txt >&2
+    exit 1
+  fi
   cd "$root"
   rm -rf "$w"
 }
