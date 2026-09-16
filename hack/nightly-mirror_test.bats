@@ -190,8 +190,8 @@ _make_tree() {
   # The host rewrite is planned source->dest, reported by intent for both
   # expressions the real path applies: the '<host>/' prefix and the bare-host
   # scalar. The message must not name `sed -i` -- the path no longer uses it.
-  grep -q "rewrite image host iad.ocir.io/idyksih5sir9/cozystack/ -> ghcr.io/cozystack/cozystack/" "$tmp/out"
-  grep -q "bare iad.ocir.io/idyksih5sir9/cozystack host scalar -> ghcr.io/cozystack/cozystack" "$tmp/out"
+  grep -Fq "rewrite image host iad.ocir.io/idyksih5sir9/cozystack/ -> ghcr.io/cozystack/cozystack/" "$tmp/out"
+  grep -Fq "bare iad.ocir.io/idyksih5sir9/cozystack host scalar -> ghcr.io/cozystack/cozystack" "$tmp/out"
   ! grep -q 'sed -i' "$tmp/out"
 }
 
