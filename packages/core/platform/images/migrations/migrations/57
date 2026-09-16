@@ -1,72 +1,99 @@
 #!/bin/sh
 # Migration 57 --> 58
-# Detach surviving HTTPCache instances from Cozystack and remove what the
-# application leaves behind on the platform side.
+# Freeze HTTPCache on the last packages artifact that still ships it.
 #
-# HTTPCache is no longer shipped. Its PackageSource carries no keep annotation,
-# so Helm prunes it on upgrade, and the ArtifactGenerator it owns takes both
-# ExternalArtifacts with it. Left alone, every http-cache HelmRelease would lose
-# its chart and stay Ready=False for good, and HelmReleaseNotReady would fire on
-# every cluster with the naas bundle.
+# HTTPCache is removed from this repository, so the platform stops publishing
+# its chart. Its PackageSource carries no keep annotation, which means Helm
+# prunes it on upgrade; the ArtifactGenerator it owns goes with it and takes
+# both ExternalArtifacts along. Those are the chartRef targets of
+# hr/http-cache-rd and of every tenant http-cache-<name> release, so doing
+# nothing would leave all of them Ready=False for good and fire
+# HelmReleaseNotReady on every cluster with the naas bundle.
 #
-# So each tenant release is orphaned instead: suspend it, drop the Flux
-# finalizer so the delete does NOT run a Helm uninstall, verify the finalizer is
-# gone, then delete. The Deployments, Services and ConfigMaps it rendered stay
-# in the tenant namespace as plain objects, since nothing in them points back at
-# the HelmRelease. This is the orphan idiom of migrations 29 and 55.
+# A cluster that still runs an instance therefore keeps the application, served
+# from a frozen source: a copy of the packages OCIRepository pinned to the
+# digest of the last release that contains http-cache. The copy is created
+# without owner references or Helm metadata, so nothing reconciles or prunes it,
+# and the PackageSource is repointed at it and disowned the same way. Names stay
+# as they are on purpose: the ApplicationDefinition inside that artifact hard-
+# codes its chartRef, so renaming the PackageSource would leave every release
+# pointing at an artifact nobody produces.
 #
-# The platform side goes after, Package first. The operator owns
-# hr/http-cache-rd and re-creates it on delete for as long as its Package
-# exists, so deleting the release first would only race the operator; deleting
-# the Package garbage-collects the release through its controller
-# ownerReference. The ApplicationDefinition and the release's Helm storage are
-# deleted explicitly too, so the kind stops being served whether or not
-# helm-controller has run the uninstall by the time the upgrade goes on.
+# A cluster with no instance keeps nothing. The naas bundle installs the rd
+# component whether or not anyone created an HTTPCache, so freezing
+# unconditionally would leave pinned leftovers on clusters that never used the
+# application. There the migration removes the platform side instead: the
+# Package first, because the operator owns hr/http-cache-rd and re-creates it
+# for as long as that Package exists, then the release, its ApplicationDefinition
+# and its Helm storage.
 #
-# Fail-closed for the same reason as migration 55: migrations never re-run, so a
-# swallowed error would stamp the version past a half-detached fleet. Every step
-# runs under `set -euo pipefail` with no `|| true`, and each tenant delete is
-# gated on a finalizer read that aborts on any API error.
+# Fail-closed like migration 55: migrations never re-run, so a swallowed error
+# would stamp the version past a half-frozen fleet. No `|| true` anywhere.
 
 set -euo pipefail
 
 # shellcheck source=lib/cozystack-version.sh
 . "$(dirname "$0")/lib/cozystack-version.sh"
 
-# Match on the chart the release renders from, and on the application label
-# migration 22 put on every tenant release, so a release whose chartRef was
-# never rewritten is still found.
-hrs=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces -o json \
+# The packages artifact of v1.6.0, the last release that ships apps/http-cache
+# and system/http-cache-rd. Pinned by digest rather than tag so a later retag
+# cannot move what a frozen instance renders from.
+PINNED_DIGEST="sha256:bf68208730860fa8e47f378a0260e79a0262e0783fa63ba4f7f97f57a48b2d23"
+SOURCE_NAME="cozystack-packages-http-cache"
+PACKAGE_NAME="cozystack.http-cache-application"
+
+# Select the tenant releases by the chart they render from and by the
+# application label migration 22 put on them, so a release whose chartRef was
+# never rewritten is still seen.
+instances=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces -o json \
   | jq -r '.items[]
       | select(.spec.chartRef.name == "cozystack-http-cache-application-default-http-cache"
             or .metadata.labels["apps.cozystack.io/application.kind"] == "HTTPCache")
-      | "\(.metadata.namespace) \(.metadata.name)"')
+      | "\(.metadata.namespace)/\(.metadata.name)"')
 
-# Heredoc, not a pipe, so the loop runs in this shell and `exit 1` aborts the
-# migration rather than a subshell.
-if [ -n "$hrs" ]; then
-  while read -r ns name; do
-    [ -n "$ns" ] || continue
-    echo "Detaching HTTPCache instance ${ns}/${name} from Cozystack"
-    kubectl -n "$ns" patch helmreleases.helm.toolkit.fluxcd.io "$name" --type=merge \
-      -p '{"spec":{"suspend":true}}'
-    kubectl -n "$ns" patch helmreleases.helm.toolkit.fluxcd.io "$name" --type=merge \
-      -p '{"metadata":{"finalizers":null}}'
-    remaining=$(kubectl -n "$ns" get helmreleases.helm.toolkit.fluxcd.io "$name" \
-      --ignore-not-found -o jsonpath='{.metadata.finalizers}')
-    if [ -n "$remaining" ]; then
-      echo "ERROR: finalizer still present on ${ns}/${name} after patch (${remaining}); refusing to delete" >&2
-      exit 1
-    fi
-    kubectl -n "$ns" delete helmreleases.helm.toolkit.fluxcd.io "$name" --ignore-not-found --wait=false
-  done <<EOF
-$hrs
-EOF
+if [ -z "$instances" ]; then
+  echo "No HTTPCache instances found; removing the application from the platform"
+  kubectl delete packages.cozystack.io "$PACKAGE_NAME" --ignore-not-found --wait=false
+  kubectl -n cozy-system delete helmreleases.helm.toolkit.fluxcd.io http-cache-rd --ignore-not-found --wait=false
+  kubectl delete applicationdefinitions.cozystack.io http-cache --ignore-not-found
+  kubectl -n cozy-system delete secret -l owner=helm,name=http-cache-rd --ignore-not-found
+  stamp_cozystack_version 58
+  exit 0
 fi
 
-kubectl delete packages.cozystack.io cozystack.http-cache-application --ignore-not-found --wait=false
-kubectl -n cozy-system delete helmreleases.helm.toolkit.fluxcd.io http-cache-rd --ignore-not-found --wait=false
-kubectl delete applicationdefinitions.cozystack.io http-cache --ignore-not-found
-kubectl -n cozy-system delete secret -l owner=helm,name=http-cache-rd --ignore-not-found
+echo "HTTPCache instances found, freezing the application on ${PINNED_DIGEST}:"
+printf '%s\n' "$instances" | sed 's/^/  /'
+
+# Copy the live packages OCIRepository rather than writing one from scratch, so
+# a cluster that overrides the registry host, its pull secret or the interval
+# keeps those settings. Reading it with --ignore-not-found would treat an API
+# error as "absent" and go on to publish a source pointing nowhere, so the read
+# is plain and aborts under set -e.
+src=$(kubectl -n cozy-system get ocirepositories.source.toolkit.fluxcd.io cozystack-packages -o json)
+
+printf '%s' "$src" | jq --arg name "$SOURCE_NAME" --arg digest "$PINNED_DIGEST" '
+  {
+    apiVersion: .apiVersion,
+    kind: .kind,
+    metadata: {
+      name: $name,
+      namespace: .metadata.namespace,
+      annotations: { "platform.cozystack.io/frozen": "http-cache" }
+    },
+    spec: (.spec | .ref = { digest: $digest })
+  }' | kubectl apply --filename -
+
+# Repoint the application at the frozen source and take it out of Helm's hands:
+# the keep annotation is read off the live object during the upgrade prune, and
+# dropping the release metadata stops a later release from adopting it.
+kubectl patch packagesources.cozystack.io "$PACKAGE_NAME" --type=merge -p "$(cat <<JSON
+{"metadata":{"annotations":{"helm.sh/resource-policy":"keep","meta.helm.sh/release-name":null,"meta.helm.sh/release-namespace":null},"labels":{"app.kubernetes.io/managed-by":null}},"spec":{"sourceRef":{"name":"${SOURCE_NAME}"}}}
+JSON
+)"
+
+# The Package is rendered with the keep annotation already, so it survives the
+# prune on its own; it only needs the release metadata dropped.
+kubectl patch packages.cozystack.io "$PACKAGE_NAME" --type=merge \
+  -p '{"metadata":{"annotations":{"meta.helm.sh/release-name":null,"meta.helm.sh/release-namespace":null},"labels":{"app.kubernetes.io/managed-by":null}}}'
 
 stamp_cozystack_version 58
