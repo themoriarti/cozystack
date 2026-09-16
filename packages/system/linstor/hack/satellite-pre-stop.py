@@ -6,6 +6,13 @@ import sys
 import time
 
 
+def stderr_tail(value):
+    """Keep the last 2048 characters, including diagnostics from timeouts."""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return (value or "")[-2048:]
+
+
 def connect_container_stdout():
     # Piraeus shares the pod PID namespace, so /proc/1 belongs to the sandbox.
     with open("/proc/self/cgroup") as stream:
@@ -75,9 +82,9 @@ def read_status(name=None, timeout=4):
     if name is not None:
         args.append(name)
     args.append("--json")
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    result = subprocess.run(args, capture_output=True, text=True, errors="replace", timeout=timeout)
     if result.returncode != 0:
-        raise RuntimeError("status-command-failed")
+        raise RuntimeError("status-command-failed (exit=%s): %s" % (result.returncode, stderr_tail(result.stderr)))
     return parse_status(result.stdout)
 
 
@@ -110,19 +117,29 @@ def main():
         result = subprocess.run(
             ["/usr/sbin/drbdsetup", "down", name],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
             timeout=min(10, remaining),
         )
         if result.returncode != 0:
-            raise RuntimeError("down-command-failed")
+            raise RuntimeError("down-command-failed (exit=%s): %s" % (result.returncode, stderr_tail(result.stderr)))
         log("down-finished", resource=name)
     log("finished", execute=execute, resources=len(initial))
 
 
-if __name__ == "__main__":
+def run_hook():
     try:
         connect_container_stdout()
         main()
     except Exception as error:
-        log("abort-no-further-actions", error_type=type(error).__name__)
-        sys.exit(1)
+        details = {"error_type": type(error).__name__, "error": str(error)}
+        if isinstance(error, subprocess.TimeoutExpired):
+            details["stderr"] = stderr_tail(error.stderr)
+        log("abort-no-further-actions", **details)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run_hook())

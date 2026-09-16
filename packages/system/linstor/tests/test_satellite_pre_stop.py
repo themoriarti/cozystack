@@ -122,6 +122,52 @@ class SatellitePreStopTest(unittest.TestCase):
                     hook.main()
                 self.assertEqual(self.run.call_count, 3)
 
+    def test_abort_logs_bounded_status_diagnostics_without_down(self):
+        stderr = "discarded-prefix" + "x" * 2048 + "permission denied"
+        self.run.return_value = subprocess.CompletedProcess([], 12, "", stderr)
+        with patch.object(hook, "connect_container_stdout"):
+            self.assertEqual(hook.run_hook(), 1)
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(self.run.call_args.kwargs["errors"], "replace")
+        self.events.assert_called_once_with(
+            "abort-no-further-actions", error_type="RuntimeError",
+            error="status-command-failed (exit=12): " + stderr[-2048:],
+        )
+
+    def test_abort_logs_down_diagnostics_and_stops_before_next_resource(self):
+        stderr = "discarded-prefix" + "x" * 2048 + "device busy"
+        self.run.side_effect = [self.status(resource(), resource("r2")), self.status(resource()),
+                                subprocess.CompletedProcess([], 17, stderr=stderr)]
+        with patch.object(hook, "connect_container_stdout"):
+            self.assertEqual(hook.run_hook(), 1)
+        self.assertEqual(self.run.call_count, 3)
+        self.assertEqual(self.run.call_args.kwargs["stderr"], subprocess.PIPE)
+        self.assertTrue(self.run.call_args.kwargs["text"])
+        self.assertEqual(self.run.call_args.kwargs["errors"], "replace")
+        self.events.assert_called_with(
+            "abort-no-further-actions", error_type="RuntimeError",
+            error="down-command-failed (exit=17): " + stderr[-2048:],
+        )
+
+    def test_abort_logs_partial_timeout_stderr_for_status_and_down(self):
+        stderr = b"discarded-prefix" + b"x" * 2048 + b"device busy\xff"
+        for command in ["status", "down"]:
+            with self.subTest(command=command):
+                self.run.reset_mock()
+                self.events.reset_mock()
+                failure = subprocess.TimeoutExpired(command, 4, stderr=stderr)
+                responses = [failure] if command == "status" else [
+                    self.status(resource(), resource("r2")), self.status(resource()), failure,
+                ]
+                self.run.side_effect = responses
+                with patch.object(hook, "connect_container_stdout"):
+                    self.assertEqual(hook.run_hook(), 1)
+                self.assertEqual(self.run.call_count, len(responses))
+                self.events.assert_called_with(
+                    "abort-no-further-actions", error_type="TimeoutExpired",
+                    error=str(failure), stderr=stderr.decode("utf-8", errors="replace")[-2048:],
+                )
+
     def test_deadline_prevents_further_down_and_bounds_command_timeout(self):
         self.clock.side_effect = [0, 60]
         self.run.side_effect = [self.status(resource()), self.status(resource())]
