@@ -4,10 +4,12 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
 
+REAL_RUN = subprocess.run
 SCRIPT = Path(__file__).resolve().parents[1] / "hack" / "satellite-pre-stop.py"
 SPEC = importlib.util.spec_from_file_location("satellite_pre_stop", SCRIPT)
 hook = importlib.util.module_from_spec(SPEC)
@@ -196,6 +198,23 @@ class SatellitePreStopTest(unittest.TestCase):
 
     def test_unknown_argument_prevents_even_status(self):
         hook.sys.argv = ["hook", "--force"]
+        with self.assertRaisesRegex(ValueError, "unsupported-arguments"):
+            hook.main()
+        self.run.assert_not_called()
+
+    def test_chart_command_form_passes_execute_as_the_only_argument(self):
+        # The chart renders `python3 -c <script> --execute`; CPython sets
+        # sys.argv[0] to "-c" for that form, so main() receives ["--execute"].
+        probe = REAL_RUN([sys.executable, "-c", "import sys; print(sys.argv)", "--execute"],
+                         capture_output=True, text=True, check=True)
+        self.assertEqual(probe.stdout.strip(), "['-c', '--execute']")
+        hook.sys.argv = ["-c", "--execute"]
+        self.run.return_value = self.status()
+        hook.main()
+        self.events.assert_called_once_with("finished", execute=True, resources=0)
+
+    def test_script_name_placeholder_before_execute_is_rejected(self):
+        hook.sys.argv = ["-c", "hook", "--execute"]
         with self.assertRaisesRegex(ValueError, "unsupported-arguments"):
             hook.main()
         self.run.assert_not_called()
