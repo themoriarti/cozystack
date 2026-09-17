@@ -39,7 +39,9 @@ ignore_paths_value() {
   missing=""
   while IFS= read -r pattern; do
     printf '%s' ",$value," | grep -qF ",$pattern," || missing="$missing $pattern"
-  done <<< "$(printf '%s' "$FLUX_DEFAULT_IGNORES" | tr ',' '\n')"
+  done <<EOF
+$(printf '%s' "$FLUX_DEFAULT_IGNORES" | tr ',' '\n')
+EOF
   [ -z "$missing" ] || { echo "ignore list dropped flux defaults:$missing" >&2; return 1; }
 }
 
