@@ -39,7 +39,7 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
     # here-string, not a pipe: a `printf ... | grep -q` pipeline SIGPIPEs the
     # printf when grep matches early and exits, and under `set -o pipefail` that
     # 141 makes the whole pipeline read as failure — a false "missing" for a
-    # preset that is present (hit on the larger enums, e.g. http-cache-rd).
+    # preset that is present (hit on the larger enums, e.g. kubernetes-rd).
     if ! grep -Fqx -- "$want" <<<"$enums"; then
       missing+=("$want")
     fi
