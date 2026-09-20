@@ -312,6 +312,30 @@ spec:
                     echo "topic \${t} has \${have_parts} partition(s), backup recorded \${parts}; refusing to restore into a differently shaped topic" >&2
                     exit 1
                   fi
+                  # Refuse a non-empty target BEFORE replaying, not after. The
+                  # replay appends, and the driver retries a Pod that dies
+                  # mid-replay, so checking only afterwards means each attempt
+                  # has already written another full copy into a live topic and
+                  # the count check merely reports the damage. Checking here
+                  # leaves the topic untouched instead. Remedy: empty or delete
+                  # the topic (the in-place step deletes it) and re-run.
+                  cends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -1)
+                  cbegins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2)
+                  held=0
+                  for e in \${cends}; do
+                    p=\${e%:*}; p=\${p##*:}
+                    eo=\${e##*:}
+                    bo=0
+                    for b in \${cbegins}; do
+                      bp=\${b%:*}; bp=\${bp##*:}
+                      if [ "\${bp}" = "\${p}" ]; then bo=\${b##*:}; break; fi
+                    done
+                    held=\$((held + eo - bo))
+                  done
+                  if [ "\${held}" -ne 0 ]; then
+                    echo "topic \${t} already holds \${held} record(s); this restore appends and is supported only against an absent or empty topic. Empty or delete it and re-run." >&2
+                    exit 1
+                  fi
                 done
                 # Replay every dumped partition file. parse.key restores the
                 # original key so the default partitioner reproduces the

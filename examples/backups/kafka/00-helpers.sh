@@ -17,13 +17,19 @@ export NAMESPACE="${NAMESPACE:-tenant-test}"
 export KAFKA_NAME="${KAFKA_NAME:-kafka-test}"
 export KAFKA_RESTORE_NAME="${KAFKA_RESTORE_NAME:-kafka-restore}"
 # The demo topic carries a "." and a decoy topic differs from it only where
-# that "." sits: as a Java regex "orders.v1" also matches "ordersXv1", as a
+# that "." sits: as a Java regex "orders.v1" also matches "orders-v1", as a
 # literal it does not. Every --topic call the CLI treats as a regex is pinned
 # with \Q...\E, and this pair is what makes that pinning testable - drop a pin
 # and the run fails on its own (the partition-set guard sees the decoy's
 # partitions, or the in-place delete takes the decoy with it).
+#
+# The decoy sorts BEFORE the real topic ("-" is 0x2D, "." is 0x2E), which is
+# what makes the two --describe reads testable too: those pipe through
+# `head -1`, so an unpinned describe would read the decoy's PartitionCount
+# rather than the topic's. A decoy sorting after (say "ordersXv1") leaves
+# those two pins unexercised.
 export TOPIC="${TOPIC:-orders.v1}"
-export DECOY_TOPIC="${DECOY_TOPIC:-ordersXv1}"
+export DECOY_TOPIC="${DECOY_TOPIC:-orders-v1}"
 export DECOY_COUNT="${DECOY_COUNT:-5}"
 export PARTITIONS="${PARTITIONS:-3}"
 export MESSAGE_COUNT="${MESSAGE_COUNT:-30}"
