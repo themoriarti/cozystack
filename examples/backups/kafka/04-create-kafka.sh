@@ -47,6 +47,15 @@ count=$(topic_message_count "$KAFKA_NAME")
 [[ "$count" == "$MESSAGE_COUNT" ]] || { log_error "expected ${MESSAGE_COUNT} messages in '${TOPIC}', got '${count}'"; exit 1; }
 log_success "Topic '${TOPIC}' holds ${count} record(s)."
 
+# Seed the decoy. It is never named in the BackupClass, so a correct run must
+# leave it untouched; a --topic call that matched it as a regex instead would
+# either pull its partitions into the backup or delete it in step 06.
+log_substep "Creating decoy topic '${DECOY_TOPIC}' (${DECOY_COUNT} records) to pin literal topic matching..."
+seed_decoy_topic "$KAFKA_NAME"
+decoy=$(decoy_message_count "$KAFKA_NAME")
+[[ "$decoy" == "$DECOY_COUNT" ]] || { log_error "expected ${DECOY_COUNT} messages in '${DECOY_TOPIC}', got '${decoy}'"; exit 1; }
+log_success "Decoy topic '${DECOY_TOPIC}' holds ${decoy} record(s)."
+
 # Snapshot the source content so the restore steps can diff against it and
 # prove the records - not just their count - round-tripped. cleanup.sh removes
 # this file.

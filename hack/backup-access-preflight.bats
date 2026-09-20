@@ -244,7 +244,8 @@
         examples/backups/postgres/run-all.sh \
         examples/backups/mariadb/run-all.sh \
         examples/backups/mongodb/run-all.sh \
-        examples/backups/clickhouse/03-create-bucket.sh; do
+        examples/backups/clickhouse/03-create-bucket.sh \
+        examples/backups/kafka/03-create-bucket.sh; do
         granted=$(grep -n 'accessGranted' "$file" | head -n 1 | cut -d: -f1)
         preflight=$(grep -n 'cozy_backup_access_preflight' "$file" | head -n 1 | cut -d: -f1)
         coordinates=$(grep -n 'Reading bucket coordinates' "$file" | head -n 1 | cut -d: -f1)
@@ -256,12 +257,13 @@
     done
 }
 
-@test "all four Chainsaw backup roundtrips enable the E2E preflight" {
+@test "every Chainsaw backup roundtrip enables the E2E preflight" {
     for file in \
         hack/e2e-chainsaw/postgres/chainsaw-test.yaml \
         hack/e2e-chainsaw/mariadb/chainsaw-test.yaml \
         hack/e2e-chainsaw/mongodb/chainsaw-test.yaml \
-        hack/e2e-chainsaw/clickhouse/chainsaw-test.yaml; do
+        hack/e2e-chainsaw/clickhouse/chainsaw-test.yaml \
+        hack/e2e-chainsaw/kafka/chainsaw-test.yaml; do
         grep -q 'COZY_E2E_BACKUP_PREFLIGHT=1' "$file" || {
             echo "$file does not enable the backup access preflight" >&2
             exit 1

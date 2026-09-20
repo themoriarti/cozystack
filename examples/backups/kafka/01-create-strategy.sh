@@ -259,6 +259,28 @@ spec:
                 s3 -o /tmp/kafka-topics.tar "\${OBJ_URL}"
                 tar -C "\${WORK}" -xf /tmp/kafka-topics.tar
                 [ -f "\${WORK}/manifest.txt" ] || { echo "manifest missing in backup" >&2; exit 1; }
+                # The manifest arrives inside the downloaded tarball, so treat it
+                # as untrusted and validate before any field is used as a number.
+                # A non-numeric partition would otherwise slip through the
+                # numeric test below: an if condition is exempt from errexit, so
+                # test exits 2, the term reads false, parts under-counts and the
+                # topic is created smaller - which the shape check then compares
+                # against itself and passes. An empty manifest is refused
+                # too: both verification loops would run zero times and the Pod
+                # would report a successful restore of nothing.
+                lines=0
+                while read -r mt mp mb me; do
+                  lines=\$((lines + 1))
+                  [ -n "\${mt}" ] || { echo "manifest line \${lines}: missing topic" >&2; exit 1; }
+                  for v in "\${mp}" "\${mb}" "\${me}"; do
+                    case "\${v}" in
+                      ''|*[!0-9]*)
+                        echo "manifest line \${lines} (topic \${mt}): non-numeric field '\${v}'; refusing to restore from a malformed backup" >&2
+                        exit 1 ;;
+                    esac
+                  done
+                done < "\${WORK}/manifest.txt"
+                [ "\${lines}" -gt 0 ] || { echo "manifest is empty: the backup recorded no partitions, so there is nothing to restore" >&2; exit 1; }
                 # Recreate every backed-up topic with its original partition
                 # count (needed so keyed records re-produce into the same
                 # partition); existing topics are left as-is. Topic configs,
@@ -283,6 +305,9 @@ spec:
                   # and still add up. Confirm the shape matches the backup.
                   have_parts=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --describe --topic "\Q\${t}\E" \
                     | sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' | head -1)
+                  case "\${have_parts}" in
+                    ''|*[!0-9]*) echo "could not read PartitionCount for \${t} after create" >&2; exit 1 ;;
+                  esac
                   if [ "\${have_parts}" != "\${parts}" ]; then
                     echo "topic \${t} has \${have_parts} partition(s), backup recorded \${parts}; refusing to restore into a differently shaped topic" >&2
                     exit 1

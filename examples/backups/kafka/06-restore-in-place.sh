@@ -28,7 +28,7 @@ kafka_run "$KAFKA_NAME" '
         # as empty output and false-positive "deleted"; the pod snippet runs
         # under set -eu without pipefail, so the pipe would otherwise mask it.
         list=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --list) || { sleep 2; continue; }
-        if ! printf "%s\n" "$list" | grep -qx "$TOPIC"; then
+        if ! printf "%s\n" "$list" | grep -qxF -- "$TOPIC"; then
             echo "topic $TOPIC deleted"; exit 0
         fi
         sleep 2
@@ -72,5 +72,15 @@ if ! diff -u "$SCRIPT_DIR/.source-dump.txt" <(topic_dump "$KAFKA_NAME"); then
     exit 1
 fi
 log_success "In-place restore verified: ${count} record(s) in '${TOPIC}', content matches source."
+
+# The delete above names ${TOPIC}, which as a Java regex would also match the
+# decoy. Its survival is what proves the \Q...\E pin is in place; without it
+# this reads back empty.
+decoy=$(decoy_message_count "$KAFKA_NAME")
+if [[ "$decoy" != "$DECOY_COUNT" ]]; then
+    log_error "Decoy topic '${DECOY_TOPIC}' holds '${decoy}', expected ${DECOY_COUNT}: the topic-name match is behaving as a regex, not a literal"
+    exit 1
+fi
+log_success "Decoy topic '${DECOY_TOPIC}' untouched: ${decoy} record(s)."
 
 echo -e "\n${GREEN}${BOLD}Next:${NC} ./07-restore-to-copy.sh"

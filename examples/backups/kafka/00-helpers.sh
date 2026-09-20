@@ -16,7 +16,15 @@ export BOLD='\033[1m'
 export NAMESPACE="${NAMESPACE:-tenant-test}"
 export KAFKA_NAME="${KAFKA_NAME:-kafka-test}"
 export KAFKA_RESTORE_NAME="${KAFKA_RESTORE_NAME:-kafka-restore}"
-export TOPIC="${TOPIC:-orders}"
+# The demo topic carries a "." and a decoy topic differs from it only where
+# that "." sits: as a Java regex "orders.v1" also matches "ordersXv1", as a
+# literal it does not. Every --topic call the CLI treats as a regex is pinned
+# with \Q...\E, and this pair is what makes that pinning testable - drop a pin
+# and the run fails on its own (the partition-set guard sees the decoy's
+# partitions, or the in-place delete takes the decoy with it).
+export TOPIC="${TOPIC:-orders.v1}"
+export DECOY_TOPIC="${DECOY_TOPIC:-ordersXv1}"
+export DECOY_COUNT="${DECOY_COUNT:-5}"
 export PARTITIONS="${PARTITIONS:-3}"
 export MESSAGE_COUNT="${MESSAGE_COUNT:-30}"
 export BUCKET_NAME="${BUCKET_NAME:-kafka-backups}"
@@ -229,6 +237,8 @@ BIN=$(printf %q "$KAFKA_BIN")
 TOPIC=$(printf %q "$TOPIC")
 PARTITIONS=$(printf %q "$PARTITIONS")
 MESSAGE_COUNT=$(printf %q "$MESSAGE_COUNT")
+DECOY_TOPIC=$(printf %q "$DECOY_TOPIC")
+DECOY_COUNT=$(printf %q "$DECOY_COUNT")
 $snippet"
 }
 
@@ -251,6 +261,35 @@ seed_topic() {
     '
 }
 
+# Seed the decoy topic: a single partition and a handful of records, enough to
+# tell "still there, untouched" from "deleted" or "backed up by mistake".
+seed_decoy_topic() {
+    local app="$1"
+    kafka_run "$app" '
+        "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --create --if-not-exists \
+            --topic "$DECOY_TOPIC" --partitions 1 --replication-factor 1
+        i=1
+        while [ "$i" -le "$DECOY_COUNT" ]; do
+            printf "d-%s\tdecoy-%s\n" "$i" "$i"
+            i=$((i + 1))
+        done | "$BIN"/kafka-console-producer.sh --bootstrap-server "$BOOT" \
+            --topic "$DECOY_TOPIC" --property parse.key=true
+    '
+}
+
+# Record count of the decoy topic. Prints a bare integer, or "" when the topic
+# is gone - which is itself the signal an unpinned --topic regex deleted it.
+decoy_message_count() {
+    local app="$1"
+    kafka_run "$app" '
+        ends=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "\Q$DECOY_TOPIC\E" --time -1 2>/dev/null) || exit 0
+        [ -n "$ends" ] || exit 0
+        total=0
+        for e in $ends; do total=$((total + ${e##*:})); done
+        echo "$total"
+    ' | tr -d "[:space:]"
+}
+
 # Total number of records currently stored in a topic, summed over partitions
 # as (end offset - begin offset). Prints a bare integer, or "" if the topic
 # does not exist / cannot be reached. Offsets, not a consumer, so it is exact
@@ -265,10 +304,15 @@ topic_message_count() {
         total=0
         for e in $ends; do
             ep=${e%:*}; ep=${ep##*:}; eo=${e##*:}
+            # Default the begin offset to 0 rather than skipping the partition:
+            # a partition missing from "begins" would otherwise contribute
+            # nothing and silently undercount the topic. Matches the strategy.
+            bo=0
             for b in $begins; do
                 bp=${b%:*}; bp=${bp##*:}
-                if [ "$bp" = "$ep" ]; then total=$((total + eo - ${b##*:})); break; fi
+                if [ "$bp" = "$ep" ]; then bo=${b##*:}; break; fi
             done
+            total=$((total + eo - bo))
         done
         echo "$total"
     ' | tr -d '[:space:]'
