@@ -89,6 +89,7 @@ tests:
           apiVersion: autoscaling.k8s.io/v1
           kind: VerticalPodAutoscaler
           name: vpa-vtstorage-generic
+          any: true
         not: true
 
   - it: renders no trace VPA when tracingStorages is empty (tracing off)
@@ -97,4 +98,5 @@ tests:
           apiVersion: autoscaling.k8s.io/v1
           kind: VerticalPodAutoscaler
           name: vpa-vtinsert-generic
+          any: true
         not: true
