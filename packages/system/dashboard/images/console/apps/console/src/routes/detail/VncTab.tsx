@@ -19,6 +19,7 @@ type PasteState =
   | { kind: "typing"; typed: number; total: number }
   | { kind: "blocked" }
   | { kind: "skipped"; count: number }
+  | { kind: "interrupted"; typed: number }
 
 interface VncTabProps {
   ad: ApplicationDefinition
@@ -187,12 +188,16 @@ export function VncTab({ ad, instance }: VncTabProps) {
         const controller = new AbortController()
         pasteAbortRef.current = controller
         setPaste({ kind: "typing", typed: 0, total: keystrokes.length })
-        await typeKeystrokes(sender, keystrokes, {
+        const result = await typeKeystrokes(sender, keystrokes, {
           signal: controller.signal,
           isConnected: () => senderRef.current !== null,
           onProgress: (typed, total) => setPaste({ kind: "typing", typed, total }),
         })
         pasteAbortRef.current = null
+        if (result.stopped !== "done") {
+          setPaste({ kind: "interrupted", typed: result.typed })
+          return
+        }
       }
       setPaste(
         unsupported.length > 0
@@ -270,7 +275,7 @@ export function VncTab({ ad, instance }: VncTabProps) {
 
   // One-off notices clear themselves; a paste in progress reports until it ends.
   useEffect(() => {
-    if (paste.kind !== "blocked" && paste.kind !== "skipped") return
+    if (paste.kind === "idle" || paste.kind === "typing") return
     const timer = setTimeout(() => setPaste({ kind: "idle" }), PASTE_NOTICE_MS)
     return () => clearTimeout(timer)
   }, [paste])
@@ -340,7 +345,9 @@ export function VncTab({ ad, instance }: VncTabProps) {
         ? "Clipboard blocked"
         : paste.kind === "skipped"
           ? `${paste.count} chars not on layout`
-          : connectionLabel
+          : paste.kind === "interrupted"
+            ? `Paste stopped after ${paste.typed}`
+            : connectionLabel
 
   return (
     <div className="flex h-full flex-col p-4">

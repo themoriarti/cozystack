@@ -220,6 +220,32 @@ describe("VncTab pasted text", () => {
     await waitFor(() => expect(rfb.sendKey).not.toHaveBeenCalled())
   })
 
+  it("refuses a second paste while the first is still typing", async () => {
+    const { rfb, sink } = await connectedSession()
+
+    pressPaste()
+    paste(sink, "aaaa")
+    paste(sink, "zzzz")
+
+    await waitFor(() => expect(screen.getByText(/^Connected$/)).toBeInTheDocument())
+    const pressed = pressedKeys(rfb)
+    expect(pressed).toEqual(["KeyA", "KeyA", "KeyA", "KeyA"])
+    expect(pressed).not.toContain("KeyZ")
+  })
+
+  it("says a paste was cut short rather than reporting it as finished", async () => {
+    const { rfb, sink } = await connectedSession()
+
+    pressPaste()
+    paste(sink, "abcdefghij")
+    await waitFor(() => expect(rfb.sendKey).toHaveBeenCalled())
+    act(() => {
+      rfb.dispatchEvent(new CustomEvent("disconnect", { detail: { clean: false, reason: "gone" } }))
+    })
+
+    expect(await screen.findByText(/paste stopped after \d+/i)).toBeInTheDocument()
+  })
+
   it("keeps nothing of the pasted text in the sink", async () => {
     const { sink } = await connectedSession()
 

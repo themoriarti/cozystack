@@ -23,13 +23,17 @@ vi.mock("@xterm/xterm", () => ({
     open() {}
     focus() {}
     dispose() {}
+    selection = ""
+    keyHandler: ((event: KeyboardEvent) => boolean) | null = null
     hasSelection() {
-      return false
+      return this.selection !== ""
     }
     getSelection() {
-      return ""
+      return this.selection
     }
-    attachCustomKeyEventHandler() {}
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
+      this.keyHandler = handler
+    }
     write(text: string) {
       this.written.push(text)
     }
@@ -222,6 +226,53 @@ describe("SerialTab console stream", () => {
     sockets[0].onclose?.({ code: 1006, reason: "" })
 
     expect(await screen.findByText(/connection closed \(1006\)/i)).toBeInTheDocument()
+  })
+
+  it("copies the selection on the terminal's own chord, not on plain Ctrl+C", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+    renderWithK8sProvider(<SerialTab ad={makeAd("VMInstance")} instance={instance} />, {
+      client: makeClient(),
+    })
+
+    await waitFor(() => expect(terminals).toHaveLength(1))
+    const terminal = terminals[0].instance as {
+      selection: string
+      keyHandler: ((event: KeyboardEvent) => boolean) | null
+    }
+    terminal.selection = "copied from the guest"
+
+    const chord = (init: KeyboardEventInit) =>
+      terminal.keyHandler?.(new KeyboardEvent("keydown", { code: "KeyC", ...init }))
+
+    // Plain Ctrl+C is the interrupt and must reach the guest untouched.
+    expect(chord({ ctrlKey: true })).toBe(true)
+    expect(writeText).not.toHaveBeenCalled()
+
+    expect(chord({ ctrlKey: true, shiftKey: true })).toBe(false)
+    expect(writeText).toHaveBeenCalledWith("copied from the guest")
+  })
+
+  it("leaves the copy chord to the guest when nothing is selected", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+    renderWithK8sProvider(<SerialTab ad={makeAd("VMInstance")} instance={instance} />, {
+      client: makeClient(),
+    })
+
+    await waitFor(() => expect(terminals).toHaveLength(1))
+    const terminal = terminals[0].instance as {
+      keyHandler: ((event: KeyboardEvent) => boolean) | null
+    }
+
+    const handled = terminal.keyHandler?.(
+      new KeyboardEvent("keydown", { code: "KeyC", metaKey: true }),
+    )
+
+    expect(handled).toBe(true)
+    expect(writeText).not.toHaveBeenCalled()
   })
 
   it("closes the socket when the tab goes away", async () => {
