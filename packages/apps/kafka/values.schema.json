@@ -34,7 +34,6 @@
       "items": {
         "type": "object",
         "required": [
-          "config",
           "name",
           "partitions",
           "replicas"

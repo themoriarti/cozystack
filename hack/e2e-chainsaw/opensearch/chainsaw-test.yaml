@@ -53,6 +53,21 @@ spec:
       apiVersion: v1
       kind: Service
       format: yaml
+  # The operator logs that cluster health held a restart back, never what the
+  # health was or which shards kept it there, and neither is a Kubernetes object.
+  - script:
+      # Three reads of at most 30s each. The op timeout sits above their sum so
+      # that an inner budget is what fires and the later reads still run.
+      timeout: 2m
+      content: |
+        for path in '_cluster/health?level=indices&pretty' '_cat/shards?v' '_cluster/allocation/explain?pretty'; do
+          echo "== $path"
+          timeout 30 kubectl -n "$NAMESPACE" exec opensearch-test-nodes-0 -c opensearch -- /bin/bash -c '
+            curl -k --silent --show-error --max-time 20 \
+              -u "$(cat /mnt/admin-credentials/username):$(cat /mnt/admin-credentials/password)" \
+              "https://localhost:9200/$1"' os_api "$path" || true
+          echo
+        done
   steps:
   - name: create-opensearch
     try:
@@ -124,6 +139,48 @@ spec:
           (length(spec.template.spec.volumes[?name == 'http-ca'])): 0
           status:
             readyReplicas: 1
+
+  # On one data node an index that asks for a replica leaves the cluster yellow
+  # for good, because the copy has no second node to land on, and the operator
+  # restarts a pod only once its health gate opens. A release gets there without
+  # anyone asking for it: the security audit log and any index a tenant creates
+  # with the default replica count both do it. Whether one exists by the time the
+  # listener moves is a matter of timing, so the suite creates one itself and the
+  # roll below always has to get through a yellow cluster.
+  - name: make-the-cluster-permanently-yellow
+    try:
+    - script:
+        # Above the two in-pod budgets below, so one of them is what fires.
+        timeout: 3m
+        content: |
+          set -eu
+
+          # The credentials and the form of the operator's own readiness probe,
+          # so a pod that reports Ready answers this as well.
+          os_api() {
+            kubectl -n "$NAMESPACE" exec opensearch-test-nodes-0 -c opensearch -- /bin/bash -c '
+              curl -k --silent --show-error --max-time 75 \
+                -u "$(cat /mnt/admin-credentials/username):$(cat /mnt/admin-credentials/password)" \
+                -H "Content-Type: application/json" "$@"' os_api "$@"
+          }
+
+          os_api --fail -X PUT "https://localhost:9200/unassignable-replica" \
+            --data '{"settings":{"index":{"number_of_shards":1,"number_of_replicas":1}}}'
+
+          # wait_for_status is satisfied by green as well, so the answer is read
+          # rather than trusted: a fixture that stopped holding the cluster
+          # yellow would leave the roll below proving nothing about the gate.
+          # No --fail here: a wait that times out answers 408 with the health in
+          # its body, and that body is what the message below has to print.
+          health=$(os_api "https://localhost:9200/_cluster/health/unassignable-replica?wait_for_status=yellow&timeout=60s")
+          case "$health" in
+            *'"status":"yellow"'*) ;;
+            *)
+              echo "an index with an unassignable replica did not leave the cluster yellow" >&2
+              echo "$health" >&2
+              exit 1
+              ;;
+          esac
 
   - name: move-onto-cert-manager-issuer
     try:
