@@ -78,14 +78,28 @@ export function openSerialStream(
   // frame on its own would turn it into replacement characters.
   const decoder = new TextDecoder("utf-8", { fatal: false })
 
-  let open = true
+  // The socket is not writable until it opens, and WebSocket.send() throws
+  // InvalidStateError while it is still CONNECTING. The terminal is live from
+  // the moment it is rendered, so anything typed before then is held and
+  // flushed rather than thrown away.
+  let state: "connecting" | "open" | "closed" = "connecting"
+  let pending = ""
+
   const finish = (event: { code: number; reason: string }) => {
-    if (!open) return
-    open = false
+    if (state === "closed") return
+    state = "closed"
+    pending = ""
     handlers.onClose?.(event)
   }
 
-  socket.onopen = () => handlers.onOpen?.()
+  socket.onopen = () => {
+    state = "open"
+    if (pending) {
+      socket.send(encoder.encode(pending))
+      pending = ""
+    }
+    handlers.onOpen?.()
+  }
   socket.onmessage = (event) => {
     const bytes = toBytes(event.data)
     if (!bytes) return
@@ -96,11 +110,16 @@ export function openSerialStream(
 
   return {
     send(text: string) {
-      if (!open) return
+      if (state === "closed") return
+      if (state === "connecting") {
+        pending += text
+        return
+      }
       socket.send(encoder.encode(text))
     },
     close() {
-      open = false
+      state = "closed"
+      pending = ""
       socket.close()
     },
   }

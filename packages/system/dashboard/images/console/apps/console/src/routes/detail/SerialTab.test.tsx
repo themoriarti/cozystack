@@ -189,6 +189,7 @@ describe("SerialTab console stream", () => {
     })
 
     await waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0].onopen?.()
     const terminal = terminals[0].instance as { onDataHandler: ((d: string) => void) | null }
     terminal.onDataHandler?.("ls\n")
 

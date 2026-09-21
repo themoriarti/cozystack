@@ -73,10 +73,11 @@ function runningClient() {
 interface Session {
   rfb: InstanceType<typeof FakeRFB>
   sink: HTMLTextAreaElement
+  unmount: () => void
 }
 
 async function connectedSession(): Promise<Session> {
-  const { container } = renderWithK8sProvider(<VncTab ad={ad} instance={instance} />, {
+  const { container, unmount } = renderWithK8sProvider(<VncTab ad={ad} instance={instance} />, {
     client: runningClient(),
   })
 
@@ -89,7 +90,7 @@ async function connectedSession(): Promise<Session> {
 
   const sink = container.querySelector("textarea")
   if (!sink) throw new Error("paste sink missing")
-  return { rfb, sink }
+  return { rfb, sink, unmount }
 }
 
 function pressPaste(init: KeyboardEventInit = {}): KeyboardEvent {
@@ -192,6 +193,22 @@ describe("VncTab pasted text", () => {
     await waitFor(() => expect(rfb.focus).toHaveBeenCalled())
   })
 
+  it("stops typing when the tab is unmounted mid-paste", async () => {
+    const { rfb, sink, unmount } = await connectedSession()
+
+    pressPaste()
+    paste(sink, "abcdefghijklmnopqrstuvwxyz")
+    await waitFor(() => expect(rfb.sendKey).toHaveBeenCalled())
+    unmount()
+
+    const afterUnmount = rfb.sendKey.mock.calls.length
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    // A few presses may already be in flight; the loop must not run on.
+    expect(rfb.sendKey.mock.calls.length - afterUnmount).toBeLessThanOrEqual(2)
+    expect(rfb.sendKey.mock.calls.length).toBeLessThan(52)
+  })
+
   it("types nothing once the session has dropped", async () => {
     const { rfb, sink } = await connectedSession()
     act(() => {
@@ -210,6 +227,32 @@ describe("VncTab pasted text", () => {
     paste(sink, "secret")
 
     expect(sink.value).toBe("")
+  })
+})
+
+describe("VncTab paste shortcut on other keyboard layouts", () => {
+  it("matches the chord by the character, not only by the physical key", async () => {
+    const { sink } = await connectedSession()
+
+    // On Dvorak the V character does not sit on the KeyV position.
+    pressPaste({ code: "Period", key: "v" })
+
+    expect(document.activeElement).toBe(sink)
+  })
+})
+
+describe("VncTab paste when the clipboard gives nothing", () => {
+  it("says the clipboard was blocked and takes the keyboard back", async () => {
+    // The session has to come up on real timers: waitFor never advances under
+    // fake ones, and a hung await here leaks them into the next test.
+    const { rfb, sink } = await connectedSession()
+
+    // An empty or refused clipboard raises no paste event at all.
+    pressPaste()
+    expect(document.activeElement).toBe(sink)
+
+    expect(await screen.findByText(/clipboard blocked/i)).toBeInTheDocument()
+    expect(rfb.focus).toHaveBeenCalled()
   })
 })
 

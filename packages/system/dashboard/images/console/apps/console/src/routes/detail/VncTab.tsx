@@ -68,6 +68,7 @@ export function VncTab({ ad, instance }: VncTabProps) {
   const [paste, setPaste] = useState<PasteState>({ kind: "idle" })
   const senderRef = useRef<KeySender | null>(null)
   const pastingRef = useRef(false)
+  const pasteAbortRef = useRef<AbortController | null>(null)
   const pasteSinkRef = useRef<HTMLTextAreaElement>(null)
   const sinkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -150,6 +151,12 @@ export function VncTab({ ad, instance }: VncTabProps) {
 
     return () => {
       cancelled = true
+      // Stop an in-flight paste explicitly. noVNC's "disconnect" event arrives
+      // asynchronously, by which point the guard below has already dropped it,
+      // so senderRef would otherwise stay non-null and the typing loop would
+      // run on past the unmount.
+      pasteAbortRef.current?.abort()
+      senderRef.current = null
       if (rfbRef.current) {
         try {
           rfbRef.current.disconnect()
@@ -177,11 +184,15 @@ export function VncTab({ ad, instance }: VncTabProps) {
     try {
       const { keystrokes, unsupported } = planKeystrokes(text)
       if (keystrokes.length > 0) {
+        const controller = new AbortController()
+        pasteAbortRef.current = controller
         setPaste({ kind: "typing", typed: 0, total: keystrokes.length })
         await typeKeystrokes(sender, keystrokes, {
+          signal: controller.signal,
           isConnected: () => senderRef.current !== null,
           onProgress: (typed, total) => setPaste({ kind: "typing", typed, total }),
         })
+        pasteAbortRef.current = null
       }
       setPaste(
         unsupported.length > 0
@@ -197,7 +208,8 @@ export function VncTab({ ad, instance }: VncTabProps) {
     if (!connected) return
 
     const handler = (e: KeyboardEvent) => {
-      if (e.code !== "KeyV" || e.altKey || e.shiftKey) return
+      const isV = e.code === "KeyV" || e.key.toLowerCase() === "v"
+      if (!isV || e.altKey || e.shiftKey) return
       if (!e.ctrlKey && !e.metaKey) return
       // Only when the console itself holds the keyboard — a paste into the
       // page's own inputs must keep working.
@@ -224,7 +236,9 @@ export function VncTab({ ad, instance }: VncTabProps) {
       if (sinkTimerRef.current) clearTimeout(sinkTimerRef.current)
       sinkTimerRef.current = setTimeout(() => {
         sinkTimerRef.current = null
-        if (document.activeElement === sink) rfbRef.current?.focus()
+        if (document.activeElement !== sink) return
+        rfbRef.current?.focus()
+        setPaste({ kind: "blocked" })
       }, SINK_FOCUS_TIMEOUT_MS)
     }
 

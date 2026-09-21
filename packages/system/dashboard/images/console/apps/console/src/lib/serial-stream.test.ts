@@ -64,6 +64,7 @@ describe("openSerialStream", () => {
 
   it("sends keystrokes as binary — virt-api drops text frames on the floor", () => {
     const { stream, socket } = open()
+    socket.onopen?.()
 
     stream.send("ls\n")
 
@@ -74,6 +75,7 @@ describe("openSerialStream", () => {
 
   it("encodes non-ASCII as UTF-8 rather than one byte per character", () => {
     const { stream, socket } = open()
+    socket.onopen?.()
 
     stream.send("привет")
 
@@ -113,8 +115,36 @@ describe("openSerialStream", () => {
     expect(onClose).toHaveBeenCalledWith({ code: 1006, reason: "gone" })
   })
 
+  it("holds what is typed before the socket opens, then flushes it once", () => {
+    const { stream, socket } = open()
+
+    // WebSocket.send() throws InvalidStateError while the socket is still
+    // CONNECTING, and the terminal is interactive from the moment it renders.
+    stream.send("who")
+    stream.send("ami\n")
+    expect(socket.sent).toEqual([])
+
+    socket.onopen?.()
+
+    expect(socket.sent).toHaveLength(1)
+    expect(decodeSent(socket.sent[0])).toBe("whoami\n")
+  })
+
+  it("discards what was held when the socket closes before it opens", () => {
+    const onClose = vi.fn()
+    const { stream, socket } = open({ onClose })
+
+    stream.send("never-sent")
+    socket.onclose?.({ code: 1006, reason: "refused" })
+    socket.onopen?.()
+
+    expect(socket.sent).toEqual([])
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it("drops writes once closed instead of throwing at the caller", () => {
     const { stream, socket } = open()
+    socket.onopen?.()
 
     stream.close()
     stream.send("ignored")

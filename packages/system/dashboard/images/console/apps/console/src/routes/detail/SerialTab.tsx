@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react"
 import { Monitor, RotateCcw, Terminal as TerminalIcon } from "lucide-react"
-import { Terminal } from "@xterm/xterm"
-import { FitAddon } from "@xterm/addon-fit"
 import { useK8sList, type K8sResource } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { releasePrefix } from "../../lib/app-definitions.ts"
 import { openSerialStream, serialConsoleUrl, type SerialStream } from "../../lib/serial-stream.ts"
-import "@xterm/xterm/css/xterm.css"
+
+type ConnectionPhase = "connecting" | "connected" | "closed"
 
 interface SerialTabProps {
   ad: ApplicationDefinition
@@ -38,7 +37,7 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
   const isRunning = powerStatus === "Running"
 
   const hostRef = useRef<HTMLDivElement>(null)
-  const [connected, setConnected] = useState(false)
+  const [phase, setPhase] = useState<ConnectionPhase>("connecting")
   const [error, setError] = useState<string | null>(null)
   const [connectionKey, setConnectionKey] = useState(0)
 
@@ -46,8 +45,40 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
     const host = hostRef.current
     if (!host || appKind !== "VMInstance" || !isRunning || !ns) return
 
-    setConnected(false)
+    setPhase("connecting")
     setError(null)
+
+    let disposed = false
+    let dispose = () => {}
+
+    // xterm is a few hundred KB and nothing outside this tab needs it, so it is
+    // loaded on demand — the same shape VncTab uses for noVNC.
+    void Promise.all([
+      import("@xterm/xterm"),
+      import("@xterm/addon-fit"),
+      import("@xterm/xterm/css/xterm.css"),
+    ])
+      .then(([{ Terminal }, { FitAddon }]) => {
+        if (disposed) return
+        dispose = startConsole(host, Terminal, FitAddon)
+      })
+      .catch((err: Error) => {
+        if (!disposed) {
+          setPhase("closed")
+          setError(`Failed to load the terminal: ${err.message}`)
+        }
+      })
+
+    return () => {
+      disposed = true
+      dispose()
+    }
+
+    function startConsole(
+      host: HTMLDivElement,
+      Terminal: typeof import("@xterm/xterm").Terminal,
+      FitAddon: typeof import("@xterm/addon-fit").FitAddon,
+    ) {
 
     const terminal = new Terminal({
       cursorBlink: true,
@@ -83,15 +114,15 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
     })
 
     stream = openSerialStream(
-      serialConsoleUrl(window.location.protocol, window.location.host, ns, vmName),
+      serialConsoleUrl(window.location.protocol, window.location.host, ns!, vmName),
       {
         onOpen: () => {
-          setConnected(true)
+          setPhase("connected")
           terminal.focus()
         },
         onData: (text) => terminal.write(text),
         onClose: ({ code, reason }) => {
-          setConnected(false)
+          setPhase("closed")
           if (code !== 1000) setError(reason || `connection closed (${code})`)
         },
       },
@@ -107,6 +138,7 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
       input.dispose()
       stream?.close()
       terminal.dispose()
+    }
     }
   }, [appKind, ns, vmName, isRunning, connectionKey])
 
@@ -145,8 +177,11 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
     )
   }
 
-  const statusColor = connected ? "bg-emerald-500" : error ? "bg-red-500" : "bg-amber-400"
-  const statusLabel = connected ? "Connected" : error ? "Disconnected" : "Connecting…"
+  const connected = phase === "connected"
+  const statusColor =
+    phase === "connected" ? "bg-emerald-500" : phase === "closed" ? "bg-red-500" : "bg-amber-400"
+  const statusLabel =
+    phase === "connected" ? "Connected" : phase === "closed" ? "Disconnected" : "Connecting…"
 
   return (
     <div className="flex h-full flex-col p-4">
