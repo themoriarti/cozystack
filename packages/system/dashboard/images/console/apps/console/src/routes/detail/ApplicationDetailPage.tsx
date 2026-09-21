@@ -33,6 +33,7 @@ import { IngressesTab } from "./IngressesTab.tsx"
 import { SecretsTab } from "./SecretsTab.tsx"
 import { EventsTab } from "./EventsTab.tsx"
 import { VncTab } from "./VncTab.tsx"
+import { SerialTab } from "./SerialTab.tsx"
 import { VMPowerControls } from "./VMPowerControls.tsx"
 import { useResourceBasePath } from "../../lib/portal.ts"
 import { useResourcePresence } from "./use-resource-presence.ts"
@@ -132,6 +133,7 @@ export function ApplicationDetailPage() {
       { to: `${base}/workloads`, label: "Workloads", end: false },
       { to: `${base}/services`, label: "Services", end: false },
       { to: `${base}/events`, label: "Events", end: false },
+      { to: `${base}/serial`, label: "Serial", end: false },
       { to: `${base}/vnc`, label: "VNC", end: false },
     )
   } else {
@@ -229,6 +231,7 @@ export function ApplicationDetailPage() {
             path="events"
             element={<EventsTab ad={ad} instance={instance} />}
           />
+          <Route path="serial" element={<SerialTab ad={ad} instance={instance} />} />
           <Route path="vnc" element={<VncTab ad={ad} instance={instance} />} />
         </Routes>
       </div>
