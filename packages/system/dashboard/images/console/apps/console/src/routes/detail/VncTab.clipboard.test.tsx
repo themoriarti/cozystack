@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
 import { screen, waitFor, cleanup, act, fireEvent } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { K8sClient } from "@cozystack/k8s-client"
 import { renderWithK8sProvider } from "../../test-utils/render.tsx"
 import { VncTab } from "./VncTab.tsx"
@@ -244,6 +245,29 @@ describe("VncTab pasted text", () => {
     })
 
     expect(await screen.findByText(/paste stopped after \d+/i)).toBeInTheDocument()
+  })
+
+  it("abandons the paste when the session is torn down and rebuilt", async () => {
+    const { rfb, sink } = await connectedSession()
+
+    pressPaste()
+    paste(sink, "abcdefghijklmnop")
+    await waitFor(() => expect(rfb.sendKey).toHaveBeenCalled())
+
+    // Reconnect tears the session down and builds a new one. The paste
+    // belongs to the old session and must not continue into either.
+    await userEvent.click(screen.getByTitle("Reconnect"))
+    await waitFor(() => expect(FakeRFB.instances).toHaveLength(2))
+    const replacement = FakeRFB.instances[1]
+    act(() => {
+      replacement.dispatchEvent(new CustomEvent("connect"))
+    })
+
+    const beforeWait = rfb.sendKey.mock.calls.length
+    await new Promise((resolve) => setTimeout(resolve, 250))
+
+    expect(replacement.sendKey).not.toHaveBeenCalled()
+    expect(rfb.sendKey.mock.calls.length - beforeWait).toBeLessThanOrEqual(2)
   })
 
   it("keeps nothing of the pasted text in the sink", async () => {

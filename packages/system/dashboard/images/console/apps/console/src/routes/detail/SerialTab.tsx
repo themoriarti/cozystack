@@ -7,6 +7,15 @@ import { openSerialStream, serialConsoleUrl, type SerialStream } from "../../lib
 
 type ConnectionPhase = "connecting" | "connected" | "closed"
 
+async function copySelection(text: string) {
+  try {
+    await navigator.clipboard?.writeText(text)
+  } catch {
+    // No clipboard permission, or a page served over plain http where the API
+    // is absent. The selection stays selected, so the browser's own copy works.
+  }
+}
+
 interface SerialTabProps {
   ad: ApplicationDefinition
   instance: ApplicationInstance
@@ -100,16 +109,27 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
 
     let stream: SerialStream | null = null
 
-    // Copy keeps the terminal's own meaning of Ctrl+C (interrupt) intact, so
-    // copying goes through the shortcut terminals use for it. Paste needs no
-    // handling: xterm keeps a focused textarea and the browser pastes into it.
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true
+
+      // Copy keeps the terminal's own meaning of Ctrl+C (interrupt) intact, so
+      // copying goes through the chord terminals use for it.
       const copyChord = (event.ctrlKey && event.shiftKey) || event.metaKey
       if (copyChord && event.code === "KeyC" && terminal.hasSelection()) {
-        void navigator.clipboard.writeText(terminal.getSelection())
+        void copySelection(terminal.getSelection())
         return false
       }
+
+      // Cmd+V and Shift+Insert paste by themselves, but Ctrl+V does not:
+      // xterm turns Ctrl with a letter into a control byte and cancels the
+      // keydown, so the browser's paste never runs and the guest receives SYN
+      // (0x16) instead. Handing the event back to the browser costs the
+      // terminal's quoted-insert, which is the same trade the VNC console
+      // makes for the same shortcut.
+      if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === "KeyV") {
+        return false
+      }
+
       return true
     })
 

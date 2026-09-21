@@ -84,6 +84,7 @@ export function openSerialStream(
   // flushed rather than thrown away.
   let state: "connecting" | "open" | "closed" = "connecting"
   let pending = ""
+  let errored = false
 
   const finish = (event: { code: number; reason: string }) => {
     if (state === "closed") return
@@ -101,12 +102,19 @@ export function openSerialStream(
     handlers.onOpen?.()
   }
   socket.onmessage = (event) => {
+    if (state === "closed") return
     const bytes = toBytes(event.data)
     if (!bytes) return
     handlers.onData?.(decoder.decode(bytes, { stream: true }))
   }
-  socket.onerror = () => finish({ code: 1006, reason: "connection error" })
-  socket.onclose = (event) => finish(event)
+  // onerror carries no reason and is always followed by onclose, which does:
+  // reporting the synthetic one first would hide "1008 Forbidden" behind
+  // "connection error".
+  socket.onerror = () => {
+    errored = true
+  }
+  socket.onclose = (event) =>
+    finish(errored && event.code === 1005 ? { code: 1006, reason: "connection error" } : event)
 
   return {
     send(text: string) {

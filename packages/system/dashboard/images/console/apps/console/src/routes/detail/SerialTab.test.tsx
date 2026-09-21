@@ -254,6 +254,44 @@ describe("SerialTab console stream", () => {
     expect(writeText).toHaveBeenCalledWith("copied from the guest")
   })
 
+  it("hands Ctrl+V back to the browser instead of letting xterm send SYN", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+    renderWithK8sProvider(<SerialTab ad={makeAd("VMInstance")} instance={instance} />, {
+      client: makeClient(),
+    })
+
+    await waitFor(() => expect(terminals).toHaveLength(1))
+    const terminal = terminals[0].instance as {
+      keyHandler: ((event: KeyboardEvent) => boolean) | null
+    }
+
+    // xterm turns Ctrl with a letter into a control byte and cancels the
+    // keydown, which kills the browser's own paste. Returning false keeps
+    // xterm out of it.
+    const handled = terminal.keyHandler?.(
+      new KeyboardEvent("keydown", { code: "KeyV", ctrlKey: true }),
+    )
+
+    expect(handled).toBe(false)
+  })
+
+  it("leaves other Ctrl chords to the terminal", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+    renderWithK8sProvider(<SerialTab ad={makeAd("VMInstance")} instance={instance} />, {
+      client: makeClient(),
+    })
+
+    await waitFor(() => expect(terminals).toHaveLength(1))
+    const terminal = terminals[0].instance as {
+      keyHandler: ((event: KeyboardEvent) => boolean) | null
+    }
+
+    // Ctrl+D, Ctrl+Z and friends are the terminal's business.
+    expect(
+      terminal.keyHandler?.(new KeyboardEvent("keydown", { code: "KeyD", ctrlKey: true })),
+    ).toBe(true)
+  })
+
   it("leaves the copy chord to the guest when nothing is selected", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })

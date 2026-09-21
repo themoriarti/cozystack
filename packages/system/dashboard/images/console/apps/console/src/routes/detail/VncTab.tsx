@@ -190,7 +190,11 @@ export function VncTab({ ad, instance }: VncTabProps) {
         setPaste({ kind: "typing", typed: 0, total: keystrokes.length })
         const result = await typeKeystrokes(sender, keystrokes, {
           signal: controller.signal,
-          isConnected: () => senderRef.current !== null,
+          // Identity rather than liveness. The cleanup below aborts an
+          // in-flight paste, so a replacement session cannot be reached in
+          // practice; asking whether this sender is still the current one
+          // costs nothing and does not depend on that ordering holding.
+          isConnected: () => senderRef.current === sender,
           onProgress: (typed, total) => setPaste({ kind: "typing", typed, total }),
         })
         pasteAbortRef.current = null
