@@ -1,4 +1,4 @@
-import { XK_ISO_LEVEL3_SHIFT, XK_SHIFT_L, type Keystroke } from "./vnc-keymap.ts"
+import { XK_SHIFT_L, type Keystroke } from "./vnc-keymap.ts"
 
 /**
  * Feed a planned key sequence to an RFB session.
@@ -29,7 +29,6 @@ export interface TypeKeystrokesResult {
 export const DEFAULT_KEY_DELAY_MS = 25
 
 const SHIFT_KEY = { keysym: XK_SHIFT_L, code: "ShiftLeft" }
-const ALT_GR_KEY = { keysym: XK_ISO_LEVEL3_SHIFT, code: "AltRight" }
 
 function timerSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -49,7 +48,6 @@ export async function typeKeystrokes(
   } = options
 
   let heldShift = false
-  let heldAltGr = false
   let typed = 0
 
   const press = async (keysym: number, code: string, down: boolean) => {
@@ -58,10 +56,6 @@ export async function typeKeystrokes(
   }
 
   const releaseModifiers = async () => {
-    if (heldAltGr) {
-      await press(ALT_GR_KEY.keysym, ALT_GR_KEY.code, false)
-      heldAltGr = false
-    }
     if (heldShift) {
       await press(SHIFT_KEY.keysym, SHIFT_KEY.code, false)
       heldShift = false
@@ -80,10 +74,6 @@ export async function typeKeystrokes(
     if (heldShift !== stroke.shift) {
       await press(SHIFT_KEY.keysym, SHIFT_KEY.code, stroke.shift)
       heldShift = stroke.shift
-    }
-    if (heldAltGr !== stroke.altGr) {
-      await press(ALT_GR_KEY.keysym, ALT_GR_KEY.code, stroke.altGr)
-      heldAltGr = stroke.altGr
     }
 
     await press(stroke.keysym, stroke.code, true)

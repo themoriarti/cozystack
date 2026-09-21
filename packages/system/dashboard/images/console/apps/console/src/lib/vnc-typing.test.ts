@@ -30,7 +30,7 @@ describe("typeKeystrokes", () => {
   it("presses and releases each key in order", async () => {
     const { sender, sent } = recorder()
 
-    const result = await typeKeystrokes(sender, planKeystrokes("ab", "en-us").keystrokes, {
+    const result = await typeKeystrokes(sender, planKeystrokes("ab").keystrokes, {
       sleep: noSleep,
     })
 
@@ -41,7 +41,7 @@ describe("typeKeystrokes", () => {
   it("holds Shift across a run of shifted characters and releases it once", async () => {
     const { sender, sent } = recorder()
 
-    await typeKeystrokes(sender, planKeystrokes("ABc", "en-us").keystrokes, { sleep: noSleep })
+    await typeKeystrokes(sender, planKeystrokes("ABc").keystrokes, { sleep: noSleep })
 
     expect(trace(sent)).toEqual([
       "ShiftLeft↓",
@@ -58,25 +58,16 @@ describe("typeKeystrokes", () => {
   it("releases a held modifier when the text ends", async () => {
     const { sender, sent } = recorder()
 
-    await typeKeystrokes(sender, planKeystrokes("A", "en-us").keystrokes, { sleep: noSleep })
+    await typeKeystrokes(sender, planKeystrokes("A").keystrokes, { sleep: noSleep })
 
     expect(trace(sent).at(-1)).toBe("ShiftLeft↑")
-  })
-
-  it("drives AltGr through the right-hand Alt key", async () => {
-    const { sender, sent } = recorder()
-
-    await typeKeystrokes(sender, planKeystrokes("@", "de").keystrokes, { sleep: noSleep })
-
-    expect(trace(sent)).toEqual(["AltRight↓", "KeyQ↓", "KeyQ↑", "AltRight↑"])
-    expect(sent[0].keysym).toBe(0xfe03)
   })
 
   it("waits between key events so the guest keyboard buffer keeps up", async () => {
     const { sender } = recorder()
     const sleep = vi.fn(() => Promise.resolve())
 
-    await typeKeystrokes(sender, planKeystrokes("ab", "en-us").keystrokes, {
+    await typeKeystrokes(sender, planKeystrokes("ab").keystrokes, {
       sleep,
       delayMs: 7,
     })
@@ -89,7 +80,7 @@ describe("typeKeystrokes", () => {
     const { sender } = recorder()
     const onProgress = vi.fn()
 
-    await typeKeystrokes(sender, planKeystrokes("abc", "en-us").keystrokes, {
+    await typeKeystrokes(sender, planKeystrokes("abc").keystrokes, {
       sleep: noSleep,
       onProgress,
     })
@@ -111,7 +102,7 @@ describe("typeKeystrokes interruption", () => {
       return Promise.resolve()
     }
 
-    const result = await typeKeystrokes(sender, planKeystrokes("ABC", "en-us").keystrokes, {
+    const result = await typeKeystrokes(sender, planKeystrokes("ABC").keystrokes, {
       sleep,
       signal: controller.signal,
     })
@@ -125,7 +116,7 @@ describe("typeKeystrokes interruption", () => {
     const { sender, sent } = recorder()
     let connected = true
 
-    const result = await typeKeystrokes(sender, planKeystrokes("abc", "en-us").keystrokes, {
+    const result = await typeKeystrokes(sender, planKeystrokes("abc").keystrokes, {
       sleep: () => {
         connected = false
         return Promise.resolve()
@@ -141,7 +132,7 @@ describe("typeKeystrokes interruption", () => {
     const { sender, sent } = recorder()
     let connected = true
 
-    await typeKeystrokes(sender, planKeystrokes("AB", "en-us").keystrokes, {
+    await typeKeystrokes(sender, planKeystrokes("AB").keystrokes, {
       sleep: () => {
         connected = false
         return Promise.resolve()
@@ -155,7 +146,7 @@ describe("typeKeystrokes interruption", () => {
   it("sends nothing at all when the session is already down", async () => {
     const { sender, sent } = recorder()
 
-    const result = await typeKeystrokes(sender, planKeystrokes("a", "en-us").keystrokes, {
+    const result = await typeKeystrokes(sender, planKeystrokes("a").keystrokes, {
       sleep: noSleep,
       isConnected: () => false,
     })

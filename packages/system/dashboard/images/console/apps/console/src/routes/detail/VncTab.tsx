@@ -3,13 +3,8 @@ import { Monitor, Maximize2, Minimize2, Power, RotateCcw, Terminal } from "lucid
 import { useK8sList, type K8sResource } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { releasePrefix } from "../../lib/app-definitions.ts"
-import { planKeystrokes, type KeyboardLayout } from "../../lib/vnc-keymap.ts"
+import { planKeystrokes } from "../../lib/vnc-keymap.ts"
 import { typeKeystrokes, type KeySender } from "../../lib/vnc-typing.ts"
-
-// The guest decides what a scancode means, and nothing in the RFB stream tells
-// us which layout it has active. US is the one that reaches a shell prompt on a
-// default cloud image.
-const GUEST_LAYOUT: KeyboardLayout = "en-us"
 
 // How long a one-off paste notice stays in the toolbar before the status
 // returns to the connection state.
@@ -180,7 +175,7 @@ export function VncTab({ ad, instance }: VncTabProps) {
     if (!sender || pastingRef.current) return
     pastingRef.current = true
     try {
-      const { keystrokes, unsupported } = planKeystrokes(text, GUEST_LAYOUT)
+      const { keystrokes, unsupported } = planKeystrokes(text)
       if (keystrokes.length > 0) {
         setPaste({ kind: "typing", typed: 0, total: keystrokes.length })
         await typeKeystrokes(sender, keystrokes, {
