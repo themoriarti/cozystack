@@ -128,13 +128,16 @@ export function ApplicationDetailPage() {
     // VMDisk: storage-only resource, no workloads/services/ingresses/secrets
     tabs.push({ to: `${base}/events`, label: "Events", end: false })
   } else if (kind === "VMInstance") {
-    // VMInstance: VM-specific tabs (no ingresses/secrets)
+    // VMInstance: VM-specific tabs (no ingresses/secrets). The consoles come
+    // first because reaching one is why people open a VM. Serial leads: text
+    // goes in and out of it directly, while VNC is the one to use where the
+    // serial port cannot reach — a desktop, a bootloader, Windows.
     tabs.push(
+      { to: `${base}/serial`, label: "Console", end: false },
+      { to: `${base}/vnc`, label: "VNC", end: false },
       { to: `${base}/workloads`, label: "Workloads", end: false },
       { to: `${base}/services`, label: "Services", end: false },
       { to: `${base}/events`, label: "Events", end: false },
-      { to: `${base}/serial`, label: "Serial", end: false },
-      { to: `${base}/vnc`, label: "VNC", end: false },
     )
   } else {
     // Other resources: offer only the tabs the instance has content for.
