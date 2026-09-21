@@ -1,8 +1,29 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Monitor, Maximize2, Minimize2, Power, RotateCcw, Terminal } from "lucide-react"
 import { useK8sList, type K8sResource } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { releasePrefix } from "../../lib/app-definitions.ts"
+import { planKeystrokes, type KeyboardLayout } from "../../lib/vnc-keymap.ts"
+import { typeKeystrokes, type KeySender } from "../../lib/vnc-typing.ts"
+
+// The guest decides what a scancode means, and nothing in the RFB stream tells
+// us which layout it has active. US is the one that reaches a shell prompt on a
+// default cloud image.
+const GUEST_LAYOUT: KeyboardLayout = "en-us"
+
+// How long a one-off paste notice stays in the toolbar before the status
+// returns to the connection state.
+const PASTE_NOTICE_MS = 5000
+
+// How long the hidden sink may hold the keyboard while waiting for the paste
+// the shortcut should have produced.
+const SINK_FOCUS_TIMEOUT_MS = 300
+
+type PasteState =
+  | { kind: "idle" }
+  | { kind: "typing"; typed: number; total: number }
+  | { kind: "blocked" }
+  | { kind: "skipped"; count: number }
 
 interface VncTabProps {
   ad: ApplicationDefinition
@@ -49,6 +70,11 @@ export function VncTab({ ad, instance }: VncTabProps) {
   const [fullscreen, setFullscreen] = useState(false)
   const [connectionKey, setConnectionKey] = useState(0)
   const [desktopSize, setDesktopSize] = useState<{ width: number; height: number } | null>(null)
+  const [paste, setPaste] = useState<PasteState>({ kind: "idle" })
+  const senderRef = useRef<KeySender | null>(null)
+  const pastingRef = useRef(false)
+  const pasteSinkRef = useRef<HTMLTextAreaElement>(null)
+  const sinkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!containerRef.current || appKind !== "VMInstance" || !isRunning) return
@@ -59,6 +85,8 @@ export function VncTab({ ad, instance }: VncTabProps) {
     setLoading(true)
     setError(null)
     setConnected(false)
+    setPaste({ kind: "idle" })
+    senderRef.current = null
 
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:"
     const wsUrl = `${wsProtocol}//${window.location.host}/k8s/apis/subresources.kubevirt.io/v1/namespaces/${ns}/virtualmachineinstances/${vmName}/vnc`
@@ -82,6 +110,10 @@ export function VncTab({ ad, instance }: VncTabProps) {
             setLoading(false)
             setConnected(true)
             setError(null)
+            senderRef.current = {
+              sendKey: (keysym: number, code: string, down: boolean) =>
+                rfb.sendKey(keysym, code, down),
+            }
             requestAnimationFrame(() => {
               const canvas = el.querySelector("canvas")
               if (canvas) setDesktopSize({ width: canvas.width, height: canvas.height })
@@ -93,6 +125,7 @@ export function VncTab({ ad, instance }: VncTabProps) {
             if (rfbRef.current !== rfb) return
             setConnected(false)
             setLoading(false)
+            senderRef.current = null
             if (!e.detail?.clean) setError(`Connection lost: ${e.detail?.reason ?? "unknown"}`)
           })
 
@@ -101,6 +134,7 @@ export function VncTab({ ad, instance }: VncTabProps) {
             if (rfbRef.current !== rfb) return
             setConnected(false)
             setLoading(false)
+            senderRef.current = null
             setError(`Security failure: ${e.detail?.status ?? "authentication failed"}`)
           })
 
@@ -137,6 +171,100 @@ export function VncTab({ ad, instance }: VncTabProps) {
     document.addEventListener("fullscreenchange", handler)
     return () => document.removeEventListener("fullscreenchange", handler)
   }, [])
+
+  // There is no clipboard channel behind this console: qemu only forwards RFB
+  // cut-text to a vdagent chardev and virt-launcher attaches none. So a paste
+  // is typed, one key at a time, on the layout the guest has active.
+  const typeIntoGuest = useCallback(async (text: string) => {
+    const sender = senderRef.current
+    if (!sender || pastingRef.current) return
+    pastingRef.current = true
+    try {
+      const { keystrokes, unsupported } = planKeystrokes(text, GUEST_LAYOUT)
+      if (keystrokes.length > 0) {
+        setPaste({ kind: "typing", typed: 0, total: keystrokes.length })
+        await typeKeystrokes(sender, keystrokes, {
+          isConnected: () => senderRef.current !== null,
+          onProgress: (typed, total) => setPaste({ kind: "typing", typed, total }),
+        })
+      }
+      setPaste(
+        unsupported.length > 0
+          ? { kind: "skipped", count: unsupported.length }
+          : { kind: "idle" },
+      )
+    } finally {
+      pastingRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!connected) return
+
+    const handler = (e: KeyboardEvent) => {
+      if (e.code !== "KeyV" || e.altKey || e.shiftKey) return
+      if (!e.ctrlKey && !e.metaKey) return
+      // Only when the console itself holds the keyboard — a paste into the
+      // page's own inputs must keep working.
+      const el = containerRef.current
+      const sink = pasteSinkRef.current
+      if (!el || !sink || !document.activeElement) return
+      if (!el.contains(document.activeElement)) return
+
+      // Deliberately no preventDefault: the browser hands the clipboard over
+      // for free when the paste lands in a focused text field, while
+      // navigator.clipboard.readText() would put a permission prompt between
+      // the user and every paste. Moving the focus here, inside the keydown,
+      // is what redirects the paste into the sink.
+      //
+      // stopPropagation is what keeps noVNC from seeing the shortcut: it calls
+      // preventDefault() on keydown, which would cancel the paste outright and
+      // send the guest a Ctrl+V it cannot use.
+      e.stopPropagation()
+      sink.value = ""
+      sink.focus()
+
+      // An empty or refused clipboard raises no paste event at all, and the
+      // console would sit there with the keyboard parked in an invisible box.
+      if (sinkTimerRef.current) clearTimeout(sinkTimerRef.current)
+      sinkTimerRef.current = setTimeout(() => {
+        sinkTimerRef.current = null
+        if (document.activeElement === sink) rfbRef.current?.focus()
+      }, SINK_FOCUS_TIMEOUT_MS)
+    }
+
+    document.addEventListener("keydown", handler, true)
+    return () => document.removeEventListener("keydown", handler, true)
+  }, [connected])
+
+  useEffect(
+    () => () => {
+      if (sinkTimerRef.current) clearTimeout(sinkTimerRef.current)
+    },
+    [],
+  )
+
+  const handleSinkPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    e.preventDefault()
+    if (sinkTimerRef.current) {
+      clearTimeout(sinkTimerRef.current)
+      sinkTimerRef.current = null
+    }
+    const text = e.clipboardData?.getData("text/plain") ?? ""
+    rfbRef.current?.focus()
+    if (text) void typeIntoGuest(text)
+  }
+
+  const handleSinkBlur = () => {
+    if (pasteSinkRef.current) pasteSinkRef.current.value = ""
+  }
+
+  // One-off notices clear themselves; a paste in progress reports until it ends.
+  useEffect(() => {
+    if (paste.kind !== "blocked" && paste.kind !== "skipped") return
+    const timer = setTimeout(() => setPaste({ kind: "idle" }), PASTE_NOTICE_MS)
+    return () => clearTimeout(timer)
+  }, [paste])
 
   if (appKind !== "VMInstance") {
     return (
@@ -195,7 +323,15 @@ export function VncTab({ ad, instance }: VncTabProps) {
   }
 
   const statusColor = connected ? "bg-emerald-500" : loading ? "bg-amber-400" : "bg-red-500"
-  const statusLabel = connected ? "Connected" : loading ? "Connecting…" : "Disconnected"
+  const connectionLabel = connected ? "Connected" : loading ? "Connecting…" : "Disconnected"
+  const statusLabel =
+    paste.kind === "typing"
+      ? `Pasting ${paste.typed}/${paste.total}`
+      : paste.kind === "blocked"
+        ? "Clipboard blocked"
+        : paste.kind === "skipped"
+          ? `${paste.count} chars not on layout`
+          : connectionLabel
 
   return (
     <div className="flex h-full flex-col p-4">
@@ -305,6 +441,17 @@ export function VncTab({ ad, instance }: VncTabProps) {
               </button>
             </div>
           )}
+
+          {/* Invisible sink that catches the browser paste. It sits outside the
+              noVNC container, which is emptied on every reconnect. */}
+          <textarea
+            ref={pasteSinkRef}
+            onPaste={handleSinkPaste}
+            onBlur={handleSinkBlur}
+            tabIndex={-1}
+            aria-hidden="true"
+            className="pointer-events-none absolute top-0 left-0 h-px w-px resize-none border-0 p-0 opacity-0 outline-none"
+          />
 
           <div ref={containerRef} className="absolute inset-0" />
         </div>
