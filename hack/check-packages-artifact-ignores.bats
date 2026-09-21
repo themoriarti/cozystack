@@ -18,6 +18,13 @@ INSTALLER_MAKEFILE="$REPO_ROOT/packages/core/installer/Makefile"
 # The upstream defaults, as printed by `flux push artifact --help`. The second
 # test holds this copy against the installed flux so an upstream addition is
 # noticed instead of being silently left out of the artifact's ignore list.
+#
+# That second test needs flux, and the unit job has none, so it re-checks the
+# copy only where flux is installed -- a developer machine, or a lane that
+# installs it. It returns 0 rather than failing there, because a missing tool
+# is not a broken invariant; the first test is the one that holds on every
+# runner. `skip` is not available: hack/cozytest.sh is not bats and defines no
+# such function, so calling it aborts the suite instead of passing over a test.
 FLUX_DEFAULT_IGNORES=".git/,.gitignore,.gitmodules,.gitattributes,*.jpg,*.jpeg,*.gif,*.png,*.wmv,*.flv,*.tar.gz,*.zip"
 
 ignore_paths_value() {
@@ -46,7 +53,10 @@ EOF
 }
 
 @test "the recorded flux defaults match the installed flux" {
-  command -v flux >/dev/null || skip "flux not installed; the recorded defaults cannot be re-checked"
+  command -v flux >/dev/null || {
+    echo "flux not installed; the recorded defaults NOT re-checked in this run." >&2
+    return 0
+  }
 
   # `--ignore-paths strings   set paths ... (default [a,b,c])`
   installed="$(flux push artifact --help 2>&1 \
