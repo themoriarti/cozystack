@@ -219,12 +219,18 @@ spec:
                     exit 1
                   fi
                   for e in \${ends}; do
-                    p=\${e%:*}; p=\${p##*:}
+                    ekey=\${e%:*}
+                    p=\${ekey##*:}
                     end=\${e##*:}
                     begin=0
                     for b in \${begins}; do
-                      bp=\${b%:*}; bp=\${bp##*:}
-                      if [ "\${bp}" = "\${p}" ]; then begin=\${b##*:}; break; fi
+                      # Match the whole topic:partition key, not the partition
+                      # index alone. Keyed on the index, a line belonging to
+                      # another topic supplies this partition's begin offset and
+                      # silently shifts the cut - and the drain check below
+                      # cannot see it, because n is derived from that same wrong
+                      # begin. This holds whatever order the listing arrives in.
+                      if [ "\${b%:*}" = "\${ekey}" ]; then begin=\${b##*:}; break; fi
                     done
                     n=\$((end - begin))
                     printf '%s %s %s %s\n' "\${t}" "\${p}" "\${begin}" "\${end}" >> "\${MANIFEST}"
@@ -323,12 +329,11 @@ spec:
                   cbegins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2)
                   held=0
                   for e in \${cends}; do
-                    p=\${e%:*}; p=\${p##*:}
+                    ekey=\${e%:*}
                     eo=\${e##*:}
                     bo=0
                     for b in \${cbegins}; do
-                      bp=\${b%:*}; bp=\${bp##*:}
-                      if [ "\${bp}" = "\${p}" ]; then bo=\${b##*:}; break; fi
+                      if [ "\${b%:*}" = "\${ekey}" ]; then bo=\${b##*:}; break; fi
                     done
                     held=\$((held + eo - bo))
                   done
@@ -344,6 +349,20 @@ spec:
                   [ -e "\${f}" ] || continue
                   base=\${f##*/data-}; base=\${base%.tsv}
                   t=\${base%-*}
+                  fp=\${base##*-}
+                  # The file names come out of the same untrusted tarball as the
+                  # manifest, so hold them to it. A data file naming a topic the
+                  # manifest never listed would otherwise be replayed into a
+                  # topic that skipped the create, shape, emptiness and
+                  # post-replay checks, and the restore would still report
+                  # success.
+                  case " \${SEEN} " in
+                    *" \${t} "*) ;;
+                    *) echo "backup contains data file \${f##*/} for topic \${t}, which the manifest does not list; refusing to restore an inconsistent backup" >&2; exit 1 ;;
+                  esac
+                  case "\${fp}" in
+                    ''|*[!0-9]*) echo "backup contains data file \${f##*/} with a non-numeric partition suffix; refusing to restore an inconsistent backup" >&2; exit 1 ;;
+                  esac
                   "\${BIN}"/kafka-console-producer.sh --bootstrap-server "\${BOOT}" \
                     --topic "\${t}" --property parse.key=true < "\${f}"
                 done
@@ -367,12 +386,11 @@ spec:
                   vbegins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2)
                   have=0
                   for e in \${vends}; do
-                    p=\${e%:*}; p=\${p##*:}
+                    ekey=\${e%:*}
                     eo=\${e##*:}
                     bo=0
                     for b in \${vbegins}; do
-                      bp=\${b%:*}; bp=\${bp##*:}
-                      if [ "\${bp}" = "\${p}" ]; then bo=\${b##*:}; break; fi
+                      if [ "\${b%:*}" = "\${ekey}" ]; then bo=\${b##*:}; break; fi
                     done
                     have=\$((have + eo - bo))
                   done

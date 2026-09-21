@@ -23,11 +23,12 @@ export KAFKA_RESTORE_NAME="${KAFKA_RESTORE_NAME:-kafka-restore}"
 # and the run fails on its own (the partition-set guard sees the decoy's
 # partitions, or the in-place delete takes the decoy with it).
 #
-# The decoy sorts BEFORE the real topic ("-" is 0x2D, "." is 0x2E), which is
-# what makes the two --describe reads testable too: those pipe through
-# `head -1`, so an unpinned describe would read the decoy's PartitionCount
-# rather than the topic's. A decoy sorting after (say "ordersXv1") leaves
-# those two pins unexercised.
+# What the decoy reliably proves: the offset listing (the partition-set guard
+# counts its partitions), the in-place delete (it disappears), and the two
+# record counts (they pick up its records). It does NOT prove the two
+# PartitionCount reads: kafka-topics --describe yields topics in the admin
+# client result-map order rather than sorted, so which one their head -1 sees
+# when a pin is missing is not something to lean on.
 export TOPIC="${TOPIC:-orders.v1}"
 export DECOY_TOPIC="${DECOY_TOPIC:-orders-v1}"
 export DECOY_COUNT="${DECOY_COUNT:-5}"
@@ -309,14 +310,15 @@ topic_message_count() {
         [ -n "$ends" ] || exit 0
         total=0
         for e in $ends; do
-            ep=${e%:*}; ep=${ep##*:}; eo=${e##*:}
+            ekey=${e%:*}; eo=${e##*:}
             # Default the begin offset to 0 rather than skipping the partition:
             # a partition missing from "begins" would otherwise contribute
-            # nothing and silently undercount the topic. Matches the strategy.
+            # nothing and silently undercount the topic. Match on the whole
+            # topic:partition key so a line from another topic cannot supply
+            # the begin offset for this partition. Matches the strategy.
             bo=0
             for b in $begins; do
-                bp=${b%:*}; bp=${bp##*:}
-                if [ "$bp" = "$ep" ]; then bo=${b##*:}; break; fi
+                if [ "${b%:*}" = "$ekey" ]; then bo=${b##*:}; break; fi
             done
             total=$((total + eo - bo))
         done
