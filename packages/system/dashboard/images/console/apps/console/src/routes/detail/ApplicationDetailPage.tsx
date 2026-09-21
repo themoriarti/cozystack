@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { lazy, Suspense, useMemo } from "react"
 import {
   Link,
   Navigate,
@@ -33,7 +33,10 @@ import { IngressesTab } from "./IngressesTab.tsx"
 import { SecretsTab } from "./SecretsTab.tsx"
 import { EventsTab } from "./EventsTab.tsx"
 import { VncTab } from "./VncTab.tsx"
-import { SerialTab } from "./SerialTab.tsx"
+// Lazy-loaded so xterm and its stylesheet are code-split into their own chunk,
+// fetched only when a VM's console is opened. Every dashboard page reaches this
+// file, and most of them never touch a VM.
+const SerialTab = lazy(() => import("./SerialTab.tsx").then((m) => ({ default: m.SerialTab })))
 import { VMPowerControls } from "./VMPowerControls.tsx"
 import { useResourceBasePath } from "../../lib/portal.ts"
 import { useResourcePresence } from "./use-resource-presence.ts"
@@ -234,7 +237,20 @@ export function ApplicationDetailPage() {
             path="events"
             element={<EventsTab ad={ad} instance={instance} />}
           />
-          <Route path="serial" element={<SerialTab ad={ad} instance={instance} />} />
+          <Route
+            path="serial"
+            element={
+              <Suspense
+                fallback={
+                  <div className="flex h-full items-center justify-center p-6">
+                    <Spinner />
+                  </div>
+                }
+              >
+                <SerialTab ad={ad} instance={instance} />
+              </Suspense>
+            }
+          />
           <Route path="vnc" element={<VncTab ad={ad} instance={instance} />} />
         </Routes>
       </div>

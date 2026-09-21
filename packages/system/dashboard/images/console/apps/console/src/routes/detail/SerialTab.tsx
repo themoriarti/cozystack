@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react"
 import { Monitor, RotateCcw, Terminal as TerminalIcon } from "lucide-react"
+import { Terminal } from "@xterm/xterm"
+import { FitAddon } from "@xterm/addon-fit"
+import "@xterm/xterm/css/xterm.css"
 import { useK8sList, type K8sResource } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { releasePrefix } from "../../lib/app-definitions.ts"
@@ -58,37 +61,6 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
     setPhase("connecting")
     setError(null)
 
-    let disposed = false
-    let dispose = () => {}
-
-    // xterm is a few hundred KB and nothing outside this tab needs it, so it is
-    // loaded on demand — the same shape VncTab uses for noVNC.
-    void Promise.all([
-      import("@xterm/xterm"),
-      import("@xterm/addon-fit"),
-      import("@xterm/xterm/css/xterm.css"),
-    ])
-      .then(([{ Terminal }, { FitAddon }]) => {
-        if (disposed) return
-        dispose = startConsole(host, Terminal, FitAddon)
-      })
-      .catch((err: Error) => {
-        if (!disposed) {
-          setPhase("closed")
-          setError(`Failed to load the terminal: ${err.message}`)
-        }
-      })
-
-    return () => {
-      disposed = true
-      dispose()
-    }
-
-    function startConsole(
-      host: HTMLDivElement,
-      Terminal: typeof import("@xterm/xterm").Terminal,
-      FitAddon: typeof import("@xterm/addon-fit").FitAddon,
-    ) {
 
     const terminal = new Terminal({
       cursorBlink: true,
@@ -166,7 +138,6 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
       input.dispose()
       stream?.close()
       terminal.dispose()
-    }
     }
   }, [appKind, ns, vmName, isRunning, connectionKey])
 
