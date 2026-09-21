@@ -338,7 +338,7 @@
         ],
         "properties": {
           "mode": {
-            "description": "Deployment mode: \"cluster\" renders a VTCluster; \"single\" renders a single-binary VTSingle for edge/dev/small clusters. WARNING — changing mode on a running backend is data-destructive and is not a live migration: it re-identifies the object, so \"single\"→\"cluster\" prunes the VTSingle and the operator garbage-collects its PVC (stored traces are lost), while \"cluster\"→\"single\" (or removing the entry) leaves the vtstorage PVCs Bound and billed until the whole Monitoring release is deleted. Switch deliberately, accepting the loss.",
+            "description": "Deployment mode: \"cluster\" renders a VTCluster; \"single\" renders a single-binary VTSingle for edge/dev/small clusters. Treat as immutable once a backend exists: mode selects which Kind is rendered under the same name, so changing it on a running backend re-identifies the object rather than reconfiguring it. \"single\"→\"cluster\" prunes the VTSingle and the operator garbage-collects its PVC (stored traces are lost); \"cluster\"→\"single\" (or removing the entry) leaves the vtstorage PVCs Bound and billed until the whole Monitoring release is deleted. The API cannot guard this (transition rules are not available on an array-item field), so this note is the only guard — migrate deliberately, accepting the loss.",
             "type": "string",
             "default": "cluster",
             "enum": [
@@ -361,8 +361,17 @@
           },
           "storage": {
             "description": "Persistent volume size.",
-            "type": "string",
-            "default": "10Gi"
+            "default": "10Gi",
+            "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "x-kubernetes-int-or-string": true
           },
           "storageClassName": {
             "description": "StorageClass used to store the data.",

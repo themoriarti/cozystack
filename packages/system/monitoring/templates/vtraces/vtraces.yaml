@@ -17,7 +17,7 @@
 apiVersion: operator.victoriametrics.com/v1
 kind: VTSingle
 metadata:
-  name: {{ .name }}
+  name: {{ .name | quote }}
 spec:
   managedMetadata:
     labels:
@@ -46,7 +46,7 @@ spec:
 apiVersion: operator.victoriametrics.com/v1
 kind: VTCluster
 metadata:
-  name: {{ .name }}
+  name: {{ .name | quote }}
 spec:
   managedMetadata:
     labels:

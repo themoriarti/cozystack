@@ -216,34 +216,22 @@
 {{- end -}}
 
 {{- /*
-  Validate the whole tracingStorages list once, before any VTCluster/VTSingle
-  or GrafanaDatasource renders. Each check guards a value that gets past the app
-  schema and the Kubernetes API server yet fails afterwards — a class the schema
-  alone cannot catch:
-
-    - name must be an RFC 1123 label. It is used verbatim as the metadata.name
-      of the VTCluster/VTSingle and of its GrafanaDatasource, so an invalid name
-      is a late admission error on the emitted object, not a config error the
-      operator surfaces.
-    - names must be unique. Each entry keys a CR and a datasource by name, so a
-      duplicate silently overwrites the first (last write wins in the range).
-    - retentionDiskUsageBytes must be a VictoriaMetrics BytesString. Upstream
-      types the field BytesString, whose UnmarshalJSON rejects anything outside
-      ^[0-9]+(kb|mb|gb|tb|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$ — notably NOT the `Gi`
-      grammar of the sibling `storage` field. The CRD carries no pattern for it
-      (unlike retentionPeriod), so an undecodable value is stored, the operator
-      never writes status.updateStatus, and the readiness gate holds the release
-      failing forever under remediation.retries: -1.
-
-  mode is validated here too (it was an inline guard in vtraces.yaml) so all
-  four checks share one pass over the list.
+  Values here reach the VictoriaTraces CRs unchecked: the installed CRDs are the
+  trimmed ones (crds.plain: false), so spec is x-kubernetes-preserve-unknown-fields.
+    - name is at most 42 characters: the operator names the StatefulSet
+      vtstorage-<name>, and each pod carries the label controller-revision-hash:
+      vtstorage-<name>-<hash> (hash up to 10 characters, value capped at 63).
+    - storage is not zero: in single mode the operator mounts an EmptyDir when
+      the requested size IsZero, so the store reports operational with no volume.
+    - retentionDiskUsageBytes uses the operator's BytesString grammar, which
+      rejects the Kubernetes-quantity `Gi` suffix that storage uses.
 */ -}}
 {{- define "monitoring.tracingStorages.validate" -}}
 {{- $seen := dict -}}
 {{- range $i, $s := .Values.tracingStorages -}}
 {{-   $name := $s.name | default "" | toString -}}
-{{-   if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) -}}
-{{-     fail (printf "monitoring: tracingStorages[%d].name %q must be a valid RFC 1123 label (lowercase alphanumeric and '-', starting and ending alphanumeric) — it is used verbatim as the VTCluster/VTSingle and GrafanaDatasource name." $i $name) -}}
+{{-   if or (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name)) (gt (len $name) 42) -}}
+{{-     fail (printf "monitoring: tracingStorages[%d].name %q must be a valid RFC 1123 label (lowercase alphanumeric and '-', starting and ending alphanumeric) of at most 42 characters, so that the vtstorage-<name>-<hash> pod revision label stays within 63." $i $name) -}}
 {{-   end -}}
 {{-   if hasKey $seen $name -}}
 {{-     fail (printf "monitoring: tracingStorages[%d].name %q is duplicated — names must be unique across tracingStorages, since each keys a VTCluster/VTSingle and a GrafanaDatasource and a collision silently overwrites the first." $i $name) -}}
@@ -252,6 +240,9 @@
 {{-   $mode := $s.mode | default "cluster" -}}
 {{-   if and (ne $mode "cluster") (ne $mode "single") -}}
 {{-     fail (printf "monitoring: tracingStorages[%s].mode must be either \"cluster\" or \"single\"" $name) -}}
+{{-   end -}}
+{{-   if regexMatch "^[+-]?[0.]*([KMGTPE]i|[numkMGTPE]|[eE][+-]?[0-9]+)?$" ($s.storage | default "" | toString) -}}
+{{-     fail (printf "monitoring: tracingStorages[%s].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule." $name) -}}
 {{-   end -}}
 {{-   with $s.retentionDiskUsageBytes -}}
 {{-     $bytes := . | toString -}}
