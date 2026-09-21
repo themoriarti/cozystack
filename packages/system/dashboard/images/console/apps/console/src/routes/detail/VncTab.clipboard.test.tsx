@@ -18,6 +18,19 @@ const { FakeRFB } = vi.hoisted(() => {
     ShiftRight: "Shift",
   }
 
+  // Latin-1 keysyms are the code point; anything past it is offset into the
+  // Unicode plane. Function keysyms (0xff00..0xffff) are neither — Enter is
+  // 0xff0d, and treating it as an offset yields a negative code point, which
+  // throws where an assertion should have been.
+  const FUNCTION_KEYSYMS: Record<number, string> = { 0xff0d: "⏎", 0xff09: "⇥" }
+
+  function charFor(keysym: number): string {
+    if (keysym in FUNCTION_KEYSYMS) return FUNCTION_KEYSYMS[keysym]
+    if (keysym >= 0x01000000) return String.fromCodePoint(keysym - 0x01000000)
+    if (keysym <= 0xff) return String.fromCodePoint(keysym)
+    return `<keysym 0x${keysym.toString(16)}>`
+  }
+
   /**
    * Stands in for noVNC, and models the one thing a list of sendKey calls
    * cannot: the guest's keyboard state. A character typed while Ctrl is down
@@ -34,7 +47,7 @@ const { FakeRFB } = vi.hoisted(() => {
         return
       }
       if (!down) return
-      const char = String.fromCodePoint(keysym <= 0xff ? keysym : keysym - 0x01000000)
+      const char = charFor(keysym)
       const chord = [...this.held].filter((m) => m !== "Shift")
       this.guestSaw += chord.length > 0 ? `<${chord.join("+")}+${char}>` : char
     })
@@ -61,6 +74,15 @@ const { FakeRFB } = vi.hoisted(() => {
 
     /** noVNC sends a modifier down the moment it is pressed on the canvas. */
     pressModifier(code: string) {
+      this.sendKey(code.startsWith("Control") ? 0xffe3 : 0xffe9, code, true)
+    }
+
+    /**
+     * The Windows path: the first Ctrl keydown tells the guest nothing and
+     * arms AltGr detection, and the modifier reaches the guest when that
+     * timer expires — after a paste has already started.
+     */
+    deliverLateModifier(code: string) {
       this.sendKey(code.startsWith("Control") ? 0xffe3 : 0xffe9, code, true)
     }
   }
@@ -114,10 +136,11 @@ interface Session {
   unmount: () => void
 }
 
-async function connectedSession(): Promise<Session> {
-  const { container, unmount } = renderWithK8sProvider(<VncTab ad={ad} instance={instance} />, {
-    client: runningClient(),
-  })
+async function connectedSession(keyDelayMs = 0): Promise<Session> {
+  const { container, unmount } = renderWithK8sProvider(
+    <VncTab ad={ad} instance={instance} keyDelayMs={keyDelayMs} />,
+    { client: runningClient() },
+  )
 
   await waitFor(() => expect(FakeRFB.instances).toHaveLength(1))
   const rfb = FakeRFB.instances[0]
@@ -265,6 +288,35 @@ describe("VncTab pasted text", () => {
     expect(rfb.guestSaw).toBe("ab")
   })
 
+  it("renders a newline the guest received instead of throwing on its keysym", async () => {
+    const { rfb, sink } = await connectedSession()
+
+    pressPaste()
+    paste(sink, "hi\n")
+
+    // Enter is keysym 0xff0d, which is neither Latin-1 nor a Unicode offset.
+    await waitFor(() => expect(rfb.guestSaw).toBe("hi⏎"))
+  })
+
+  it("recovers when the host delivers the modifier after the paste began", async () => {
+    // Needs the real pace: the repeat is timed against the window noVNC may
+    // hold a modifier for, and with no delay the run is over before it.
+    const { rfb, sink } = await connectedSession(25)
+
+    pressPaste()
+    paste(sink, "abcdefgh")
+
+    // Windows hands Ctrl to the guest on a 100 ms timer, which lands after
+    // the paste has cleared the modifiers it knew about.
+    await waitFor(() => expect(rfb.guestSaw.length).toBeGreaterThan(0))
+    rfb.deliverLateModifier("ControlLeft")
+
+    await waitFor(() => expect(rfb.guestSaw).toContain("h"), { timeout: 5000 })
+    // Whatever arrived while the guest held Ctrl is chorded; the tail after
+    // the repeat must be plain characters again.
+    expect(rfb.guestSaw.endsWith("gh")).toBe(true)
+  })
+
   it("hands the keyboard back to the console", async () => {
     const { rfb, sink } = await connectedSession()
 
@@ -308,10 +360,12 @@ describe("VncTab pasted text", () => {
     paste(sink, "aaaa")
     paste(sink, "zzzz")
 
-    await waitFor(() => expect(screen.getByText(/^Connected$/)).toBeInTheDocument())
-    const pressed = pressedKeys(rfb)
-    expect(pressed).toEqual(["KeyA", "KeyA", "KeyA", "KeyA"])
-    expect(pressed).not.toContain("KeyZ")
+    // Real timers: the run is a prelude, four characters and one repeat, so
+    // give it room rather than racing the default timeout under load.
+    await waitFor(() => expect(screen.getByText(/^Connected$/)).toBeInTheDocument(), {
+      timeout: 5000,
+    })
+    expect(rfb.guestSaw).toBe("aaaa")
   })
 
   it("says a paste was cut short rather than reporting it as finished", async () => {
@@ -388,13 +442,19 @@ describe("VncTab paste when the clipboard gives nothing", () => {
 
 describe("VncTab paste feedback in the toolbar", () => {
   it("counts the characters while they are typed", async () => {
-    const { sink } = await connectedSession()
+    // The one test that needs real pacing: with no delay the run finishes
+    // before a count can be observed.
+    const { sink } = await connectedSession(5)
 
     pressPaste()
     paste(sink, "abcdef")
 
-    expect(await screen.findByText(/pasting 1\/6/i)).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByText(/^Connected$/)).toBeInTheDocument())
+    // The count starts after the prelude, so match any position rather than
+    // racing the first one.
+    expect(await screen.findByText(/pasting \d+\/6/i, undefined, { timeout: 5000 })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/^Connected$/)).toBeInTheDocument(), {
+      timeout: 5000,
+    })
   })
 
   it("sends nothing at all when a character cannot be typed", async () => {

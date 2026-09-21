@@ -28,7 +28,30 @@ export interface TypeKeystrokesResult {
 
 export const DEFAULT_KEY_DELAY_MS = 25
 
+/**
+ * How long noVNC may sit on a modifier before passing it to the guest.
+ *
+ * On a Windows host the first Ctrl keydown sends nothing: it arms AltGr
+ * detection and starts a 100 ms timer, and the guest is told Ctrl is down only
+ * when that timer expires or another key event arrives. Taking the shortcut on
+ * the capture phase hides the V from noVNC, so the timer is what fires — after
+ * the prelude below has already released a modifier the guest had not yet been
+ * told about. Releasing once more past that window catches it.
+ */
+const LATE_MODIFIER_WINDOW_MS = 100
+
 const SHIFT_KEY = { keysym: XK_SHIFT_L, code: "ShiftLeft" }
+
+// Shift is ours to hold for capitals, so the repeat leaves it alone; the late
+// delivery only ever concerns the chord modifiers.
+const CHORD_MODIFIERS: ReadonlyArray<{ keysym: number; code: string }> = [
+  { keysym: 0xffe3, code: "ControlLeft" },
+  { keysym: 0xffe4, code: "ControlRight" },
+  { keysym: 0xffe9, code: "AltLeft" },
+  { keysym: 0xffea, code: "AltRight" },
+  { keysym: 0xffe7, code: "MetaLeft" },
+  { keysym: 0xffe8, code: "MetaRight" },
+]
 
 /**
  * Every modifier the guest may currently believe is down.
@@ -70,9 +93,14 @@ export async function typeKeystrokes(
 
   let heldShift = false
   let typed = 0
+  let eventsSincePrelude = 0
+  let repeatedPrelude = false
+  // Events whose pacing covers the window noVNC may hold a modifier for.
+  const repeatAfter = Math.ceil(LATE_MODIFIER_WINDOW_MS / Math.max(delayMs, 1)) + 1
 
   const press = async (keysym: number, code: string, down: boolean) => {
     sender.sendKey(keysym, code, down)
+    eventsSincePrelude++
     await sleep(delayMs)
   }
 
@@ -90,9 +118,21 @@ export async function typeKeystrokes(
       if (!isConnected()) return { typed, stopped: "disconnected" }
       await press(modifier.keysym, modifier.code, false)
     }
+    // The window is measured from here, not from the prelude's own events.
+    eventsSincePrelude = 0
   }
 
   for (const stroke of keystrokes) {
+    // A modifier noVNC was sitting on lands here, after the prelude cleared
+    // one the guest had never been told about.
+    if (!repeatedPrelude && eventsSincePrelude >= repeatAfter) {
+      repeatedPrelude = true
+      for (const modifier of CHORD_MODIFIERS) {
+        if (!isConnected()) return { typed, stopped: "disconnected" }
+        await press(modifier.keysym, modifier.code, false)
+      }
+    }
+
     // A dropped session takes precedence: releasing a modifier into a socket
     // that is gone is pointless, and the caller needs to hear why we stopped.
     if (!isConnected()) return { typed, stopped: "disconnected" }

@@ -47,7 +47,9 @@ pnpm build                          # tsc check + vite build into apps/console/d
 
 The Vite dev server proxies `/api`, `/apis`, and `/k8s` (VNC WebSocket prefix)
 to `kubectl proxy`. In production, nginx (see `Containerfile`) proxies the
-same paths to `kubernetes.default.svc` using the pod's service-account token.
+same paths to `kubernetes.default.svc` without touching any credential header,
+so the request carries the user's own `Authorization` from the gatekeeper and
+the apiserver checks that user's RBAC.
 
 ## Code style
 

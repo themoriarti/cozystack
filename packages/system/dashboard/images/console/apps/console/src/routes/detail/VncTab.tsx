@@ -5,7 +5,7 @@ import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/type
 import { releasePrefix } from "../../lib/app-definitions.ts"
 import { pastesWithMeta } from "../../lib/platform.ts"
 import { planKeystrokes } from "../../lib/vnc-keymap.ts"
-import { typeKeystrokes, type KeySender } from "../../lib/vnc-typing.ts"
+import { typeKeystrokes, DEFAULT_KEY_DELAY_MS, type KeySender } from "../../lib/vnc-typing.ts"
 
 // How long a one-off paste notice stays in the toolbar before the status
 // returns to the connection state.
@@ -25,9 +25,11 @@ type PasteState =
 interface VncTabProps {
   ad: ApplicationDefinition
   instance: ApplicationInstance
+  /** Injectable so tests do not run at the pace of a real keyboard. */
+  keyDelayMs?: number
 }
 
-export function VncTab({ ad, instance }: VncTabProps) {
+export function VncTab({ ad, instance, keyDelayMs = DEFAULT_KEY_DELAY_MS }: VncTabProps) {
   const ns = instance.metadata.namespace
   const appKind = ad.spec?.application.kind
   // The cozystack app name (e.g. "demo-vm") maps to the KubeVirt VirtualMachine
@@ -200,6 +202,7 @@ export function VncTab({ ad, instance }: VncTabProps) {
         pasteAbortRef.current = controller
         setPaste({ kind: "typing", typed: 0, total: keystrokes.length })
         const result = await typeKeystrokes(sender, keystrokes, {
+          delayMs: keyDelayMs,
           signal: controller.signal,
           // Identity rather than liveness. The cleanup below aborts an
           // in-flight paste, so a replacement session cannot be reached in
@@ -218,7 +221,7 @@ export function VncTab({ ad, instance }: VncTabProps) {
     } finally {
       pastingRef.current = false
     }
-  }, [])
+  }, [keyDelayMs])
 
   useEffect(() => {
     if (!connected) return
