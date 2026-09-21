@@ -7,15 +7,47 @@ import { VncTab } from "./VncTab.tsx"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 
 const { FakeRFB } = vi.hoisted(() => {
+  const MODIFIERS: Record<string, string> = {
+    ControlLeft: "Ctrl",
+    ControlRight: "Ctrl",
+    AltLeft: "Alt",
+    AltRight: "AltGr",
+    MetaLeft: "Meta",
+    MetaRight: "Meta",
+    ShiftLeft: "Shift",
+    ShiftRight: "Shift",
+  }
+
+  /**
+   * Stands in for noVNC, and models the one thing a list of sendKey calls
+   * cannot: the guest's keyboard state. A character typed while Ctrl is down
+   * does not reach the guest as that character — it reaches it as a chord,
+   * which is how a paste can run a command nobody pasted.
+   */
   class FakeRFB extends EventTarget {
     static instances: FakeRFB[] = []
-    sendKey = vi.fn()
+    sendKey = vi.fn((keysym: number, code: string, down: boolean) => {
+      const modifier = MODIFIERS[code]
+      if (modifier) {
+        if (down) this.held.add(modifier)
+        else this.held.delete(modifier)
+        return
+      }
+      if (!down) return
+      const char = String.fromCodePoint(keysym <= 0xff ? keysym : keysym - 0x01000000)
+      const chord = [...this.held].filter((m) => m !== "Shift")
+      this.guestSaw += chord.length > 0 ? `<${chord.join("+")}+${char}>` : char
+    })
     disconnect = vi.fn()
     sendCtrlAltDel = vi.fn()
     focus = vi.fn()
     scaleViewport = false
     resizeSession = false
     canvas: HTMLCanvasElement
+    /** Modifiers the guest currently believes are down. */
+    held = new Set<string>()
+    /** What the guest ended up receiving, chords marked. */
+    guestSaw = ""
 
     // The real RFB builds a focusable canvas inside the target element and
     // takes the keyboard from it; the paste shortcut keys off exactly that.
@@ -25,6 +57,11 @@ const { FakeRFB } = vi.hoisted(() => {
       this.canvas.tabIndex = -1
       target.appendChild(this.canvas)
       FakeRFB.instances.push(this)
+    }
+
+    /** noVNC sends a modifier down the moment it is pressed on the canvas. */
+    pressModifier(code: string) {
+      this.sendKey(code.startsWith("Control") ? 0xffe3 : 0xffe9, code, true)
     }
   }
   return { FakeRFB }
@@ -120,7 +157,7 @@ function pressedKeys(rfb: InstanceType<typeof FakeRFB>): string[] {
 afterEach(() => {
   cleanup()
   FakeRFB.instances.length = 0
-  vi.clearAllMocks()
+  vi.restoreAllMocks()
 })
 
 describe("VncTab paste shortcut", () => {
@@ -132,11 +169,24 @@ describe("VncTab paste shortcut", () => {
     expect(document.activeElement).toBe(sink)
   })
 
-  it("accepts Cmd+V the same way", async () => {
-    const { sink } = await connectedSession()
+  it("ignores Cmd+V where the platform pastes with Ctrl", async () => {
+    const { rfb, sink } = await connectedSession()
 
+    // Taking both chords costs the guest one it has its own use for.
     pressPaste({ ctrlKey: false, metaKey: true })
 
+    expect(document.activeElement).toBe(rfb.canvas)
+    expect(document.activeElement).not.toBe(sink)
+  })
+
+  it("takes Cmd+V, and leaves Ctrl+V to the guest, on a Mac", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel")
+    const { rfb, sink } = await connectedSession()
+
+    pressPaste()
+    expect(document.activeElement).toBe(rfb.canvas)
+
+    pressPaste({ ctrlKey: false, metaKey: true })
     expect(document.activeElement).toBe(sink)
   })
 
@@ -185,6 +235,36 @@ describe("VncTab pasted text", () => {
     await waitFor(() => expect(pressedKeys(rfb)).toEqual(["KeyH", "KeyI"]))
   })
 
+  it("does not type the paste as chords while the modifier is still held", async () => {
+    const { rfb, sink } = await connectedSession()
+
+    // The user is still holding Ctrl: noVNC told the guest so the moment the
+    // key went down, and the release only comes on keyup.
+    rfb.pressModifier("ControlLeft")
+
+    pressPaste()
+    paste(sink, "cm")
+
+    await waitFor(() => expect(rfb.guestSaw.length).toBeGreaterThanOrEqual(2))
+    // Typed under Ctrl these are not characters at all: Ctrl+C interrupts and
+    // Ctrl+M is Return, so the guest runs whatever was on the line.
+    expect(rfb.guestSaw).toBe("cm")
+  })
+
+  it("does not type the paste as chords while Cmd is still held", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel")
+    const { rfb, sink } = await connectedSession()
+
+    // noVNC maps Cmd to Alt_L, so a Cmd+V paste arrives as Alt chords.
+    rfb.pressModifier("MetaLeft")
+
+    pressPaste({ ctrlKey: false, metaKey: true })
+    paste(sink, "ab")
+
+    await waitFor(() => expect(rfb.guestSaw.length).toBeGreaterThanOrEqual(2))
+    expect(rfb.guestSaw).toBe("ab")
+  })
+
   it("hands the keyboard back to the console", async () => {
     const { rfb, sink } = await connectedSession()
 
@@ -199,15 +279,15 @@ describe("VncTab pasted text", () => {
 
     pressPaste()
     paste(sink, "abcdefghijklmnopqrstuvwxyz")
-    await waitFor(() => expect(rfb.sendKey).toHaveBeenCalled())
+    await waitFor(() => expect(rfb.guestSaw.length).toBeGreaterThan(0))
     unmount()
 
-    const afterUnmount = rfb.sendKey.mock.calls.length
+    const atUnmount = rfb.guestSaw.length
     await new Promise((resolve) => setTimeout(resolve, 200))
 
-    // A few presses may already be in flight; the loop must not run on.
-    expect(rfb.sendKey.mock.calls.length - afterUnmount).toBeLessThanOrEqual(2)
-    expect(rfb.sendKey.mock.calls.length).toBeLessThan(52)
+    // A character may already be in flight; the loop must not run on.
+    expect(rfb.guestSaw.length - atUnmount).toBeLessThanOrEqual(1)
+    expect(rfb.guestSaw.length).toBeLessThan(26)
   })
 
   it("types nothing once the session has dropped", async () => {
@@ -263,11 +343,11 @@ describe("VncTab pasted text", () => {
       replacement.dispatchEvent(new CustomEvent("connect"))
     })
 
-    const beforeWait = rfb.sendKey.mock.calls.length
+    const beforeWait = rfb.guestSaw.length
     await new Promise((resolve) => setTimeout(resolve, 250))
 
-    expect(replacement.sendKey).not.toHaveBeenCalled()
-    expect(rfb.sendKey.mock.calls.length - beforeWait).toBeLessThanOrEqual(2)
+    expect(replacement.guestSaw).toBe("")
+    expect(rfb.guestSaw.length - beforeWait).toBeLessThanOrEqual(1)
   })
 
   it("keeps nothing of the pasted text in the sink", async () => {
@@ -317,7 +397,19 @@ describe("VncTab paste feedback in the toolbar", () => {
     await waitFor(() => expect(screen.getByText(/^Connected$/)).toBeInTheDocument())
   })
 
-  it("reports characters the guest layout cannot type", async () => {
+  it("sends nothing at all when a character cannot be typed", async () => {
+    const { rfb, sink } = await connectedSession()
+
+    // Dropping the Cyrillic and typing the rest would run "rm -rf /srv",
+    // newline included, before any notice reached the user.
+    pressPaste()
+    paste(sink, "rm -rf /srv/данные\n")
+
+    expect(await screen.findByText(/nothing sent/i)).toBeInTheDocument()
+    expect(rfb.guestSaw).toBe("")
+  })
+
+  it("counts the distinct characters it could not type", async () => {
     const { sink } = await connectedSession()
 
     pressPaste()

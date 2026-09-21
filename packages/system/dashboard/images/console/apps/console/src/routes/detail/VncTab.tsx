@@ -3,6 +3,7 @@ import { Monitor, Maximize2, Minimize2, Power, RotateCcw, Terminal } from "lucid
 import { useK8sList, type K8sResource } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { releasePrefix } from "../../lib/app-definitions.ts"
+import { pastesWithMeta } from "../../lib/platform.ts"
 import { planKeystrokes } from "../../lib/vnc-keymap.ts"
 import { typeKeystrokes, type KeySender } from "../../lib/vnc-typing.ts"
 
@@ -184,6 +185,16 @@ export function VncTab({ ad, instance }: VncTabProps) {
     pastingRef.current = true
     try {
       const { keystrokes, unsupported } = planKeystrokes(text)
+
+      // Typing the rest would run a different command than the one pasted: a
+      // dropped character inside a path still leaves a valid path, and the
+      // newline after it still submits. "rm -rf /srv/данные" becomes
+      // "rm -rf /srv". So nothing is sent, and the notice comes first.
+      if (unsupported.length > 0) {
+        setPaste({ kind: "skipped", count: unsupported.length })
+        return
+      }
+
       if (keystrokes.length > 0) {
         const controller = new AbortController()
         pasteAbortRef.current = controller
@@ -203,11 +214,7 @@ export function VncTab({ ad, instance }: VncTabProps) {
           return
         }
       }
-      setPaste(
-        unsupported.length > 0
-          ? { kind: "skipped", count: unsupported.length }
-          : { kind: "idle" },
-      )
+      setPaste({ kind: "idle" })
     } finally {
       pastingRef.current = false
     }
@@ -219,7 +226,11 @@ export function VncTab({ ad, instance }: VncTabProps) {
     const handler = (e: KeyboardEvent) => {
       const isV = e.code === "KeyV" || e.key.toLowerCase() === "v"
       if (!isV || e.altKey || e.shiftKey) return
-      if (!e.ctrlKey && !e.metaKey) return
+      // Only the chord this platform actually pastes with. Taking the other
+      // one buys nothing — the browser does not paste on Ctrl+V on a Mac —
+      // and costs the guest a key it has its own use for, such as visual
+      // block in vim or a paste from the guest's own clipboard on Windows.
+      if (pastesWithMeta() ? !e.metaKey : !e.ctrlKey) return
       // Only when the console itself holds the keyboard — a paste into the
       // page's own inputs must keep working.
       const el = containerRef.current
@@ -348,7 +359,7 @@ export function VncTab({ ad, instance }: VncTabProps) {
       : paste.kind === "blocked"
         ? "Clipboard blocked"
         : paste.kind === "skipped"
-          ? `${paste.count} chars not on layout`
+          ? `${paste.count} chars not on layout — nothing sent`
           : paste.kind === "interrupted"
             ? `Paste stopped after ${paste.typed}`
             : connectionLabel

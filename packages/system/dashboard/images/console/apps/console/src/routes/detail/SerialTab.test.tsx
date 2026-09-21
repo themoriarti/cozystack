@@ -132,7 +132,7 @@ afterEach(() => {
   sockets.length = 0
   terminals.length = 0
   vi.unstubAllGlobals()
-  vi.clearAllMocks()
+  vi.restoreAllMocks()
 })
 
 describe("SerialTab gating", () => {
@@ -252,6 +252,23 @@ describe("SerialTab console stream", () => {
 
     expect(chord({ ctrlKey: true, shiftKey: true })).toBe(false)
     expect(writeText).toHaveBeenCalledWith("copied from the guest")
+  })
+
+  it("leaves Ctrl+V to the terminal on a Mac, where the browser pastes on Cmd+V", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel")
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+    renderWithK8sProvider(<SerialTab ad={makeAd("VMInstance")} instance={instance} />, {
+      client: makeClient(),
+    })
+
+    await waitFor(() => expect(terminals).toHaveLength(1))
+    const terminal = terminals[0].instance as {
+      keyHandler: ((event: KeyboardEvent) => boolean) | null
+    }
+
+    expect(
+      terminal.keyHandler?.(new KeyboardEvent("keydown", { code: "KeyV", ctrlKey: true })),
+    ).toBe(true)
   })
 
   it("hands Ctrl+V back to the browser instead of letting xterm send SYN", async () => {

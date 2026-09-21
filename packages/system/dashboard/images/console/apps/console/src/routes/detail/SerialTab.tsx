@@ -3,6 +3,7 @@ import { Monitor, RotateCcw, Terminal as TerminalIcon } from "lucide-react"
 import { useK8sList, type K8sResource } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { releasePrefix } from "../../lib/app-definitions.ts"
+import { pastesWithMeta } from "../../lib/platform.ts"
 import { openSerialStream, serialConsoleUrl, type SerialStream } from "../../lib/serial-stream.ts"
 
 type ConnectionPhase = "connecting" | "connected" | "closed"
@@ -124,9 +125,16 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
       // xterm turns Ctrl with a letter into a control byte and cancels the
       // keydown, so the browser's paste never runs and the guest receives SYN
       // (0x16) instead. Handing the event back to the browser costs the
-      // terminal's quoted-insert, which is the same trade the VNC console
-      // makes for the same shortcut.
-      if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === "KeyV") {
+      // terminal's quoted-insert, which is the trade worth making where
+      // Ctrl+V is the paste chord. On a Mac it is not — the browser pastes on
+      // Cmd+V — so there the terminal keeps the key.
+      if (
+        !pastesWithMeta() &&
+        event.ctrlKey &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.code === "KeyV"
+      ) {
         return false
       }
 

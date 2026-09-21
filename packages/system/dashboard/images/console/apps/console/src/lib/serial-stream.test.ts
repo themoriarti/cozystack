@@ -153,6 +153,34 @@ describe("openSerialStream", () => {
     expect(socket.sent).toEqual([])
   })
 
+  it("ignores a frame that arrives after the stream was closed", () => {
+    const onData = vi.fn()
+    const { stream, socket } = open({ onData })
+    socket.onopen?.()
+
+    stream.close()
+    // A frame already in flight would otherwise be written into a terminal
+    // the effect cleanup has disposed.
+    socket.onmessage?.({ data: new TextEncoder().encode("late").buffer })
+
+    expect(onData).not.toHaveBeenCalled()
+  })
+
+  it("reports what the server said, not a synthetic error, when both fire", () => {
+    const onClose = vi.fn()
+    const { socket } = open({ onClose })
+
+    // onerror carries no reason; the close right behind it does.
+    socket.onerror?.()
+    socket.onclose?.({ code: 1008, reason: "Forbidden: user cannot get console" })
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "Forbidden: user cannot get console",
+    })
+  })
+
   it("reports a close only once, however the socket ends", () => {
     const onClose = vi.fn()
     const { socket } = open({ onClose })

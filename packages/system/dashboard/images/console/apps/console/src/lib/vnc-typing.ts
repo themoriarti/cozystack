@@ -30,6 +30,27 @@ export const DEFAULT_KEY_DELAY_MS = 25
 
 const SHIFT_KEY = { keysym: XK_SHIFT_L, code: "ShiftLeft" }
 
+/**
+ * Every modifier the guest may currently believe is down.
+ *
+ * The paste starts while the user is still holding the shortcut, and noVNC
+ * told the guest about that modifier the moment it was pressed — the release
+ * only follows on keyup. Typing into that state does not send characters, it
+ * sends chords: under Ctrl an `m` is Return, so the guest runs whatever the
+ * line already held. On macOS noVNC maps Cmd to Alt, so the same happens
+ * there under Alt.
+ */
+const HOST_MODIFIERS: ReadonlyArray<{ keysym: number; code: string }> = [
+  { keysym: 0xffe3, code: "ControlLeft" },
+  { keysym: 0xffe4, code: "ControlRight" },
+  { keysym: 0xffe9, code: "AltLeft" },
+  { keysym: 0xffea, code: "AltRight" },
+  { keysym: 0xffe7, code: "MetaLeft" },
+  { keysym: 0xffe8, code: "MetaRight" },
+  { keysym: XK_SHIFT_L, code: "ShiftLeft" },
+  { keysym: 0xffe2, code: "ShiftRight" },
+]
+
 function timerSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -59,6 +80,15 @@ export async function typeKeystrokes(
     if (heldShift) {
       await press(SHIFT_KEY.keysym, SHIFT_KEY.code, false)
       heldShift = false
+    }
+  }
+
+  // Clear the host's modifiers before the first character, so the paste types
+  // what was pasted rather than chords built from it.
+  if (keystrokes.length > 0) {
+    for (const modifier of HOST_MODIFIERS) {
+      if (!isConnected()) return { typed, stopped: "disconnected" }
+      await press(modifier.keysym, modifier.code, false)
     }
   }
 
