@@ -26,6 +26,7 @@ COPY --from=builder /source/dist/images/01-kube-ovn.conflist /kube-ovn/01-kube-o
 
 COPY --from=builder /source/dist/images/kube-ovn /kube-ovn/kube-ovn
 COPY --from=builder /source/dist/images/kube-ovn-cmd /kube-ovn/kube-ovn-cmd
+COPY --from=builder /source/dist/images/kube-ovn-bfdd-supervisor /kube-ovn/kube-ovn-bfdd-supervisor
 COPY --from=builder /source/dist/images/kube-ovn-daemon /kube-ovn/kube-ovn-daemon
 COPY --from=builder /source/dist/images/kube-ovn-controller /kube-ovn/kube-ovn-controller
 RUN ln -s /kube-ovn/kube-ovn-cmd /kube-ovn/kube-ovn-monitor && \
