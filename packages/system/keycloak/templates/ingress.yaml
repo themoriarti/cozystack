@@ -7,6 +7,7 @@
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 {{- $adminHost := .Values.ingress.adminHost }}
+{{- $loginPaths := include "keycloak.loginPaths" . | fromYamlArray }}
 {{- /* Wildcard mode applies to the admin Ingress only when it shares the
        public ingressClass: the operator's default SSL cert covers it too, so
        skip per-host ACME like the login Ingress. When admin is moved onto a
@@ -50,7 +51,7 @@ spec:
       # here. The admin console and Administration REST API live on the admin
       # Ingress below, so /admin is not reachable on the login hostname. See
       # the Keycloak reverse proxy guide, "Exposed path recommendations".
-      {{- range $p := include "keycloak.loginPaths" . | fromYamlArray }}
+      {{- range $p := $loginPaths }}
       - path: {{ $p.value | quote }}
         pathType: {{ if $p.exact }}Exact{{ else }}Prefix{{ end }}
         backend:

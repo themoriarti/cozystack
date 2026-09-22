@@ -4,6 +4,11 @@
 {{- $adminExposeIngress := (index .Values._cluster "expose-ingress-admin") | default $exposeIngress }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $adminHost := .Values.ingress.adminHost }}
+{{- /* Rendered here, outside the branches that use it, so a malformed
+       ingress.exposedRealms is refused when it is set rather than on the day
+       adminHost or the Gateway mode is turned on. */}}
+{{- $realms := include "keycloak.publishedRealms" . | fromYamlArray }}
+{{- $loginPaths := include "keycloak.loginPaths" . | fromYamlArray }}
 {{- if eq $gatewayEnabled "true" }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -24,8 +29,6 @@ spec:
   # served exclusively on the dedicated admin route below, so /admin is not
   # reachable here. See the Keycloak reverse proxy guide, "Exposed path
   # recommendations".
-  {{- $realms := include "keycloak.publishedRealms" . | fromYamlArray }}
-  {{- $loginPaths := include "keycloak.loginPaths" . | fromYamlArray }}
   {{- /* A route rule takes at most 64 path matches (Gateway API CRD), and each
          realm takes two of them. Beyond that the apiserver rejects the whole
          HTTPRoute, so say which parameter to shorten and how far. */}}

@@ -1,12 +1,12 @@
 {{- /* Realms published on the login host in the narrowed (ingress.adminHost)
        mode, as a YAML list — callers parse it with fromYamlArray.
 
-       Realms are enumerated rather than covered by a bare /realms prefix,
-       which publishes every realm the deployment happens to have, master
-       among them. That takes the super-admin login page and token endpoint
-       off this hostname; reaching them is then a matter of which hostnames
-       the edge accepts and which Gateway/ingressClass the admin route
-       attaches to, and expose-ingress-admin defaults to the public one.
+       Enumerating them keeps the login host off realm master, which a bare
+       /realms prefix publishes along with every other realm the deployment
+       happens to have. It is one hostname, not the whole admin plane: the
+       admin route still carries master, and expose-ingress-admin defaults to
+       the public Gateway/ingressClass, so where that route attaches and which
+       hostnames the edge accepts decide the rest.
 
        The charset guard mirrors authentication.oidc.realmName in
        packages/core/platform: the name is used verbatim as a URL path
