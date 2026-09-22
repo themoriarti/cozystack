@@ -50,9 +50,9 @@ spec:
       # here. The admin console and Administration REST API live on the admin
       # Ingress below, so /admin is not reachable on the login hostname. See
       # the Keycloak reverse proxy guide, "Exposed path recommendations".
-      {{- range $path := include "keycloak.loginPathPrefixes" . | fromYamlArray }}
-      - path: {{ $path }}
-        pathType: Prefix
+      {{- range $p := include "keycloak.loginPaths" . | fromYamlArray }}
+      - path: {{ $p.value | quote }}
+        pathType: {{ if $p.exact }}Exact{{ else }}Prefix{{ end }}
         backend:
           service:
             name: keycloak-http

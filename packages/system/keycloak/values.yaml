@@ -35,6 +35,8 @@ ingress:
   # deployment serves to its users, e.g. a back-office realm whose issuer URL
   # lives on this hostname:
   #   exposedRealms: [cozy, cozy-admin]
+  # Listing master here — or naming the platform realm "master" — publishes the
+  # admin plane again and undoes the split.
   # Ignored while adminHost is empty, because the login route then serves "/".
   exposedRealms: []
   annotations:

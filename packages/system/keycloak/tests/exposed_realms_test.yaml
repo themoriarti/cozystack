@@ -10,6 +10,10 @@ release:
 # credentials from the internet. The login route therefore enumerates the
 # realms that are meant to be public: the platform realm by default,
 # ingress.exposedRealms when a deployment serves more than one.
+#
+# Each realm is published as an exact path plus a trailing-slash prefix, so a
+# controller that treats `pathType: Prefix` as a byte prefix cannot serve a
+# realm whose name merely extends a published one.
 tests:
   # --- HTTPRoute (gateway enabled) ---
   - it: publishes only the platform realm by default
@@ -24,15 +28,22 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.rules[0].matches
-          count: 3
+          count: 4
       - equal:
-          path: spec.rules[0].matches[0].path.value
-          value: /realms/cozy
+          path: spec.rules[0].matches[0].path
+          value:
+            type: Exact
+            value: /realms/cozy
       - equal:
-          path: spec.rules[0].matches[1].path.value
-          value: /resources
+          path: spec.rules[0].matches[1].path
+          value:
+            type: PathPrefix
+            value: /realms/cozy/
       - equal:
           path: spec.rules[0].matches[2].path.value
+          value: /resources
+      - equal:
+          path: spec.rules[0].matches[3].path.value
           value: /.well-known
       # the bare prefix is gone: /realms/master is no longer routed
       - notContains:
@@ -56,6 +67,27 @@ tests:
       - equal:
           path: spec.rules[0].matches[0].path.value
           value: /realms/acme
+      - equal:
+          path: spec.rules[0].matches[1].path.value
+          value: /realms/acme/
+
+  # A platform realm name YAML parsed as a number still names a realm: the
+  # platform validates that key, and a bare number there must not be reported
+  # as an exposedRealms the operator never set.
+  - it: accepts a platform realm name that is not a string
+    template: templates/httproute.yaml
+    documentIndex: 0
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+        oidc-realm-name: 123
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /realms/123
 
   - it: publishes every realm listed in exposedRealms
     template: templates/httproute.yaml
@@ -72,12 +104,12 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.rules[0].matches
-          count: 4
+          count: 6
       - equal:
           path: spec.rules[0].matches[0].path.value
           value: /realms/cozy
       - equal:
-          path: spec.rules[0].matches[1].path.value
+          path: spec.rules[0].matches[2].path.value
           value: /realms/cozy-admin
 
   - it: leaves the login HTTPRoute serving everything without adminHost
@@ -125,13 +157,25 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.rules[0].http.paths
-          count: 3
+          count: 4
       - equal:
           path: spec.rules[0].http.paths[0].path
           value: /realms/cozy
       - equal:
           path: spec.rules[0].http.paths[0].pathType
+          value: Exact
+      - equal:
+          path: spec.rules[0].http.paths[1].path
+          value: /realms/cozy/
+      - equal:
+          path: spec.rules[0].http.paths[1].pathType
           value: Prefix
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /realms
+            pathType: Prefix
+          any: true
 
   - it: publishes every realm listed in exposedRealms on the login Ingress
     template: templates/ingress.yaml
@@ -147,10 +191,13 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.rules[0].http.paths
-          count: 4
+          count: 6
       - equal:
-          path: spec.rules[0].http.paths[1].path
+          path: spec.rules[0].http.paths[2].path
           value: /realms/cozy-admin
+      - equal:
+          path: spec.rules[0].http.paths[3].path
+          value: /realms/cozy-admin/
 
   # --- validation ---
   - it: rejects a realm name that would split the URL path
@@ -192,4 +239,28 @@ tests:
         - 42
     asserts:
       - failedTemplate:
-          errorPattern: "ingress.exposedRealms"
+          errorPattern: "ingress.exposedRealms entries must be strings"
+
+  - it: rejects a scalar in place of the realm list
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.com
+      ingress:
+        adminHost: keycloak-admin.example.com
+        exposedRealms: cozy
+    asserts:
+      - failedTemplate:
+          errorPattern: "ingress.exposedRealms must be a list"
+
+  - it: names the platform realm, not exposedRealms, when the realm name is invalid
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        oidc-realm-name: "bad/name"
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: "platform realm name"

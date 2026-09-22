@@ -25,10 +25,10 @@ spec:
   # reachable here. See the Keycloak reverse proxy guide, "Exposed path
   # recommendations".
   - matches:
-    {{- range $prefix := include "keycloak.loginPathPrefixes" . | fromYamlArray }}
+    {{- range $p := include "keycloak.loginPaths" . | fromYamlArray }}
     - path:
-        type: PathPrefix
-        value: {{ $prefix | quote }}
+        type: {{ if $p.exact }}Exact{{ else }}PathPrefix{{ end }}
+        value: {{ $p.value | quote }}
     {{- end }}
     backendRefs:
     - name: keycloak-http
