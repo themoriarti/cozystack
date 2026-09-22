@@ -14,8 +14,9 @@ ingress:
   #   - KC_HOSTNAME_ADMIN is configured so the admin console generates its
   #     URLs on this hostname;
   #   - the main `host` (login) route is narrowed to the public OIDC paths
-  #     (/realms, /resources, /.well-known) only, so the admin console and
-  #     Administration REST API (/admin) are NOT served on the login hostname;
+  #     (the published realms, /resources, /.well-known) only, so the admin
+  #     console and Administration REST API (/admin) are NOT served on the
+  #     login hostname;
   #   - a dedicated Ingress/HTTPRoute for this hostname routes /  to Keycloak.
   # The admin route attaches to the Gateway/ingressClass selected by the
   # cluster-level expose-ingress-admin (defaults to expose-ingress). Point
@@ -25,6 +26,17 @@ ingress:
   # the network/path separation here is what restricts access.
   # If left empty, the admin console stays on the main hostname (default).
   adminHost: ""
+  # Realms published on the login hostname once adminHost is set. Empty means
+  # the platform realm alone (authentication.oidc.realmName, default "cozy").
+  #
+  # A realm not listed here is unreachable from outside the cluster — that is
+  # the point: realm master, whose token endpoint accepts super-admin
+  # credentials, must not be published. List every additional realm a
+  # deployment serves to its users, e.g. a back-office realm whose issuer URL
+  # lives on this hostname:
+  #   exposedRealms: [cozy, cozy-admin]
+  # Ignored while adminHost is empty, because the login route then serves "/".
+  exposedRealms: []
   annotations:
     nginx.ingress.kubernetes.io/affinity: "cookie"
     nginx.ingress.kubernetes.io/session-cookie-expires: "86400"
