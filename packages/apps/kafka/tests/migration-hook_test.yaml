@@ -195,11 +195,12 @@ tests:
           pattern: 'brokerPool="kafka"'
         documentIndex: 3
 
-  # Render-time defense-in-depth for the one-migration-per-namespace rule: if a
-  # "kafka" pool is already owned by a DIFFERENT cluster while this ZooKeeper
-  # cluster tries to migrate, kafka.brokerPoolName fails the render outright
-  # (the hook's runtime create-CAS is the second line of defense).
-  - it: fails the render when a foreign cluster already owns the kafka pool
+  # Render-time serialization of co-namespaced migrations: while a "kafka" pool is
+  # owned by a DIFFERENT cluster that is migrating first, kafka.brokerPoolName
+  # fails this ZooKeeper cluster's render so its HelmRelease retries until the
+  # first cluster drains off the shared pool and frees the name (the hook's
+  # runtime create-CAS is the second line of defense).
+  - it: fails the render when a foreign cluster still owns the kafka pool
     release:
       name: test-kafka
       namespace: tenant-test
@@ -232,7 +233,7 @@ tests:
               strimzi.io/cluster: other-cluster
     asserts:
       - failedTemplate:
-          errorPattern: "already has a .* broker pool owned by cluster"
+          errorPattern: "broker pool owned by cluster .* migrating first"
 
   # The controller pool the hook creates must use the short hashed name
   # kafka.controllerPoolName, in lockstep with every selector helper.

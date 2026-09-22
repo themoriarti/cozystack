@@ -89,12 +89,15 @@
   absence: a real fresh install, or a client-side render (helm template/unittest)
   that is never applied.
 
-  Because "kafka" is a fixed, namespace-unique name, only ONE ZooKeeper->KRaft
-  migration can run per namespace: if a "kafka" pool owned by a different cluster
-  already exists, a second migration fails closed (Strimzi guidance is one Kafka
-  per namespace — strimzi/strimzi-kafka-operator discussions/11120). Fresh KRaft
-  clusters are never affected. lookup returns nothing during `helm template`, so
-  unit tests resolve to the fresh "b-<hash>" default.
+  Because "kafka" is a fixed, namespace-unique name, co-namespaced ZooKeeper->KRaft
+  migrations run one at a time: while another cluster owns the "kafka" pool, this
+  cluster's render fails closed and its HelmRelease retries. The migration hook
+  drains the first cluster off the shared pool with a Cruise Control rebalance and
+  frees the name, then the waiting cluster retries into it — so every co-namespaced
+  Kafka reaches KRaft, not just the first (strimzi/strimzi-kafka-operator
+  discussions/11120). Fresh KRaft clusters are never affected. lookup returns
+  nothing during `helm template`, so unit tests resolve to the fresh "b-<hash>"
+  default.
 */ -}}
 {{- define "kafka.brokerPoolName" -}}
 {{- $release := .Release.Name -}}
@@ -118,7 +121,7 @@
   {{- else if and $existingCR (ne $kraftAnn "enabled") -}}
     {{- /* Classic ZooKeeper cluster about to migrate: adopt its brokers as "kafka". */ -}}
     {{- if and $kp (ne $kpOwner "") (ne $kpOwner $release) -}}
-      {{- fail (printf "cannot migrate Kafka %q: namespace %q already has a \"kafka\" broker pool owned by cluster %q. Strimzi node pool names are namespace-unique, so only one ZooKeeper->KRaft migration per namespace is possible (see strimzi/strimzi-kafka-operator discussions/11120). Migrate one at a time or use separate namespaces; fresh KRaft clusters are unaffected." $release $ns $kpOwner) -}}
+      {{- fail (printf "Kafka %q is waiting to migrate: namespace %q still has the shared \"kafka\" broker pool owned by cluster %q, which is migrating first. Strimzi node pool names are namespace-unique, so co-namespaced ZooKeeper->KRaft migrations run one at a time (see strimzi/strimzi-kafka-operator discussions/11120): %q drains off the shared pool and frees the name, then this HelmRelease retries into it automatically — no manual action needed. Fresh KRaft clusters are unaffected." $release $ns $kpOwner $kpOwner) -}}
     {{- end -}}
     {{- $name = "kafka" -}}
   {{- end -}}
