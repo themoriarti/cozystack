@@ -26,17 +26,18 @@ ingress:
   # the network/path separation here is what restricts access.
   # If left empty, the admin console stays on the main hostname (default).
   adminHost: ""
-  # Realms published on the login hostname once adminHost is set. Empty means
-  # the platform realm alone (authentication.oidc.realmName, default "cozy").
+  # Realms published on the login hostname, in addition to the platform realm
+  # (authentication.oidc.realmName, default "cozy"), which is always published
+  # because every component's issuer URL points at it.
   #
-  # A realm not listed here is unreachable from outside the cluster — that is
-  # the point: realm master, whose token endpoint accepts super-admin
-  # credentials, must not be published. List every additional realm a
-  # deployment serves to its users, e.g. a back-office realm whose issuer URL
-  # lives on this hostname:
-  #   exposedRealms: [cozy, cozy-admin]
-  # Listing master here — or naming the platform realm "master" — publishes the
-  # admin plane again and undoes the split.
+  # A realm named nowhere is not routed from outside the cluster — that is the
+  # point: realm master, whose token endpoint accepts super-admin credentials,
+  # must never be published, and the chart refuses to. List a realm a
+  # deployment serves to its users beyond the platform one, e.g. a back-office
+  # realm whose issuer URL lives on this hostname:
+  #   exposedRealms: [cozy-admin]
+  # Gateway API caps one route rule at 64 path matches and each realm takes
+  # two, so at most 31 realms can be published this way.
   # Ignored while adminHost is empty, because the login route then serves "/".
   exposedRealms: []
   annotations:

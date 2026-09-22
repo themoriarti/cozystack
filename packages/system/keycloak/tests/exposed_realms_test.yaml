@@ -8,8 +8,8 @@ release:
 # paths. A bare /realms prefix publishes every realm the deployment happens to
 # have, including master, whose token endpoint then accepts super-admin
 # credentials from the internet. The login route therefore enumerates the
-# realms that are meant to be public: the platform realm by default,
-# ingress.exposedRealms when a deployment serves more than one.
+# realms that are meant to be public: the platform realm, which every
+# component's issuer URL points at, plus whatever ingress.exposedRealms adds.
 #
 # Each realm is published as an exact path plus a trailing-slash prefix, so a
 # controller that treats `pathType: Prefix` as a byte prefix cannot serve a
@@ -52,6 +52,7 @@ tests:
             path:
               type: PathPrefix
               value: /realms
+          any: true
 
   - it: follows the platform realm name
     template: templates/httproute.yaml
@@ -111,6 +112,45 @@ tests:
       - equal:
           path: spec.rules[0].matches[2].path.value
           value: /realms/cozy-admin
+
+  - it: keeps publishing the platform realm when exposedRealms omits it
+    template: templates/httproute.yaml
+    documentIndex: 0
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+      ingress:
+        adminHost: keycloak-admin.example.com
+        exposedRealms:
+        - cozy-admin
+    asserts:
+      - lengthEqual:
+          path: spec.rules[0].matches
+          count: 6
+      - equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /realms/cozy
+      - equal:
+          path: spec.rules[0].matches[2].path.value
+          value: /realms/cozy-admin
+
+  - it: publishes a realm named twice once
+    template: templates/httproute.yaml
+    documentIndex: 0
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+      ingress:
+        adminHost: keycloak-admin.example.com
+        exposedRealms:
+        - cozy
+        - cozy
+    asserts:
+      - lengthEqual:
+          path: spec.rules[0].matches
+          count: 4
 
   - it: leaves the login HTTPRoute serving everything without adminHost
     template: templates/httproute.yaml
@@ -252,6 +292,33 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "ingress.exposedRealms must be a list"
+
+  - it: refuses to publish realm master
+    template: templates/httproute.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+      ingress:
+        adminHost: keycloak-admin.example.com
+        exposedRealms:
+        - master
+    asserts:
+      - failedTemplate:
+          errorPattern: "ingress.exposedRealms must not list master"
+
+  - it: refuses master as the platform realm
+    template: templates/httproute.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+        oidc-realm-name: master
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: "must not be master"
 
   - it: names the platform realm, not exposedRealms, when the realm name is invalid
     template: templates/ingress.yaml
