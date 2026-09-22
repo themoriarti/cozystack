@@ -72,7 +72,7 @@
                 printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml --requestheader-uid-headers=X-Remote-Uid]'
                 ;;
             *" get secret kubernetes-demo-oidc-authn-config "*)
-                printf 'url: https://keycloak.example.test/realms/cozy\naudiences:\n- tenant-test-kubernetes-demo\n' | base64 | tr -d '\n'
+                printf 'url: https://keycloak.example.test/realms/cozy\naudiences:\n- tenant-test-kubernetes-demo\nuid:\n  claim: sub\n' | base64 | tr -d '\n'
                 ;;
             *" get keycloakclient.v1.edp.epam.com tenant-test-kubernetes-demo "*) printf 'true' ;;
             *" get keycloakclientscope.v1.edp.epam.com tenant-test-kubernetes-demo-audience "*) printf 'oidc-audience-mapper' ;;
@@ -101,7 +101,7 @@
                 printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml]'
                 ;;
             *" get secret kubernetes-demo-oidc-authn-config "*)
-                printf 'url: https://keycloak.example.test/realms/cozy\naudiences:\n- tenant-test-kubernetes-demo\n' | base64 | tr -d '\n'
+                printf 'url: https://keycloak.example.test/realms/cozy\naudiences:\n- tenant-test-kubernetes-demo\nuid:\n  claim: sub\n' | base64 | tr -d '\n'
                 ;;
             *" get keycloakclient.v1.edp.epam.com tenant-test-kubernetes-demo "*) printf 'true' ;;
             *" get keycloakclientscope.v1.edp.epam.com tenant-test-kubernetes-demo-audience "*) printf 'oidc-audience-mapper' ;;
@@ -130,6 +130,46 @@
     set -e
     if [ "${rc}" -eq 0 ]; then
         echo "the System assertion passed without --requestheader-uid-headers" >&2
+        return 1
+    fi
+}
+
+@test "System OIDC assertion fails when the uid claim mapping is missing" {
+    # Same mock as the passing case, minus the uid mapping, so that mapping is
+    # the only thing left to fail on. Without it a System-mode user is resolved
+    # to an empty UID and the published header carries nothing across the
+    # aggregation layer.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    kubectl() {
+        case "$*" in
+            *" wait job kubernetes-demo-oidc-bootstrap "*) return 0 ;;
+            *" get kamajicontrolplane kubernetes-demo "*)
+                printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml --requestheader-uid-headers=X-Remote-Uid]'
+                ;;
+            *" get secret kubernetes-demo-oidc-authn-config "*)
+                printf 'url: https://keycloak.example.test/realms/cozy\naudiences:\n- tenant-test-kubernetes-demo\n' | base64 | tr -d '\n'
+                ;;
+            *" get keycloakclient.v1.edp.epam.com tenant-test-kubernetes-demo "*) printf 'true' ;;
+            *" get keycloakclientscope.v1.edp.epam.com tenant-test-kubernetes-demo-audience "*) printf 'oidc-audience-mapper' ;;
+            *" get secret kubernetes-demo-oidc-kubeconfig "*)
+                printf 'args:\n- oidc-login\n- --oidc-client-id=tenant-test-kubernetes-demo\n' | base64 | tr -d '\n'
+                ;;
+            *) echo "unexpected kubectl call: $*" >&2; return 1 ;;
+        esac
+    }
+    cozy_oidc_bindings() {
+        printf 'e2e-admin@example.test\tcluster-admin\ne2e-viewer@example.test\tview\n'
+    }
+
+    # Standalone subshell, not an `if` condition: errexit is suppressed for a
+    # command whose status is tested, and that reaches inside the subshell.
+    local rc=0
+    set +e
+    ( set -e; cozy_assert_oidc_system demo )
+    rc=$?
+    set -e
+    if [ "${rc}" -eq 0 ]; then
+        echo "the System assertion passed without a uid claim mapping" >&2
         return 1
     fi
 }

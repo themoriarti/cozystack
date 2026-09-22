@@ -177,6 +177,7 @@ cozy_assert_oidc_system() {
     -o jsonpath='{.data.config\.yaml}' | base64 -d)
   printf '%s\n' "${authn_config}" | grep -qE 'url: https://keycloak\.[^/]+/realms/cozy'
   printf '%s\n' "${authn_config}" | grep -qF -- "- ${audience}"
+  printf '%s\n' "${authn_config}" | grep -qF -- 'claim: sub'
 
   [ "$(kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${audience}" \
     -o jsonpath='{.spec.public}')" = true ]
