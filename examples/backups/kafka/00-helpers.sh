@@ -13,9 +13,19 @@ export NC='\033[0m'
 export BOLD='\033[1m'
 
 # Default settings (override via environment).
-export NAMESPACE="${NAMESPACE:-tenant-test}"
+export NAMESPACE="${NAMESPACE:-tenant-root}"
 export KAFKA_NAME="${KAFKA_NAME:-kafka-test}"
 export KAFKA_RESTORE_NAME="${KAFKA_RESTORE_NAME:-kafka-restore}"
+# Two brokers, not one: the Cozystack Kafka chart raises the broker-level
+# min.insync.replicas to 2 as soon as kafka.replicas reaches 2, and every
+# acks=all write into a topic with fewer replicas than that is rejected. A
+# single-broker demo could never show that a restore recreates the topic with
+# the replication factor the backup captured; the demo topics are seeded with
+# TOPIC_REPLICAS replicas and the restore steps assert it survived the
+# round-trip. Both Kafka instances use KAFKA_REPLICAS so the to-copy target can
+# host the same replication factor.
+export KAFKA_REPLICAS="${KAFKA_REPLICAS:-2}"
+export TOPIC_REPLICAS="${TOPIC_REPLICAS:-2}"
 # The demo topic carries a "." and a decoy topic differs from it only where
 # that "." sits: as a Java regex "orders.v1" also matches "orders-v1", as a
 # literal it does not. Every --topic call the CLI treats as a regex is pinned
@@ -39,7 +49,20 @@ export BACKUPCLASS_NAME="${BACKUPCLASS_NAME:-kafka-backup}"
 export STRATEGY_NAME="${STRATEGY_NAME:-kafka-job}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-kafka-backup-job}"
 export RESTOREJOB_INPLACE_NAME="${RESTOREJOB_INPLACE_NAME:-kafka-restore-inplace}"
+export RESTOREJOB_NONEMPTY_NAME="${RESTOREJOB_NONEMPTY_NAME:-kafka-restore-nonempty}"
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-kafka-restore-to-copy}"
+# S3 endpoint CA. Cozystack's default seaweedfs serves its S3 endpoint with a
+# self-signed certificate whose CA lives in this Secret; 03-create-bucket.sh
+# caches its ca.crt and create_s3_secret projects it into each
+# "<app>-backup-s3" Secret, which the strategy Pod mounts and points curl at.
+# The name follows the seaweedfs chart's fullnameOverride ("seaweedfs" ->
+# "seaweedfs-ca-cert"); 03-create-bucket.sh auto-discovers the CA Certificate's
+# actual secret when this default is absent. On a cluster whose S3 endpoint is
+# signed by a publicly-trusted CA, set S3_CA_SECRET="" to skip the copy: the
+# Pod then verifies against the image's trust store.
+export S3_CA_SECRET="${S3_CA_SECRET:-seaweedfs-ca-cert}"
+export S3_CA_NAMESPACE="${S3_CA_NAMESPACE:-tenant-root}"
+export S3_CA_KEY="${S3_CA_KEY:-ca.crt}"
 # The Strimzi Kafka image carries the full kafka-*.sh CLI plus bash, curl and
 # tar - everything the generic Job strategy and these host-side helpers need,
 # with no purpose-built backup image.
@@ -49,6 +72,9 @@ export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-kafka-restore-to-copy}"
 # STRIMZI_KAFKA_IMAGES env is a newline-separated "version=image" map (one entry
 # per supported version); split on whitespace, drop the "version=" prefix and
 # take the newest (last) entry - the version the operator itself defaults to.
+# The image reference is taken as-is: a digest-pinned operator emits
+# "<version>=<repo>@sha256:..." with no ":<tag>", and that is exactly the
+# air-gapped deployment the fallback below cannot serve.
 # Fall back to a pinned literal only when the operator cannot be read (an
 # air-gapped clone with no cluster), so the demo still has a runnable default.
 # Setting KAFKA_IMAGE in the environment skips the lookup entirely.
@@ -56,7 +82,7 @@ resolve_kafka_image() {
     local resolved
     resolved=$(kubectl -n cozy-kafka-operator get deploy strimzi-cluster-operator \
         -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="STRIMZI_KAFKA_IMAGES")].value}' 2>/dev/null \
-        | tr '[:space:]' '\n' | grep -E '=.*/kafka:' | sed 's/.*=//' | tail -n1)
+        | tr '[:space:]' '\n' | grep '=' | sed 's/^[^=]*=//' | tail -n1)
     if [ -n "$resolved" ]; then
         echo "$resolved"
         return
@@ -216,7 +242,7 @@ kafka_bootstrap() {
 # these variables pre-set, so it needs no nested shell quoting of its own:
 #   $BOOT  - the target app's plaintext bootstrap (host:port)
 #   $BIN   - the kafka CLI directory
-#   $TOPIC, $PARTITIONS, $MESSAGE_COUNT - the demo knobs
+#   $TOPIC, $PARTITIONS, $TOPIC_REPLICAS, $MESSAGE_COUNT - the demo knobs
 # This is the host-side analogue of the strategy Pod: same stock image, same
 # tools, no purpose-built backup container. Pass the snippet single-quoted so
 # its own $VAR references reach the Pod's bash unexpanded.
@@ -243,6 +269,7 @@ BOOT=$(printf %q "$boot")
 BIN=$(printf %q "$KAFKA_BIN")
 TOPIC=$(printf %q "$TOPIC")
 PARTITIONS=$(printf %q "$PARTITIONS")
+TOPIC_REPLICAS=$(printf %q "$TOPIC_REPLICAS")
 MESSAGE_COUNT=$(printf %q "$MESSAGE_COUNT")
 DECOY_TOPIC=$(printf %q "$DECOY_TOPIC")
 DECOY_COUNT=$(printf %q "$DECOY_COUNT")
@@ -258,7 +285,7 @@ seed_topic() {
     local app="$1"
     kafka_run "$app" '
         "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --create --if-not-exists \
-            --topic "$TOPIC" --partitions "$PARTITIONS" --replication-factor 1
+            --topic "$TOPIC" --partitions "$PARTITIONS" --replication-factor "$TOPIC_REPLICAS"
         i=1
         while [ "$i" -le "$MESSAGE_COUNT" ]; do
             printf "k-%s\torder-%s\n" "$i" "$i"
@@ -274,7 +301,7 @@ seed_decoy_topic() {
     local app="$1"
     kafka_run "$app" '
         "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --create --if-not-exists \
-            --topic "$DECOY_TOPIC" --partitions 1 --replication-factor 1
+            --topic "$DECOY_TOPIC" --partitions 1 --replication-factor "$TOPIC_REPLICAS"
         i=1
         while [ "$i" -le "$DECOY_COUNT" ]; do
             printf "d-%s\tdecoy-%s\n" "$i" "$i"
@@ -287,24 +314,18 @@ seed_decoy_topic() {
 # Record count of the decoy topic. Prints a bare integer, or "" when the topic
 # is gone - which is itself the signal an unpinned --topic regex deleted it.
 decoy_message_count() {
-    local app="$1"
-    kafka_run "$app" '
-        ends=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "\Q$DECOY_TOPIC\E" --time -1 2>/dev/null) || exit 0
-        [ -n "$ends" ] || exit 0
-        total=0
-        for e in $ends; do total=$((total + ${e##*:})); done
-        echo "$total"
-    ' | tr -d "[:space:]"
+    topic_message_count "$1" "$DECOY_TOPIC"
 }
 
-# Total number of records currently stored in a topic, summed over partitions
-# as (end offset - begin offset). Prints a bare integer, or "" if the topic
-# does not exist / cannot be reached. Offsets, not a consumer, so it is exact
-# and cheap even for a compacted or truncated topic. kafka-get-offsets emits
+# Total number of records currently stored in a topic (the demo topic unless a
+# second argument names another), summed over partitions as (end offset -
+# begin offset). Prints a bare integer, or "" if the topic does not exist /
+# cannot be reached. Offsets, not a consumer, so it is exact and cheap even for
+# a compacted or truncated topic. kafka-get-offsets emits
 # "topic:partition:offset" lines; pure-shell parsing avoids awk quoting.
 topic_message_count() {
     local app="$1"
-    kafka_run "$app" '
+    TOPIC="${2:-$TOPIC}" kafka_run "$app" '
         ends=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "\Q$TOPIC\E" --time -1 2>/dev/null) || exit 0
         begins=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "\Q$TOPIC\E" --time -2 2>/dev/null) || exit 0
         [ -n "$ends" ] || exit 0
@@ -348,11 +369,26 @@ topic_dump() {
     '
 }
 
+# Replication factor of the demo topic as the broker reports it. Prints a bare
+# integer, or "" if the topic does not exist / cannot be reached. The restore
+# steps compare it against TOPIC_REPLICAS: the strategy records each topic's
+# replication factor in the backup manifest and recreates the topic with it,
+# and this is the observable that proves the value survived the round-trip.
+topic_replication_factor() {
+    local app="$1"
+    kafka_run "$app" '
+        desc=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --describe --topic "\Q$TOPIC\E" 2>/dev/null) || exit 0
+        printf "%s\n" "$desc" | sed -n "s/.*ReplicationFactor: *\([0-9][0-9]*\).*/\1/p" | head -1
+    ' | tr -d '[:space:]'
+}
+
 # Create the "<app>-backup-s3" Secret the Job strategy Pod consumes, from the
 # bucket coordinates cached by 03-create-bucket.sh. The generic Job strategy -
 # unlike the app-specific drivers - has no chart support to emit this Secret,
 # so the tenant provides it. Called for the source app (step 04) and the
-# restore target (step 07).
+# restore target (step 07). The S3 endpoint's CA, when 03-create-bucket.sh
+# cached one, rides along as ca.crt: the strategy Pod mounts that key and
+# verifies the endpoint against it instead of disabling verification.
 create_s3_secret() {
     local app="$1"
     local SCRIPT_DIR
@@ -363,11 +399,16 @@ create_s3_secret() {
     for v in S3_ACCESS_KEY S3_SECRET_KEY S3_ENDPOINT S3_REGION S3_BUCKET; do
         [[ -n "${!v:-}" ]] || { log_error "required variable is missing or empty: ${v}"; return 1; }
     done
+    local ca_args=()
+    if [[ -n "${S3_CA_B64:-}" ]]; then
+        ca_args=(--from-literal=ca.crt="$(printf '%s' "$S3_CA_B64" | base64 -d)")
+    fi
     kubectl -n "$NAMESPACE" create secret generic "${app}-backup-s3" \
         --from-literal=accessKey="$S3_ACCESS_KEY" \
         --from-literal=secretKey="$S3_SECRET_KEY" \
         --from-literal=endpoint="$S3_ENDPOINT" \
         --from-literal=region="$S3_REGION" \
         --from-literal=bucket="$S3_BUCKET" \
+        ${ca_args[@]+"${ca_args[@]}"} \
         --dry-run=client -o yaml | kubectl apply -f -
 }

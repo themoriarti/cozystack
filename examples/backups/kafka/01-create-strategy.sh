@@ -46,14 +46,15 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             # .Parameters carry the static knobs from the BackupClass: which
-            # topics to back up (empty = all non-internal topics) and the
-            # replication factor used when restore recreates a topic. On
-            # restore they are read back from the Backup's driverMetadata, so
-            # the same values apply round-trip.
+            # topics to back up (empty = all non-internal topics) and an
+            # optional replication-factor override for the topics restore
+            # recreates (empty = each topic's replication factor as captured
+            # at backup time). On restore they are read back from the Backup's
+            # driverMetadata, so the same values apply round-trip.
             - name: TOPICS
               value: '{{ default "" (index .Parameters "topics") }}'
             - name: REPLICATION_FACTOR
-              value: '{{ default "1" (index .Parameters "replicationFactor") }}'
+              value: '{{ default "" (index .Parameters "replicationFactor") }}'
             # .Release is the application being acted on: the source on backup,
             # the restore target on restore (in-place=source, to-copy=the new
             # app). .Release.Name is the apps.cozystack.io/Kafka CR name; the
@@ -108,6 +109,15 @@ spec:
                 secretKeyRef:
                   name: "{{ .Release.Name }}-backup-s3"
                   key: bucket
+          # The same Secret's optional ca.crt (the S3 endpoint's CA when it is
+          # not publicly trusted; create_s3_secret copies the in-cluster
+          # seaweedfs CA into it) is projected as a file so curl can verify the
+          # endpoint against it. The key is optional: without it the file is
+          # absent and curl falls back to the image's trust store.
+          volumeMounts:
+            - name: s3-ca
+              mountPath: /etc/kafka-backup-s3
+              readOnly: true
           command: ["/usr/bin/bash", "-c"]
           args:
             - |
@@ -153,11 +163,52 @@ spec:
               OBJ_URL="\${SCHEME}://\${HOST}/\${S3_BUCKET}/\${KEY}"
 
               # curl --aws-sigv4 signs the request (SigV4) so no separate S3
-              # client image is needed. -k accepts seaweedfs's internal
-              # self-signed cert; a production strategy would mount the tenant
-              # CA and drop -k. \${CONNECT_TO} is deliberately unquoted so an
-              # empty value expands to no argument.
-              s3() { curl -fsS -k \${CONNECT_TO} --aws-sigv4 "aws:amz:\${S3_REGION}:s3" --user "\${AWS_ACCESS_KEY_ID}:\${AWS_SECRET_ACCESS_KEY}" "\$@"; }
+              # client image is needed. The certificate is verified: against the
+              # CA projected from the Secret when the tenant supplied one, else
+              # against the image's trust store. \${CA_OPT} and \${CONNECT_TO}
+              # are deliberately unquoted so an empty value expands to no
+              # argument.
+              CA_OPT=""
+              if [ -s /etc/kafka-backup-s3/ca.crt ]; then CA_OPT="--cacert /etc/kafka-backup-s3/ca.crt"; fi
+              s3() { curl -fsS \${CA_OPT} \${CONNECT_TO} --aws-sigv4 "aws:amz:\${S3_REGION}:s3" --user "\${AWS_ACCESS_KEY_ID}:\${AWS_SECRET_ACCESS_KEY}" "\$@"; }
+
+              # Records a topic currently holds, summed over its partitions as
+              # end - begin. kafka-get-offsets prints only the partitions whose
+              # lookup succeeded and still exits 0, so the listing is held to
+              # the partition count the caller read off the topic itself: a
+              # partition lost to a leader election would otherwise drop out of
+              # the sum and pass a populated topic off as empty.
+              #
+              # --topic is a Java regex in kafka-topics and kafka-get-offsets,
+              # so an unquoted name also matches its siblings ("audit.events"
+              # matches "audit-events") and would mix another topic's
+              # partitions into the count. \Q...\E pins it to a literal.
+              topic_records() {
+                local t=\$1 want_parts=\$2 ends begins seen e ekey eo bo b total
+                ends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -1)
+                begins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2)
+                seen=0
+                for e in \${ends}; do seen=\$((seen + 1)); done
+                if [ "\${seen}" -ne "\${want_parts}" ]; then
+                  echo "offset listing returned \${seen} of \${want_parts} partition(s) for \${t}; refusing to act on an incomplete listing" >&2
+                  return 1
+                fi
+                total=0
+                for e in \${ends}; do
+                  ekey=\${e%:*}
+                  eo=\${e##*:}
+                  # Match the whole topic:partition key, not the partition
+                  # index alone, so a line belonging to another topic cannot
+                  # supply this partition's begin offset. A partition missing
+                  # from "begins" defaults to 0, which can only overstate.
+                  bo=0
+                  for b in \${begins}; do
+                    if [ "\${b%:*}" = "\${ekey}" ]; then bo=\${b##*:}; break; fi
+                  done
+                  total=\$((total + eo - bo))
+                done
+                echo "\${total}"
+              }
 
               WORK=/tmp/kafka-dump
               rm -rf "\${WORK}"; mkdir -p "\${WORK}"
@@ -181,6 +232,27 @@ spec:
                   raw=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --list)
                   TLIST=\$(printf '%s\n' "\${raw}" | grep -v '^__' || true)
                 fi
+                # TOPICS is operator input reaching unquoted expansions. Kafka
+                # topic names are [a-zA-Z0-9._-], so anything else is refused
+                # before it can glob (set -f keeps a literal "*" out of the
+                # loop below) or escape the \Q...\E pins. A name listed twice
+                # would run the per-topic block twice: the manifest gains a
+                # second set of lines while the data files overwrite, and the
+                # restore's count check can then never balance - so a
+                # duplicate is refused here rather than reported as a
+                # Succeeded backup nothing can restore.
+                set -f
+                UNIQ=""
+                for t in \${TLIST}; do
+                  case "\${t}" in
+                    *[!A-Za-z0-9._-]*) echo "topic name '\${t}' carries a character outside Kafka's [a-zA-Z0-9._-]; refusing" >&2; exit 1 ;;
+                  esac
+                  case " \${UNIQ} " in
+                    *" \${t} "*) echo "topic \${t} is listed more than once in topics; refusing to back it up twice" >&2; exit 1 ;;
+                  esac
+                  UNIQ="\${UNIQ} \${t}"
+                done
+                TLIST=\${UNIQ}
                 echo "backing up topics [\${TLIST}] from \${BOOT}"
                 MANIFEST="\${WORK}/manifest.txt"
                 : > "\${MANIFEST}"
@@ -191,26 +263,31 @@ spec:
                   # produced while the backup runs.
                   ends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -1)
                   begins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2)
-                  # The partition SET is not self-validating: kafka-get-offsets
-                  # prints only the partitions whose lookup succeeded. GetOffsetShell
-                  # logs a per-partition KafkaException to stderr, skips that
-                  # partition and still exits 0, so a partition lost to a leader
-                  # election would get no manifest line, no data file, and never
-                  # reach the drain check below - a whole partition missing from a
-                  # backup that still reports Succeeded. Re-derive the count from
-                  # the topic itself and fail closed when the listing is short.
-                  # (A short "begins" needs no separate check: its per-partition
-                  # default of 0 can only overstate n, which the drain check then
-                  # catches.)
+                  # The partition SET is not self-validating (see
+                  # topic_records): re-derive the count from the topic itself
+                  # and fail closed when the listing is short, or a partition
+                  # lost to a leader election would get no manifest line, no
+                  # data file, and never reach the drain check below - a whole
+                  # partition missing from a backup that still reports
+                  # Succeeded. (A short "begins" needs no separate check: its
+                  # per-partition default of 0 can only overstate n, which the
+                  # drain check then catches.)
                   #
-                  # --topic is a Java regex in kafka-topics and kafka-get-offsets,
-                  # so an unquoted name also matches its siblings ("audit.events"
-                  # matches "audit-events") and would mix another topic's
-                  # partitions into this count. \Q...\E pins it to a literal.
-                  pc=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --describe --topic "\Q\${t}\E" \
-                    | sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' | head -1)
+                  # The same --describe line carries ReplicationFactor. It goes
+                  # into the manifest so restore recreates the topic as the
+                  # source had it: a broker whose min.insync.replicas exceeds
+                  # the recreated topic's replication factor rejects every
+                  # acks=all write, and kafka-console-producer logs the
+                  # rejection without failing, so a replay into an
+                  # under-replicated topic lands nothing.
+                  desc=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --describe --topic "\Q\${t}\E")
+                  pc=\$(printf '%s\n' "\${desc}" | sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' | head -1)
+                  rf=\$(printf '%s\n' "\${desc}" | sed -n 's/.*ReplicationFactor: *\([0-9][0-9]*\).*/\1/p' | head -1)
                   case "\${pc}" in
                     ''|*[!0-9]*) echo "could not read PartitionCount for \${t}" >&2; exit 1 ;;
+                  esac
+                  case "\${rf}" in
+                    ''|*[!0-9]*) echo "could not read ReplicationFactor for \${t}" >&2; exit 1 ;;
                   esac
                   seen=0
                   for e in \${ends}; do seen=\$((seen + 1)); done
@@ -233,7 +310,7 @@ spec:
                       if [ "\${b%:*}" = "\${ekey}" ]; then begin=\${b##*:}; break; fi
                     done
                     n=\$((end - begin))
-                    printf '%s %s %s %s\n' "\${t}" "\${p}" "\${begin}" "\${end}" >> "\${MANIFEST}"
+                    printf '%s %s %s %s %s\n' "\${t}" "\${p}" "\${begin}" "\${end}" "\${rf}" >> "\${MANIFEST}"
                     if [ "\${n}" -gt 0 ]; then
                       "\${BIN}"/kafka-console-consumer.sh --bootstrap-server "\${BOOT}" \
                         --topic "\${t}" --partition "\${p}" --offset "\${begin}" --max-messages "\${n}" \
@@ -256,6 +333,7 @@ spec:
                     fi
                     echo "  \${t}:\${p} [\${begin},\${end}) -> \${n} record(s)"
                   done
+                  echo "  \${t}: \${pc} partition(s), replication factor \${rf}"
                 done
                 tar -C "\${WORK}" -cf /tmp/kafka-topics.tar .
                 s3 -X PUT --upload-file /tmp/kafka-topics.tar "\${OBJ_URL}"
@@ -275,10 +353,10 @@ spec:
                 # too: both verification loops would run zero times and the Pod
                 # would report a successful restore of nothing.
                 lines=0
-                while read -r mt mp mb me; do
+                while read -r mt mp mb me mr; do
                   lines=\$((lines + 1))
                   [ -n "\${mt}" ] || { echo "manifest line \${lines}: missing topic" >&2; exit 1; }
-                  for v in "\${mp}" "\${mb}" "\${me}"; do
+                  for v in "\${mp}" "\${mb}" "\${me}" "\${mr}"; do
                     case "\${v}" in
                       ''|*[!0-9]*)
                         echo "manifest line \${lines} (topic \${mt}): non-numeric field '\${v}'; refusing to restore from a malformed backup" >&2
@@ -287,23 +365,60 @@ spec:
                   done
                 done < "\${WORK}/manifest.txt"
                 [ "\${lines}" -gt 0 ] || { echo "manifest is empty: the backup recorded no partitions, so there is nothing to restore" >&2; exit 1; }
+                # Data files and manifest must agree both ways, checked before
+                # anything is created or replayed. The file names come out of
+                # the same untrusted tarball as the manifest: a file the
+                # manifest never listed would be data that skipped the create,
+                # shape, emptiness and post-replay checks (or, ignored by the
+                # manifest-driven replay below, silently not restored), and a
+                # listed partition with records but no file would be found
+                # only after earlier partitions had already been replayed.
+                for f in "\${WORK}"/data-*.tsv; do
+                  [ -e "\${f}" ] || continue
+                  base=\${f##*/data-}; base=\${base%.tsv}
+                  ft=\${base%-*}
+                  fp=\${base##*-}
+                  listed=0
+                  while read -r mt mp mb me mr; do
+                    if [ "\${mt}" = "\${ft}" ] && [ "\${mp}" = "\${fp}" ]; then listed=1; break; fi
+                  done < "\${WORK}/manifest.txt"
+                  if [ "\${listed}" -ne 1 ]; then
+                    echo "backup contains data file \${f##*/}, which the manifest does not list; refusing to restore an inconsistent backup" >&2
+                    exit 1
+                  fi
+                done
+                while read -r mt mp mb me mr; do
+                  [ "\${me}" -gt "\${mb}" ] || continue
+                  if [ ! -f "\${WORK}/data-\${mt}-\${mp}.tsv" ]; then
+                    echo "backup records \$((me - mb)) record(s) for \${mt}:\${mp} but carries no data file for it; refusing to restore an inconsistent backup" >&2
+                    exit 1
+                  fi
+                done < "\${WORK}/manifest.txt"
                 # Recreate every backed-up topic with its original partition
                 # count (needed so keyed records re-produce into the same
-                # partition); existing topics are left as-is. Topic configs,
-                # ACLs and consumer offsets are out of scope - this restores
-                # DATA only.
+                # partition) and, unless the replicationFactor parameter
+                # overrides it, its original replication factor; existing
+                # topics are left as-is. Topic configs, ACLs and consumer
+                # offsets are out of scope - this restores DATA only.
                 SEEN=""
-                while read -r mt mp mb me; do
+                while read -r mt mp mb me mr; do
                   case " \${SEEN} " in *" \${mt} "*) ;; *) SEEN="\${SEEN} \${mt}" ;; esac
                 done < "\${WORK}/manifest.txt"
                 for t in \${SEEN}; do
                   parts=0
-                  while read -r mt mp mb me; do
+                  rf=""
+                  while read -r mt mp mb me mr; do
                     [ "\${mt}" = "\${t}" ] || continue
                     if [ "\${mp}" -ge "\${parts}" ]; then parts=\$((mp + 1)); fi
+                    rf=\${mr}
                   done < "\${WORK}/manifest.txt"
+                  if [ -n "\${REPLICATION_FACTOR}" ]; then rf=\${REPLICATION_FACTOR}; fi
+                  # A replication factor the target cannot host (more replicas
+                  # than brokers) fails right here, in Kafka's own words, rather
+                  # than after a replay; set replicationFactor in the
+                  # BackupClass to restore into a smaller cluster.
                   "\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --create --if-not-exists \
-                    --topic "\${t}" --partitions "\${parts}" --replication-factor "\${REPLICATION_FACTOR}"
+                    --topic "\${t}" --partitions "\${parts}" --replication-factor "\${rf}"
                   # --if-not-exists leaves a pre-existing topic's partition count
                   # alone, and the post-replay check below compares only the
                   # per-topic total, so replaying into a topic with a different
@@ -325,46 +440,29 @@ spec:
                   # the count check merely reports the damage. Checking here
                   # leaves the topic untouched instead. Remedy: empty or delete
                   # the topic (the in-place step deletes it) and re-run.
-                  cends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -1)
-                  cbegins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2)
-                  held=0
-                  for e in \${cends}; do
-                    ekey=\${e%:*}
-                    eo=\${e##*:}
-                    bo=0
-                    for b in \${cbegins}; do
-                      if [ "\${b%:*}" = "\${ekey}" ]; then bo=\${b##*:}; break; fi
-                    done
-                    held=\$((held + eo - bo))
-                  done
+                  held=\$(topic_records "\${t}" "\${have_parts}") || exit 1
                   if [ "\${held}" -ne 0 ]; then
                     echo "topic \${t} already holds \${held} record(s); this restore appends and is supported only against an absent or empty topic. Empty or delete it and re-run." >&2
                     exit 1
                   fi
+                  echo "  \${t}: created or verified empty, \${parts} partition(s), replication factor \${rf}"
                 done
-                # Replay every dumped partition file. parse.key restores the
-                # original key so the default partitioner reproduces the
-                # original partition placement.
-                for f in "\${WORK}"/data-*.tsv; do
-                  [ -e "\${f}" ] || continue
-                  base=\${f##*/data-}; base=\${base%.tsv}
-                  t=\${base%-*}
-                  fp=\${base##*-}
-                  # The file names come out of the same untrusted tarball as the
-                  # manifest, so hold them to it. A data file naming a topic the
-                  # manifest never listed would otherwise be replayed into a
-                  # topic that skipped the create, shape, emptiness and
-                  # post-replay checks, and the restore would still report
-                  # success.
-                  case " \${SEEN} " in
-                    *" \${t} "*) ;;
-                    *) echo "backup contains data file \${f##*/} for topic \${t}, which the manifest does not list; refusing to restore an inconsistent backup" >&2; exit 1 ;;
-                  esac
-                  case "\${fp}" in
-                    ''|*[!0-9]*) echo "backup contains data file \${f##*/} with a non-numeric partition suffix; refusing to restore an inconsistent backup" >&2; exit 1 ;;
-                  esac
-                  "\${BIN}"/kafka-console-producer.sh --bootstrap-server "\${BOOT}" \
-                    --topic "\${t}" --property parse.key=true < "\${f}"
+                # Replay topic by topic in manifest order, announcing each one,
+                # so the Pod log doubles as a resume map: a retry after a Pod
+                # died mid-replay stops at the emptiness check above on the
+                # first topic that was already replayed, and this log says which
+                # topics landed and which still need the target emptied.
+                # parse.key restores the original key so the default partitioner
+                # reproduces the original partition placement.
+                for t in \${SEEN}; do
+                  echo "replaying \${t}"
+                  while read -r mt mp mb me mr; do
+                    [ "\${mt}" = "\${t}" ] || continue
+                    [ "\${me}" -gt "\${mb}" ] || continue
+                    "\${BIN}"/kafka-console-producer.sh --bootstrap-server "\${BOOT}" \
+                      --topic "\${t}" --property parse.key=true < "\${WORK}/data-\${t}-\${mp}.tsv"
+                  done < "\${WORK}/manifest.txt"
+                  echo "  \${t}: replayed"
                 done
                 # Verify the replay landed. kafka-console-producer, like the
                 # consumer on backup, can exit 0 without every record being
@@ -378,22 +476,13 @@ spec:
                 # duplicated restore as complete.
                 for t in \${SEEN}; do
                   want=0
-                  while read -r mt mp mb me; do
+                  parts=0
+                  while read -r mt mp mb me mr; do
                     [ "\${mt}" = "\${t}" ] || continue
                     want=\$((want + me - mb))
+                    if [ "\${mp}" -ge "\${parts}" ]; then parts=\$((mp + 1)); fi
                   done < "\${WORK}/manifest.txt"
-                  vends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -1)
-                  vbegins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2)
-                  have=0
-                  for e in \${vends}; do
-                    ekey=\${e%:*}
-                    eo=\${e##*:}
-                    bo=0
-                    for b in \${vbegins}; do
-                      if [ "\${b%:*}" = "\${ekey}" ]; then bo=\${b##*:}; break; fi
-                    done
-                    have=\$((have + eo - bo))
-                  done
+                  have=\$(topic_records "\${t}" "\${parts}") || exit 1
                   if [ "\${have}" -ne "\${want}" ]; then
                     echo "restore verification failed for \${t}: topic holds \${have} record(s), backup recorded \${want}; refusing to report a lossy or duplicated restore as complete" >&2
                     exit 1
@@ -419,6 +508,14 @@ spec:
               drop: ["ALL"]
             seccompProfile:
               type: RuntimeDefault
+      volumes:
+        - name: s3-ca
+          secret:
+            secretName: "{{ .Release.Name }}-backup-s3"
+            optional: true
+            items:
+              - key: ca.crt
+                path: ca.crt
 EOF
 
 log_success "Job strategy '${STRATEGY_NAME}' created."

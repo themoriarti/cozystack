@@ -11,6 +11,13 @@ source "$SCRIPT_DIR/00-helpers.sh"
 
 print_header "Step 07: To-copy restore into '${KAFKA_RESTORE_NAME}'"
 
+[[ -f "$SCRIPT_DIR/.backup-name.env" ]] || { log_error "missing $SCRIPT_DIR/.backup-name.env; run 05-create-backupjob.sh first"; exit 1; }
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/.backup-name.env"
+
+# Same broker count as the source: the restore recreates the topic with the
+# replication factor the backup captured, which a smaller target could not
+# host (see the replicationFactor override in 02-create-backupclass.sh).
 kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kafka
@@ -20,7 +27,7 @@ metadata:
 spec:
   external: false
   kafka:
-    replicas: 1
+    replicas: ${KAFKA_REPLICAS}
     size: 2Gi
     resourcesPreset: "c1.small"
   zookeeper:
@@ -47,7 +54,7 @@ metadata:
   namespace: ${NAMESPACE}
 spec:
   backupRef:
-    name: ${BACKUPJOB_NAME}
+    name: ${BACKUP_NAME}
   targetApplicationRef:
     apiGroup: apps.cozystack.io
     kind: Kafka
@@ -73,6 +80,13 @@ if ! diff -u "$SCRIPT_DIR/.source-dump.txt" <(topic_dump "$KAFKA_RESTORE_NAME");
     log_error "Restored content on copy does not match the source snapshot"
     exit 1
 fi
-log_success "To-copy restore verified: ${count} record(s) in '${TOPIC}' on '${KAFKA_RESTORE_NAME}', content matches source."
+# Shape too: the copy's topic must carry the replication factor the backup
+# captured from the source, not a default (see step 06).
+rf=$(topic_replication_factor "$KAFKA_RESTORE_NAME")
+if [[ "$rf" != "$TOPIC_REPLICAS" ]]; then
+    log_error "Replication factor on copy is '${rf}'; expected ${TOPIC_REPLICAS} as captured from the source"
+    exit 1
+fi
+log_success "To-copy restore verified: ${count} record(s) in '${TOPIC}' on '${KAFKA_RESTORE_NAME}' at replication factor ${rf}, content matches source."
 
 echo -e "\n${GREEN}${BOLD}Next:${NC} ./cleanup.sh"

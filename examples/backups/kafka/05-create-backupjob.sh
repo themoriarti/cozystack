@@ -35,6 +35,9 @@ wait_for_field backupjob "$BACKUPJOB_NAME" '{.status.phase}' Succeeded "$NAMESPA
 
 backup_ref=$(kubectl -n "$NAMESPACE" get backupjob "$BACKUPJOB_NAME" -o jsonpath='{.status.backupRef.name}')
 [[ -n "$backup_ref" ]] || { log_error "BackupJob succeeded but BackupRef is empty"; exit 1; }
+# The restore steps reference the Backup by this resolved name rather than by
+# assuming it equals the BackupJob's. cleanup.sh removes the file.
+printf 'export BACKUP_NAME=%q\n' "$backup_ref" > "$SCRIPT_DIR/.backup-name.env"
 log_success "Backup '${backup_ref}' is Ready."
 
 echo -e "\n${GREEN}${BOLD}Next:${NC} ./06-restore-in-place.sh"

@@ -257,7 +257,7 @@
     done
 }
 
-@test "every Chainsaw backup roundtrip enables the E2E preflight" {
+@test "the five preflight-wired Chainsaw backup roundtrips enable the E2E preflight" {
     for file in \
         hack/e2e-chainsaw/postgres/chainsaw-test.yaml \
         hack/e2e-chainsaw/mariadb/chainsaw-test.yaml \

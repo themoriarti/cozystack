@@ -13,15 +13,21 @@ print_header "Cleanup Kafka backup demo"
 # foreign group whose miss --ignore-not-found then swallows, leaving this demo's
 # Cozystack Backup behind for the next run's createJobBackupArtifact to reuse.
 kubectl -n "$NAMESPACE" delete restorejob.backups.cozystack.io "$RESTOREJOB_TOCOPY_NAME" --ignore-not-found
+kubectl -n "$NAMESPACE" delete restorejob.backups.cozystack.io "$RESTOREJOB_NONEMPTY_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete restorejob.backups.cozystack.io "$RESTOREJOB_INPLACE_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete backupjob.backups.cozystack.io "$BACKUPJOB_NAME" --ignore-not-found
-kubectl -n "$NAMESPACE" delete backups.backups.cozystack.io "$BACKUPJOB_NAME" --ignore-not-found
+# The Backup's resolved name is cached by step 05; a run that never got there
+# can only have left one named after the BackupJob.
+BACKUP_NAME="$BACKUPJOB_NAME"
+# shellcheck disable=SC1091
+[[ -f "$SCRIPT_DIR/.backup-name.env" ]] && source "$SCRIPT_DIR/.backup-name.env"
+kubectl -n "$NAMESPACE" delete backups.backups.cozystack.io "$BACKUP_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete secret "${KAFKA_RESTORE_NAME}-backup-s3" --ignore-not-found
 kubectl -n "$NAMESPACE" delete secret "${KAFKA_NAME}-backup-s3" --ignore-not-found
 kubectl -n "$NAMESPACE" delete kafka.apps.cozystack.io "$KAFKA_RESTORE_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete kafka.apps.cozystack.io "$KAFKA_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete bucket.apps.cozystack.io "$BUCKET_NAME" --ignore-not-found
-rm -f "$SCRIPT_DIR/.bucket-info.env" "$SCRIPT_DIR/.source-dump.txt"
+rm -f "$SCRIPT_DIR/.bucket-info.env" "$SCRIPT_DIR/.source-dump.txt" "$SCRIPT_DIR/.backup-name.env"
 kubectl delete backupclass.backups.cozystack.io "$BACKUPCLASS_NAME" --ignore-not-found
 kubectl delete job.strategy.backups.cozystack.io "$STRATEGY_NAME" --ignore-not-found
 

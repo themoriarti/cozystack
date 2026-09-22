@@ -125,24 +125,29 @@ spec:
 # Logical topic-data backup -> in-place + to-copy RestoreJob round-trip,
 # driving the validated example scripts (examples/backups/kafka) as the harness
 # so the test and the documented flow can never drift. run-all.sh runs Bucket
-# -> source Kafka + a seeded 3-partition topic -> Job strategy + BackupClass ->
-# ad-hoc BackupJob (freeze-end-offset drain to S3, waits Succeeded) -> in-place
-# restore (deletes the topic, restores, asserts the record count) -> empty
-# target Kafka + to-copy RestoreJob (waits Succeeded) and asserts the records
-# round-tripped through S3 into the restored copy. It follows the same
+# -> two-broker source Kafka + a seeded 3-partition, 2-replica topic -> Job
+# strategy + BackupClass -> ad-hoc BackupJob (freeze-end-offset drain to S3,
+# waits Succeeded) -> in-place restore (deletes the topic, restores, asserts
+# count, content and replication factor, then a second RestoreJob into the
+# populated topic that must be refused) -> empty two-broker target Kafka +
+# to-copy RestoreJob (waits Succeeded) and asserts the records round-tripped
+# through S3 into the restored copy. It follows the same
 # harness-driving shape as mariadb-2-backup-roundtrip
 # (hack/e2e-chainsaw/mariadb/chainsaw-test.yaml): a single run step pre-cleans
 # any leftover state, drives run-all.sh, and drains in an always-reached
 # finally.
 #
-# Runs in tenant-root, not the default tenant-test: the S3 client here is the
-# generic Job strategy Pod INSIDE the tenant, and the e2e tenant is created
-# isolated (hack/e2e-install-cozystack.bats) — its Cilium egress allowlist
-# blocks a tenant-test Pod from reaching tenant-root's seaweedfs, while a
-# tenant-root Pod reaches it over same-tenant egress. The harness targets the
-# in-cluster endpoint (S3_ENDPOINT below) instead of the BucketInfo external
-# ingress URL, which in CI is an unroutable placeholder, and the Job strategy
-# trusts its self-signed cert with curl -k. KAFKA_IMAGE is resolved from the
+# Runs in tenant-root, not the suite default tenant-test: the S3 client here
+# is the generic Job strategy Pod INSIDE the tenant, and the e2e tenant is
+# created isolated (hack/e2e-install-cozystack.bats) — its Cilium egress
+# allowlist blocks a tenant-test Pod from reaching tenant-root's seaweedfs,
+# while a tenant-root Pod reaches it over same-tenant egress. The harness
+# targets the in-cluster endpoint (S3_ENDPOINT below) instead of the BucketInfo
+# external ingress URL, which in CI is an unroutable placeholder. The .svc FQDN
+# is load-bearing: the strategy's curl verifies TLS against the seaweedfs CA
+# the example copies into its S3 Secret, and the serving cert's SANs are
+# '*.tenant-root.svc' / '*.tenant-root.svc.cluster.local' — the 2-label
+# 'seaweedfs-s3.tenant-root' matches neither. KAFKA_IMAGE is resolved from the
 # running operator so the backup Pod reuses the exact Kafka image already
 # cached on the nodes (no extra pull, no version skew).
 apiVersion: chainsaw.kyverno.io/v1alpha1
@@ -209,11 +214,13 @@ spec:
         check:
           ($error == null): true
     # The 40m budget is the whole documented flow: bucket provisioning, TWO
-    # single-broker Strimzi clusters (source + to-copy target, each pulls the
-    # Kafka image, boots ZooKeeper then the broker, and passes readiness), the
-    # freeze-end-offset drain to S3, and the in-place + to-copy restores with
-    # their verifications. run-all.sh fails fast on terminal BackupJob/RestoreJob
-    # phases and stalled HelmReleases rather than polling out the budget.
+    # two-broker Strimzi clusters (source + to-copy target, each pulls the
+    # Kafka image, boots ZooKeeper then the brokers, and passes readiness), the
+    # freeze-end-offset drain to S3, the in-place restore, the refused restore
+    # into the populated topic (three strategy Pod attempts, each stopping at
+    # the emptiness check), and the to-copy restore with its verification.
+    # run-all.sh fails fast on terminal BackupJob/RestoreJob phases and stalled
+    # HelmReleases rather than polling out the budget.
     - script:
         timeout: 40m
         content: |
@@ -225,13 +232,13 @@ spec:
           # newline-separated "version=image" map (one entry per supported Kafka
           # version), so split on whitespace, drop the "version=" prefix and take
           # the last (newest) image rather than concatenating every line into one
-          # malformed reference.
+          # malformed reference. The reference is taken as-is, tag or digest.
           KAFKA_IMAGE=$(kubectl -n cozy-kafka-operator get deploy strimzi-cluster-operator \
             -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="STRIMZI_KAFKA_IMAGES")].value}' \
-            | tr '[:space:]' '\n' | grep -E '=.*/kafka:' | sed 's/.*=//' | tail -n1)
+            | tr '[:space:]' '\n' | grep '=' | sed 's/^[^=]*=//' | tail -n1)
           [ -n "$KAFKA_IMAGE" ] || { echo "could not resolve Kafka image from strimzi-cluster-operator" >&2; exit 1; }
           COZY_E2E_BACKUP_PREFLIGHT=1 NAMESPACE="$NAMESPACE" KAFKA_IMAGE="$KAFKA_IMAGE" \
-            S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+            S3_ENDPOINT="https://seaweedfs-s3.tenant-root.svc:8333" \
             examples/backups/kafka/run-all.sh
         check:
           ($error == null): true

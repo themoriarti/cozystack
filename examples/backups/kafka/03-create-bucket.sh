@@ -66,9 +66,33 @@ for v in S3_ACCESS_KEY S3_SECRET_KEY S3_ENDPOINT S3_REGION S3_BUCKET; do
     [[ -n "${!v}" && "${!v}" != "null" ]] || { log_error "BucketInfo missing required field: ${v}"; exit 1; }
 done
 
+# The endpoint's CA, so the strategy Pod verifies TLS instead of skipping it.
+# The default name tracks the seaweedfs chart's fullnameOverride (seaweedfs ->
+# seaweedfs-ca-cert), but a downstream fullname change would rename it, so fall
+# back to discovering the cert-manager CA Certificate (the seaweedfs-labelled
+# one with spec.isCA=true) and read its secretName. S3_CA_SECRET="" skips the
+# copy for a publicly-trusted endpoint (see 00-helpers.sh).
+S3_CA_B64=""
+if [[ -n "$S3_CA_SECRET" ]]; then
+    if ! kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" >/dev/null 2>&1; then
+        log_warning "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} not found; discovering the seaweedfs CA Certificate..."
+        discovered=$(kubectl -n "$S3_CA_NAMESPACE" get certificates.cert-manager.io \
+            -l app.kubernetes.io/name=seaweedfs \
+            -o jsonpath='{range .items[*]}{.spec.isCA}{" "}{.spec.secretName}{"\n"}{end}' 2>/dev/null \
+            | awk '$1=="true"{print $2; exit}' || true)
+        [[ -n "$discovered" ]] || { log_error "No seaweedfs CA Certificate found in ${S3_CA_NAMESPACE}; set S3_CA_SECRET explicitly (or empty for a publicly-trusted endpoint)."; exit 1; }
+        log_success "Discovered seaweedfs CA secret ${S3_CA_NAMESPACE}/${discovered}"
+        S3_CA_SECRET="$discovered"
+    fi
+    log_substep "Caching S3 CA ${S3_CA_NAMESPACE}/${S3_CA_SECRET}[${S3_CA_KEY}]..."
+    S3_CA_B64=$(kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" -o jsonpath="{.data.${S3_CA_KEY//./\\.}}")
+    [[ -n "$S3_CA_B64" ]] || { log_error "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} has no ${S3_CA_KEY}"; exit 1; }
+fi
+
 # Persist for steps 04 / 07. The cache stores raw S3 credentials, so apply
 # restrictive perms before writing the body - umask alone could leave the file
-# group/world-readable.
+# group/world-readable. The CA stays base64 so the file remains one export per
+# line.
 umask 077
 cat > "$SCRIPT_DIR/.bucket-info.env" <<ENV
 export S3_ACCESS_KEY=${S3_ACCESS_KEY}
@@ -76,6 +100,7 @@ export S3_SECRET_KEY=${S3_SECRET_KEY}
 export S3_ENDPOINT=${S3_ENDPOINT}
 export S3_REGION=${S3_REGION}
 export S3_BUCKET=${S3_BUCKET}
+export S3_CA_B64=${S3_CA_B64}
 ENV
 chmod 600 "$SCRIPT_DIR/.bucket-info.env"
 

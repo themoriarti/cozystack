@@ -1,10 +1,10 @@
 #!/bin/bash
 # Step 02: Map the Kafka application kind to the Job strategy from step 01. The
-# strategy parameters (which topics to back up, the replication factor used
-# when restore recreates a topic) travel through the BackupClass and are
-# exposed to the strategy template as `.Parameters`. They are also snapshotted
-# onto the resulting Backup's driverMetadata, so a later restore re-renders
-# with the same values.
+# strategy parameters (which topics to back up, an optional replication-factor
+# override for the topics restore recreates) travel through the BackupClass and
+# are exposed to the strategy template as `.Parameters`. They are also
+# snapshotted onto the resulting Backup's driverMetadata, so a later restore
+# re-renders with the same values.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +35,11 @@ spec:
         # comma/space-separated list to restrict the backup to topics known to
         # be plain.
         topics: "${TOPIC}"
-        replicationFactor: "1"
+        # Restore recreates each topic with the replication factor the backup
+        # captured from the source. Set replicationFactor to override it - the
+        # way to restore into a cluster with fewer brokers than the source.
+        # Like every parameter it is snapshotted at backup time, so it has to
+        # be in place before the BackupJob whose Backup will be restored.
 EOF
 
 log_success "BackupClass '${BACKUPCLASS_NAME}' created."

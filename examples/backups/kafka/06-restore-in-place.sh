@@ -4,13 +4,19 @@
 # the same Kafka application. The driver recreates the topic (--if-not-exists)
 # and replays every partition file, so the topic must be absent first -
 # mirroring the ClickHouse demo dropping its table and the NATS demo removing
-# its stream.
+# its stream. A second RestoreJob against the now-populated topic then has to
+# be refused without touching it.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/00-helpers.sh"
 
 print_header "Step 06: In-place restore from '${BACKUPJOB_NAME}'"
+
+[[ -f "$SCRIPT_DIR/.backup-name.env" ]] || { log_error "missing $SCRIPT_DIR/.backup-name.env; run 05-create-backupjob.sh first"; exit 1; }
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/.backup-name.env"
+[[ -f "$SCRIPT_DIR/.source-dump.txt" ]] || { log_error "missing $SCRIPT_DIR/.source-dump.txt; run 04-create-kafka.sh first"; exit 1; }
 
 log_substep "Deleting topic '${TOPIC}' to simulate data loss..."
 # Delete and wait for the topic to actually disappear in the same Pod: topic
@@ -44,34 +50,51 @@ metadata:
   namespace: ${NAMESPACE}
 spec:
   backupRef:
-    name: ${BACKUPJOB_NAME}
+    name: ${BACKUP_NAME}
 EOF
 
 log_substep "Waiting for in-place RestoreJob to Succeed..."
 wait_for_field restorejob "$RESTOREJOB_INPLACE_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 600 Failed
 
+# Verifies count, content and shape of the restored topic against the source.
+# Shared with the refusal check below, which must find all three unchanged.
+verify_restored() {
+    local when="$1"
+    local count rf
+    count=$(topic_message_count "$KAFKA_NAME")
+    # Guard the comparison: a failed offsets lookup returns an empty string, which
+    # must not be mistaken for a successful restore of zero records.
+    [[ "$count" =~ ^[0-9]+$ ]] || { log_error "non-numeric record count ${when}: '${count}' (topic missing?)"; return 1; }
+    # Exact count, not >=: restore replays unconditionally and appends into a
+    # non-empty topic, so a double-replay (e.g. the strategy Job's backoffLimit
+    # retry) lands 2x the records and must fail here, not pass.
+    if (( count != MESSAGE_COUNT )); then
+        log_error "Record count ${when} is ${count}; expected exactly ${MESSAGE_COUNT}"
+        return 1
+    fi
+    # Content, not just count: diff the restored topic against the source snapshot
+    # from step 04. Byte-equality of the per-partition ordered dumps proves keys,
+    # values, partition placement and ordering survived - the fidelity claims the
+    # README makes.
+    if ! diff -u "$SCRIPT_DIR/.source-dump.txt" <(topic_dump "$KAFKA_NAME"); then
+        log_error "Restored content ${when} does not match the source snapshot"
+        return 1
+    fi
+    # The replication factor comes from the backup manifest, not from a
+    # parameter: on this KAFKA_REPLICAS-broker cluster the chart's
+    # min.insync.replicas rejects every write into a topic recreated with
+    # fewer replicas, so a replay into an under-replicated topic would have
+    # landed nothing and failed the count above - but pin the value itself too.
+    rf=$(topic_replication_factor "$KAFKA_NAME")
+    if [[ "$rf" != "$TOPIC_REPLICAS" ]]; then
+        log_error "Replication factor ${when} is '${rf}'; expected ${TOPIC_REPLICAS} as captured from the source"
+        return 1
+    fi
+    log_success "Verified ${when}: ${count} record(s) in '${TOPIC}' at replication factor ${rf}, content matches source."
+}
+
 log_substep "Verifying topic records are restored..."
-[[ -f "$SCRIPT_DIR/.source-dump.txt" ]] || { log_error "missing $SCRIPT_DIR/.source-dump.txt; run 04-create-kafka.sh first"; exit 1; }
-count=$(topic_message_count "$KAFKA_NAME")
-# Guard the comparison: a failed offsets lookup returns an empty string, which
-# must not be mistaken for a successful restore of zero records.
-[[ "$count" =~ ^[0-9]+$ ]] || { log_error "non-numeric record count: '${count}' (topic missing?)"; exit 1; }
-# Exact count, not >=: restore replays unconditionally and appends into a
-# non-empty topic, so a double-replay (e.g. the strategy Job's backoffLimit
-# retry) lands 2x the records and must fail here, not pass.
-if (( count != MESSAGE_COUNT )); then
-    log_error "Record count after in-place restore is ${count}; expected exactly ${MESSAGE_COUNT}"
-    exit 1
-fi
-# Content, not just count: diff the restored topic against the source snapshot
-# from step 04. Byte-equality of the per-partition ordered dumps proves keys,
-# values, partition placement and ordering survived - the fidelity claims the
-# README makes.
-if ! diff -u "$SCRIPT_DIR/.source-dump.txt" <(topic_dump "$KAFKA_NAME"); then
-    log_error "Restored content does not match the source snapshot"
-    exit 1
-fi
-log_success "In-place restore verified: ${count} record(s) in '${TOPIC}', content matches source."
+verify_restored "after in-place restore"
 
 # The delete above names ${TOPIC}, which as a Java regex would also match the
 # decoy. Its survival is what proves the \Q...\E pin is in place; without it
@@ -82,5 +105,34 @@ if [[ "$decoy" != "$DECOY_COUNT" ]]; then
     exit 1
 fi
 log_success "Decoy topic '${DECOY_TOPIC}' untouched: ${decoy} record(s)."
+
+# Restore appends, so the strategy refuses a target that already holds
+# records - before replaying, so a retried Pod cannot stack a second copy onto
+# a live topic. Drive that path: a second RestoreJob against the topic just
+# restored must settle Failed, name the reason in the strategy Pod's log, and
+# leave the topic exactly as the verification above found it.
+log_substep "Submitting RestoreJob '${RESTOREJOB_NONEMPTY_NAME}' against the populated topic; it must be refused..."
+kubectl apply -f - <<EOF
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: ${RESTOREJOB_NONEMPTY_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  backupRef:
+    name: ${BACKUP_NAME}
+EOF
+wait_for_field restorejob "$RESTOREJOB_NONEMPTY_NAME" '{.status.phase}' Failed "$NAMESPACE" 600 Succeeded
+# The driver names the batch Job "<restorejob>-restore"; batch/v1 labels its
+# Pods job-name=<job>. Every attempt must have stopped at the emptiness check.
+refusals=$(kubectl -n "$NAMESPACE" logs -l "job-name=${RESTOREJOB_NONEMPTY_NAME}-restore" --tail=-1 2>/dev/null \
+    | grep -c "already holds" || true)
+if [[ "$refusals" -lt 1 ]]; then
+    log_error "RestoreJob '${RESTOREJOB_NONEMPTY_NAME}' failed, but no attempt logged the non-empty-target refusal"
+    kubectl -n "$NAMESPACE" logs -l "job-name=${RESTOREJOB_NONEMPTY_NAME}-restore" --tail=50 >&2 || true
+    exit 1
+fi
+verify_restored "after the refused restore"
+log_success "Restore into the populated topic was refused (${refusals} attempt(s)) and left it untouched."
 
 echo -e "\n${GREEN}${BOLD}Next:${NC} ./07-restore-to-copy.sh"
