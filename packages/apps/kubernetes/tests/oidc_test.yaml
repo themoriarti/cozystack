@@ -259,6 +259,13 @@ tests:
       - matchRegex:
           path: stringData["config.yaml"]
           pattern: "claim: email"
+      # Without a uid mapping upstream hands the user an empty UID, and the
+      # X-Remote-Uid header the chart publishes carries nothing across the
+      # aggregation layer. `sub` survives the email change the platform realm
+      # permits, which the username claim does not.
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'uid:\s+claim: sub'
       - matchRegex:
           path: stringData["config.yaml"]
           pattern: "- tenant-foo-kubernetes-app"
@@ -2500,6 +2507,11 @@ tests:
       - matchRegex:
           path: stringData["config.yaml"]
           pattern: "url: https://idp.example.com"
+      # Verbatim means verbatim: the uid mapping System mode renders must not
+      # be grafted onto a configuration the operator owns.
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'uid:'
 
   - it: CustomConfig mode with secretRef does not emit a chart-owned Secret
     release:
