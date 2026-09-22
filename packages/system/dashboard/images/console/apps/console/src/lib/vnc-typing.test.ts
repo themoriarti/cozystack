@@ -26,8 +26,14 @@ function trace(sent: SentKey[]): string[] {
   return sent.map((k) => `${k.code}${k.down ? "↓" : "↑"}`)
 }
 
-// Every run starts by releasing the modifiers the host may still be holding.
-const PRELUDE = 8
+// Every run opens by releasing the modifiers the host may still be holding,
+// waiting out what is left of noVNC's delivery window, then releasing the
+// chord modifiers once more — all before the first character.
+const HOST_RELEASES = 8
+const CHORD_RELEASES = 6
+const PRELUDE = HOST_RELEASES + CHORD_RELEASES
+// The wait itself is a sleep with no key event behind it.
+const PRELUDE_SLEEPS = PRELUDE + 1
 
 function typedTrace(sent: SentKey[]): string[] {
   return trace(sent.slice(PRELUDE))
@@ -58,12 +64,6 @@ describe("typeKeystrokes", () => {
       "KeyA↑",
       "KeyB↓",
       "KeyB↑",
-      "ControlLeft↑",
-      "ControlRight↑",
-      "AltLeft↑",
-      "AltRight↑",
-      "MetaLeft↑",
-      "MetaRight↑",
       "ShiftLeft↑",
       "KeyC↓",
       "KeyC↑",
@@ -87,7 +87,7 @@ describe("typeKeystrokes", () => {
       delayMs: 7,
     })
 
-    expect(sleep).toHaveBeenCalledTimes(PRELUDE + 4)
+    expect(sleep).toHaveBeenCalledTimes(PRELUDE_SLEEPS + 4)
     expect(sleep).toHaveBeenCalledWith(7)
   })
 
@@ -141,7 +141,7 @@ describe("typeKeystrokes and the host's own modifiers", () => {
     // The paste begins while the user is still holding the shortcut, and the
     // guest was told that modifier is down. Typing into that state sends
     // chords, not characters: under Ctrl an "m" is Return.
-    expect(trace(sent).slice(0, PRELUDE)).toEqual([
+    expect(trace(sent).slice(0, HOST_RELEASES)).toEqual([
       "ControlLeft↑",
       "ControlRight↑",
       "AltLeft↑",
@@ -166,17 +166,15 @@ describe("typeKeystrokes interruption", () => {
   it("stops on abort and releases the modifier it was holding", async () => {
     const { sender, sent } = recorder()
     const controller = new AbortController()
-    let sleeps = 0
-    const sleep = () => {
-      // Abort once the prelude is done and a character has gone in, which is
-      // where a user cancelling a paste actually lands.
-      if (++sleeps > PRELUDE + 2) controller.abort()
-      return Promise.resolve()
-    }
 
     const result = await typeKeystrokes(sender, planKeystrokes("ABC").keystrokes, {
-      sleep,
+      sleep: noSleep,
       signal: controller.signal,
+      // Cancel once a character has gone in, which is where a user cancelling
+      // a paste actually lands.
+      onProgress: (typed) => {
+        if (typed >= 1) controller.abort()
+      },
     })
 
     expect(result.stopped).toBe("aborted")
@@ -188,38 +186,34 @@ describe("typeKeystrokes interruption", () => {
   it("stops typing when the session drops and sends nothing more", async () => {
     const { sender, sent } = recorder()
     let connected = true
-    let sleeps = 0
 
     const result = await typeKeystrokes(sender, planKeystrokes("abc").keystrokes, {
-      // Drop it after the prelude and the first character, where a session
-      // actually goes: inside the prelude nothing is pressed yet, so the
-      // assertion below would hold no matter what the loop did.
-      sleep: () => {
-        if (++sleeps > PRELUDE + 2) connected = false
-        return Promise.resolve()
-      },
+      sleep: noSleep,
       isConnected: () => connected,
+      // Drop it after a character, where a session actually goes: inside the
+      // prelude nothing is pressed yet, so the assertion would hold no matter
+      // what the loop did.
+      onProgress: (typed) => {
+        if (typed >= 1) connected = false
+      },
     })
 
-    // The drop lands mid-character, so that one finishes and the loop stops
-    // at the next check rather than typing the rest.
-    expect(result).toEqual({ typed: 2, stopped: "disconnected" })
-    expect(typedTrace(sent)).toEqual(["KeyA↓", "KeyA↑", "KeyB↓", "KeyB↑"])
+    expect(result).toEqual({ typed: 1, stopped: "disconnected" })
+    expect(typedTrace(sent)).toEqual(["KeyA↓", "KeyA↑"])
   })
 
   it("does not try to release modifiers into a dropped session", async () => {
     const { sender, sent } = recorder()
     let connected = true
-    let sleeps = 0
 
+    // Shift goes down for the capital, then the session drops: the release
+    // must not be sent into a socket that is gone.
     await typeKeystrokes(sender, planKeystrokes("AB").keystrokes, {
-      // Shift goes down for the capital, then the session drops: the release
-      // must not be sent into a socket that is gone.
-      sleep: () => {
-        if (++sleeps > PRELUDE + 2) connected = false
-        return Promise.resolve()
-      },
+      sleep: noSleep,
       isConnected: () => connected,
+      onProgress: (typed) => {
+        if (typed >= 1) connected = false
+      },
     })
 
     expect(typedTrace(sent)).toEqual(["ShiftLeft↓", "KeyA↓", "KeyA↑"])
@@ -228,17 +222,15 @@ describe("typeKeystrokes interruption", () => {
   it("leaves the last modifier alone when the session dies on the final character", async () => {
     const { sender, sent } = recorder()
     let connected = true
-    let sleeps = 0
 
-    // "A" is prelude + Shift down + the character, so the drop lands after the
-    // loop has finished and the run reaches its closing release — the one path
-    // where that release is reachable at all.
+    // One character, so the drop lands after the loop has finished and the run
+    // reaches its closing release — the one path where it is reachable at all.
     await typeKeystrokes(sender, planKeystrokes("A").keystrokes, {
-      sleep: () => {
-        if (++sleeps >= PRELUDE + 3) connected = false
-        return Promise.resolve()
-      },
+      sleep: noSleep,
       isConnected: () => connected,
+      onProgress: (typed) => {
+        if (typed >= 1) connected = false
+      },
     })
 
     expect(typedTrace(sent)).toEqual(["ShiftLeft↓", "KeyA↓", "KeyA↑"])

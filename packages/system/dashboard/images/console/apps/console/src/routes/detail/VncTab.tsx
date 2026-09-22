@@ -5,7 +5,12 @@ import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/type
 import { releasePrefix } from "../../lib/app-definitions.ts"
 import { pastesWithMeta } from "../../lib/platform.ts"
 import { planKeystrokes } from "../../lib/vnc-keymap.ts"
-import { typeKeystrokes, DEFAULT_KEY_DELAY_MS, type KeySender } from "../../lib/vnc-typing.ts"
+import {
+  typeKeystrokes,
+  DEFAULT_KEY_DELAY_MS,
+  LATE_MODIFIER_WINDOW_MS,
+  type KeySender,
+} from "../../lib/vnc-typing.ts"
 
 // How long a one-off paste notice stays in the toolbar before the status
 // returns to the connection state.
@@ -73,6 +78,9 @@ export function VncTab({ ad, instance, keyDelayMs = DEFAULT_KEY_DELAY_MS }: VncT
   const senderRef = useRef<KeySender | null>(null)
   const pastingRef = useRef(false)
   const pasteAbortRef = useRef<AbortController | null>(null)
+  // When the shortcut was pressed, so the paste knows how much of noVNC's
+  // modifier-delivery window is still ahead of it.
+  const shortcutAtRef = useRef(0)
   const pasteSinkRef = useRef<HTMLTextAreaElement>(null)
   const sinkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -201,8 +209,10 @@ export function VncTab({ ad, instance, keyDelayMs = DEFAULT_KEY_DELAY_MS }: VncT
         const controller = new AbortController()
         pasteAbortRef.current = controller
         setPaste({ kind: "typing", typed: 0, total: keystrokes.length })
+        const elapsed = shortcutAtRef.current ? Date.now() - shortcutAtRef.current : 0
         const result = await typeKeystrokes(sender, keystrokes, {
           delayMs: keyDelayMs,
+          settleMs: Math.max(0, LATE_MODIFIER_WINDOW_MS - elapsed),
           signal: controller.signal,
           // Identity rather than liveness. The cleanup below aborts an
           // in-flight paste, so a replacement session cannot be reached in
@@ -251,6 +261,7 @@ export function VncTab({ ad, instance, keyDelayMs = DEFAULT_KEY_DELAY_MS }: VncT
       // preventDefault() on keydown, which would cancel the paste outright and
       // send the guest a Ctrl+V it cannot use.
       e.stopPropagation()
+      shortcutAtRef.current = Date.now()
       sink.value = ""
       sink.focus()
 

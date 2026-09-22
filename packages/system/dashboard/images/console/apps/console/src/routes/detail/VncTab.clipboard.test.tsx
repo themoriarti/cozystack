@@ -40,6 +40,15 @@ const { FakeRFB } = vi.hoisted(() => {
   class FakeRFB extends EventTarget {
     static instances: FakeRFB[] = []
     sendKey = vi.fn((keysym: number, code: string, down: boolean) => {
+      if (this.armed) {
+        if (this.armed.afterEvents <= 0) {
+          const { code: armedCode } = this.armed
+          this.armed = null
+          this.sendKey(armedCode.startsWith("Control") ? 0xffe3 : 0xffe9, armedCode, true)
+        } else {
+          this.armed.afterEvents--
+        }
+      }
       const modifier = MODIFIERS[code]
       if (modifier) {
         if (down) this.held.add(modifier)
@@ -59,6 +68,8 @@ const { FakeRFB } = vi.hoisted(() => {
     canvas: HTMLCanvasElement
     /** Modifiers the guest currently believes are down. */
     held = new Set<string>()
+    /** A modifier noVNC is sitting on, and how many events until it lands. */
+    armed: { code: string; afterEvents: number } | null = null
     /** What the guest ended up receiving, chords marked. */
     guestSaw = ""
 
@@ -78,12 +89,16 @@ const { FakeRFB } = vi.hoisted(() => {
     }
 
     /**
-     * The Windows path: the first Ctrl keydown tells the guest nothing and
-     * arms AltGr detection, and the modifier reaches the guest when that
-     * timer expires — after a paste has already started.
+     * The Windows path. The keydown tells the guest nothing and arms AltGr
+     * detection; the modifier is delivered once, by noVNC's own 100 ms timer
+     * or by the next keyup, whichever comes first. Both land within that
+     * window of the keydown — which is to say, while the paste is still in
+     * its opening releases, not after a character has been typed. The fake
+     * delivers partway through the opening releases, where noVNC's own timer
+     * lands at the default pace, so the test cannot choose the moment.
      */
-    deliverLateModifier(code: string) {
-      this.sendKey(code.startsWith("Control") ? 0xffe3 : 0xffe9, code, true)
+    armHeldModifier(code: string, afterEvents = 4) {
+      this.armed = { code, afterEvents }
     }
   }
   return { FakeRFB }
@@ -136,7 +151,7 @@ interface Session {
   unmount: () => void
 }
 
-async function connectedSession(keyDelayMs = 0): Promise<Session> {
+async function connectedSession(keyDelayMs: number | undefined = 0): Promise<Session> {
   const { container, unmount } = renderWithK8sProvider(
     <VncTab ad={ad} instance={instance} keyDelayMs={keyDelayMs} />,
     { client: runningClient() },
@@ -298,23 +313,19 @@ describe("VncTab pasted text", () => {
     await waitFor(() => expect(rfb.guestSaw).toBe("hi⏎"))
   })
 
-  it("recovers when the host delivers the modifier after the paste began", async () => {
-    // Needs the real pace: the repeat is timed against the window noVNC may
-    // hold a modifier for, and with no delay the run is over before it.
-    const { rfb, sink } = await connectedSession(25)
+  it("types plain characters when the host was sitting on the modifier", async () => {
+    const { rfb, sink } = await connectedSession()
+
+    // noVNC has not told the guest about Ctrl yet; it will, on its own, while
+    // the paste is still opening.
+    rfb.armHeldModifier("ControlLeft")
 
     pressPaste()
-    paste(sink, "abcdefgh")
+    paste(sink, "mkdir")
 
-    // Windows hands Ctrl to the guest on a 100 ms timer, which lands after
-    // the paste has cleared the modifiers it knew about.
-    await waitFor(() => expect(rfb.guestSaw.length).toBeGreaterThan(0))
-    rfb.deliverLateModifier("ControlLeft")
-
-    await waitFor(() => expect(rfb.guestSaw).toContain("h"), { timeout: 5000 })
-    // Whatever arrived while the guest held Ctrl is chorded; the tail after
-    // the repeat must be plain characters again.
-    expect(rfb.guestSaw.endsWith("gh")).toBe(true)
+    // Under a held Ctrl these are chords, and Ctrl+M is Return, so the guest
+    // would submit whatever the line already held.
+    await waitFor(() => expect(rfb.guestSaw).toBe("mkdir"))
   })
 
   it("hands the keyboard back to the console", async () => {
@@ -441,6 +452,31 @@ describe("VncTab paste when the clipboard gives nothing", () => {
 })
 
 describe("VncTab paste feedback in the toolbar", () => {
+  it("paces itself at the measured default when the caller gives no delay", async () => {
+    // Rendered without the prop, because nothing else reads the component's
+    // own default: setting it to zero would otherwise leave the suite green
+    // while the guest drops characters.
+    const { container } = renderWithK8sProvider(<VncTab ad={ad} instance={instance} />, {
+      client: runningClient(),
+    })
+    await waitFor(() => expect(FakeRFB.instances).toHaveLength(1))
+    const rfb = FakeRFB.instances[0]
+    act(() => {
+      rfb.dispatchEvent(new CustomEvent("connect"))
+    })
+    rfb.canvas.focus()
+    const sink = container.querySelector("textarea")
+    if (!sink) throw new Error("paste sink missing")
+
+    const started = Date.now()
+    pressPaste()
+    paste(sink, "ab")
+    await waitFor(() => expect(rfb.guestSaw).toBe("ab"), { timeout: 5000 })
+
+    // Fourteen opening releases and two characters at 25 ms a piece.
+    expect(Date.now() - started).toBeGreaterThan(200)
+  })
+
   it("counts the characters while they are typed", async () => {
     // The one test that needs real pacing: with no delay the run finishes
     // before a count can be observed.

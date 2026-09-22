@@ -14,6 +14,11 @@ export interface KeySender {
 
 export interface TypeKeystrokesOptions {
   delayMs?: number
+  /**
+   * How much of the modifier-delivery window is still ahead when this paste
+   * starts, measured from the keydown that triggered it.
+   */
+  settleMs?: number
   signal?: AbortSignal
   isConnected?: () => boolean
   onProgress?: (typed: number, total: number) => void
@@ -29,16 +34,16 @@ export interface TypeKeystrokesResult {
 export const DEFAULT_KEY_DELAY_MS = 25
 
 /**
- * How long noVNC may sit on a modifier before passing it to the guest.
+ * How long noVNC may sit on a modifier before handing it to the guest.
  *
- * On a Windows host the first Ctrl keydown sends nothing: it arms AltGr
- * detection and starts a 100 ms timer, and the guest is told Ctrl is down only
- * when that timer expires or another key event arrives. Taking the shortcut on
- * the capture phase hides the V from noVNC, so the timer is what fires — after
- * the prelude below has already released a modifier the guest had not yet been
- * told about. Releasing once more past that window catches it.
+ * On a Windows host the first Ctrl keydown sends nothing to the guest: it arms
+ * AltGr detection and starts a 100 ms timer. The modifier is delivered once,
+ * by whichever comes first — that timer, or the next keyup, since
+ * `_handleKeyUp` interrupts the sequence too and the V release is not
+ * intercepted. Both land within this window of the keydown, so a release sent
+ * after it has closed is the one the guest keeps.
  */
-const LATE_MODIFIER_WINDOW_MS = 100
+export const LATE_MODIFIER_WINDOW_MS = 100
 
 const SHIFT_KEY = { keysym: XK_SHIFT_L, code: "ShiftLeft" }
 
@@ -85,6 +90,7 @@ export async function typeKeystrokes(
 ): Promise<TypeKeystrokesResult> {
   const {
     delayMs = DEFAULT_KEY_DELAY_MS,
+    settleMs = LATE_MODIFIER_WINDOW_MS,
     signal,
     isConnected = () => true,
     onProgress,
@@ -93,14 +99,10 @@ export async function typeKeystrokes(
 
   let heldShift = false
   let typed = 0
-  let eventsSincePrelude = 0
-  let repeatedPrelude = false
-  // Events whose pacing covers the window noVNC may hold a modifier for.
-  const repeatAfter = Math.ceil(LATE_MODIFIER_WINDOW_MS / Math.max(delayMs, 1)) + 1
+
 
   const press = async (keysym: number, code: string, down: boolean) => {
     sender.sendKey(keysym, code, down)
-    eventsSincePrelude++
     await sleep(delayMs)
   }
 
@@ -118,21 +120,22 @@ export async function typeKeystrokes(
       if (!isConnected()) return { typed, stopped: "disconnected" }
       await press(modifier.keysym, modifier.code, false)
     }
-    // The window is measured from here, not from the prelude's own events.
-    eventsSincePrelude = 0
+
+    // The delivery happens within a window of the keydown, which is before
+    // this paste began — so waiting out whatever is left of it, and only then
+    // releasing again, is what puts the guest in a known state. Doing it after
+    // a count of characters instead lets those characters through as chords.
+    const spentOnPrelude = HOST_MODIFIERS.length * delayMs
+    const remaining = settleMs - spentOnPrelude
+    if (remaining > 0) await sleep(remaining)
+
+    for (const modifier of CHORD_MODIFIERS) {
+      if (!isConnected()) return { typed, stopped: "disconnected" }
+      await press(modifier.keysym, modifier.code, false)
+    }
   }
 
   for (const stroke of keystrokes) {
-    // A modifier noVNC was sitting on lands here, after the prelude cleared
-    // one the guest had never been told about.
-    if (!repeatedPrelude && eventsSincePrelude >= repeatAfter) {
-      repeatedPrelude = true
-      for (const modifier of CHORD_MODIFIERS) {
-        if (!isConnected()) return { typed, stopped: "disconnected" }
-        await press(modifier.keysym, modifier.code, false)
-      }
-    }
-
     // A dropped session takes precedence: releasing a modifier into a socket
     // that is gone is pointless, and the caller needs to hear why we stopped.
     if (!isConnected()) return { typed, stopped: "disconnected" }
