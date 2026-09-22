@@ -24,8 +24,15 @@ spec:
   # served exclusively on the dedicated admin route below, so /admin is not
   # reachable here. See the Keycloak reverse proxy guide, "Exposed path
   # recommendations".
+  {{- $loginPaths := include "keycloak.loginPaths" . | fromYamlArray }}
+  {{- /* A route rule takes at most 64 path matches (Gateway API CRD), and each
+         realm takes two of them. Beyond that the apiserver rejects the whole
+         HTTPRoute, so say which parameter to shorten. */}}
+  {{- if gt (len $loginPaths) 64 }}
+  {{-   fail (printf "the login route needs %d path matches but a Gateway API route rule takes at most 64: publish at most 31 realms (ingress.exposedRealms plus the platform realm), got %d" (len $loginPaths) (div (len $loginPaths) 2)) }}
+  {{- end }}
   - matches:
-    {{- range $p := include "keycloak.loginPaths" . | fromYamlArray }}
+    {{- range $p := $loginPaths }}
     - path:
         type: {{ if $p.exact }}Exact{{ else }}PathPrefix{{ end }}
         value: {{ $p.value | quote }}

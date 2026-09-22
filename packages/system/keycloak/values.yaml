@@ -36,8 +36,8 @@ ingress:
   # deployment serves to its users beyond the platform one, e.g. a back-office
   # realm whose issuer URL lives on this hostname:
   #   exposedRealms: [cozy-admin]
-  # Gateway API caps one route rule at 64 path matches and each realm takes
-  # two, so at most 31 realms can be published this way.
+  # Each realm takes two of the 64 path matches a Gateway API route rule holds,
+  # so at most 31 realms can be published; the chart refuses more.
   # Ignored while adminHost is empty, because the login route then serves "/".
   exposedRealms: []
   annotations:

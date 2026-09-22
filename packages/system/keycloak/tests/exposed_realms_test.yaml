@@ -167,6 +167,112 @@ tests:
       - isNull:
           path: spec.rules[0].matches
 
+  # Validation is deliberately lazy: without adminHost the login route serves
+  # "/" and the realm list is not read at all, so even master goes unnoticed.
+  - it: ignores exposedRealms entirely without adminHost
+    template: templates/httproute.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+      ingress:
+        exposedRealms:
+        - master
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isNull:
+          path: spec.rules[0].matches
+
+  - it: publishes 31 realms on the login HTTPRoute
+    template: templates/httproute.yaml
+    documentIndex: 0
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+      ingress:
+        adminHost: keycloak-admin.example.com
+        exposedRealms:
+        - realm-0
+        - realm-1
+        - realm-2
+        - realm-3
+        - realm-4
+        - realm-5
+        - realm-6
+        - realm-7
+        - realm-8
+        - realm-9
+        - realm-10
+        - realm-11
+        - realm-12
+        - realm-13
+        - realm-14
+        - realm-15
+        - realm-16
+        - realm-17
+        - realm-18
+        - realm-19
+        - realm-20
+        - realm-21
+        - realm-22
+        - realm-23
+        - realm-24
+        - realm-25
+        - realm-26
+        - realm-27
+        - realm-28
+        - realm-29
+    asserts:
+      - lengthEqual:
+          path: spec.rules[0].matches
+          count: 64
+
+  - it: refuses more realms than a route rule can match
+    template: templates/httproute.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+      ingress:
+        adminHost: keycloak-admin.example.com
+        exposedRealms:
+        - realm-0
+        - realm-1
+        - realm-2
+        - realm-3
+        - realm-4
+        - realm-5
+        - realm-6
+        - realm-7
+        - realm-8
+        - realm-9
+        - realm-10
+        - realm-11
+        - realm-12
+        - realm-13
+        - realm-14
+        - realm-15
+        - realm-16
+        - realm-17
+        - realm-18
+        - realm-19
+        - realm-20
+        - realm-21
+        - realm-22
+        - realm-23
+        - realm-24
+        - realm-25
+        - realm-26
+        - realm-27
+        - realm-28
+        - realm-29
+        - realm-30
+    asserts:
+      - failedTemplate:
+          errorPattern: "publish at most 31 realms"
+
   - it: keeps the admin HTTPRoute serving the whole admin plane
     template: templates/httproute.yaml
     documentIndex: 1
@@ -236,8 +342,14 @@ tests:
           path: spec.rules[0].http.paths[2].path
           value: /realms/cozy-admin
       - equal:
+          path: spec.rules[0].http.paths[2].pathType
+          value: Exact
+      - equal:
           path: spec.rules[0].http.paths[3].path
           value: /realms/cozy-admin/
+      - equal:
+          path: spec.rules[0].http.paths[3].pathType
+          value: Prefix
 
   # --- validation ---
   - it: rejects a realm name that would split the URL path
