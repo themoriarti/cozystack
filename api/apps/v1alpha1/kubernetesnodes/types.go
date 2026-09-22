@@ -162,7 +162,7 @@ type ProxmoxNetwork struct {
 }
 
 type Resources struct {
-	// CPU available.
+	// Number of vCPU cores for each worker VM, as a whole number such as `2`. On the `kubevirt` substrate the value becomes the VM's integer `domain.cpu.cores`, so millicore, fractional and negative quantities, and counts above 4294967295, are rejected at render time; an unquoted `0` is treated as unset. On the `proxmox` substrate a millicore or fractional quantity is rounded up to whole cores.
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available.
 	Memory resource.Quantity `json:"memory,omitempty"`

@@ -32,7 +32,7 @@ storageClass: replicated
 ##
 
 ## @typedef {struct} Resources - Explicit CPU and memory configuration for a node.
-## @field {quantity} [cpu] - CPU available.
+## @field {quantity} [cpu] - Number of vCPU cores for each worker VM, as a whole number such as `2`. On the `kubevirt` substrate the value becomes the VM's integer `domain.cpu.cores`, so millicore, fractional and negative quantities, and counts above 4294967295, are rejected at render time; an unquoted `0` is treated as unset. On the `proxmox` substrate a millicore or fractional quantity is rounded up to whole cores.
 ## @field {quantity} [memory] - Memory (RAM) available.
 
 ## @typedef {struct} GPU - GPU configuration.
