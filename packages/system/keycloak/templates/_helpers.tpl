@@ -1,5 +1,5 @@
-{{- /* Paths the login host serves in the narrowed (ingress.adminHost) mode, as
-       a YAML list of {value, exact} — callers parse it with fromYamlArray.
+{{- /* Realms published on the login host in the narrowed (ingress.adminHost)
+       mode, as a YAML list — callers parse it with fromYamlArray.
 
        Realms are enumerated rather than covered by a bare /realms prefix,
        which publishes every realm the deployment happens to have, master
@@ -8,23 +8,16 @@
        the edge accepts and which Gateway/ingressClass the admin route
        attaches to, and expose-ingress-admin defaults to the public one.
 
-       Each realm gets an exact path plus a prefix with the trailing slash,
-       because ingress-nginx renders `pathType: Prefix` as a plain nginx
-       prefix location (buildLocation() in
-       internal/ingress/controller/template/template.go) rather than the
-       element-wise match the Ingress API specifies — a lone /realms/cozy
-       would also serve /realms/cozy-admin there. The pair is equivalent to
-       the element-wise semantics on a conformant controller and on Gateway
-       API, so it is emitted for both.
-
        The charset guard mirrors authentication.oidc.realmName in
        packages/core/platform: the name is used verbatim as a URL path
        segment. */}}
-{{- define "keycloak.loginPaths" -}}
+{{- define "keycloak.publishedRealms" -}}
 {{- $realmPattern := "^[a-zA-Z0-9][a-zA-Z0-9._-]*$" }}
 {{- $platformRealm := dig "oidc-realm-name" "cozy" (.Values._cluster | default dict) | toString }}
 {{- $extraRealms := .Values.ingress.exposedRealms }}
-{{- if and $extraRealms (not (kindIs "slice" $extraRealms)) }}
+{{- /* kindIs "invalid" is the unset key; anything else that is not a list is
+       an operator mistake, including the falsy scalars false and 0. */}}
+{{- if and (not (kindIs "invalid" $extraRealms)) (not (kindIs "slice" $extraRealms)) }}
 {{-   fail (printf "ingress.exposedRealms must be a list of realm names (got %s), e.g. exposedRealms: [cozy-admin]" (kindOf $extraRealms)) }}
 {{- end }}
 {{- range $realm := $extraRealms }}
@@ -46,7 +39,22 @@
 {{- end }}
 {{- /* The platform realm is what every component's issuer URL points at, so it
        is published whether or not exposedRealms names it. */}}
-{{- range $realm := concat (list $platformRealm) ($extraRealms | default list) | uniq }}
+{{- concat (list $platformRealm) ($extraRealms | default list) | uniq | toYaml }}
+{{- end }}
+
+{{- /* Paths the login host serves in the narrowed mode, as a YAML list of
+       {value, exact}.
+
+       Each realm gets an exact path plus a prefix with the trailing slash,
+       because ingress-nginx renders `pathType: Prefix` as a plain nginx
+       prefix location (buildLocation() in
+       internal/ingress/controller/template/template.go) rather than the
+       element-wise match the Ingress API specifies — a lone /realms/cozy
+       would also serve /realms/cozy-admin there. The pair is equivalent to
+       the element-wise semantics on a conformant controller and on Gateway
+       API, so it is emitted for both. */}}
+{{- define "keycloak.loginPaths" -}}
+{{- range $realm := include "keycloak.publishedRealms" . | fromYamlArray }}
 - value: {{ printf "/realms/%s" $realm | quote }}
   exact: true
 - value: {{ printf "/realms/%s/" $realm | quote }}

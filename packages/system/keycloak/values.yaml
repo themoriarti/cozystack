@@ -30,15 +30,16 @@ ingress:
   # (authentication.oidc.realmName, default "cozy"), which is always published
   # because every component's issuer URL points at it.
   #
-  # A realm named nowhere is not routed from outside the cluster — that is the
-  # point: realm master, whose token endpoint accepts super-admin credentials,
-  # must never be published, and the chart refuses to. List a realm a
-  # deployment serves to its users beyond the platform one, e.g. a back-office
-  # realm whose issuer URL lives on this hostname:
+  # In this mode a realm named nowhere is not routed from outside the cluster —
+  # that is the point, and the chart refuses to publish master, whose token
+  # endpoint accepts super-admin credentials. (While adminHost is empty the
+  # login route serves "/" instead, master and /admin included, and this list
+  # is not read at all.) List a realm a deployment serves to its users beyond
+  # the platform one, e.g. a back-office realm whose issuer URL lives on this
+  # hostname:
   #   exposedRealms: [cozy-admin]
   # Each realm takes two of the 64 path matches a Gateway API route rule holds,
   # so at most 31 realms can be published; the chart refuses more.
-  # Ignored while adminHost is empty, because the login route then serves "/".
   exposedRealms: []
   annotations:
     nginx.ingress.kubernetes.io/affinity: "cookie"

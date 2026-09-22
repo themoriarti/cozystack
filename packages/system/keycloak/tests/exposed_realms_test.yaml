@@ -271,7 +271,7 @@ tests:
         - realm-30
     asserts:
       - failedTemplate:
-          errorPattern: "publish at most 31 realms"
+          errorPattern: "publish at most 31 realms \\(ingress.exposedRealms plus the platform realm\\), got 32"
 
   - it: keeps the admin HTTPRoute serving the whole admin plane
     template: templates/httproute.yaml
@@ -392,6 +392,18 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "ingress.exposedRealms entries must be strings"
+
+  - it: rejects a falsy scalar in place of the realm list
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.com
+      ingress:
+        adminHost: keycloak-admin.example.com
+        exposedRealms: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "ingress.exposedRealms must be a list"
 
   - it: rejects a scalar in place of the realm list
     template: templates/ingress.yaml
