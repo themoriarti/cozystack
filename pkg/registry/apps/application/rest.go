@@ -1616,14 +1616,11 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	//   - HelmUpgradeTimeout (release.cozystack.io/helm-upgrade-timeout)
 	//     then overrides only Upgrade.Timeout, so a kind can carry an
 	//     asymmetric budget (short install, long upgrade or vice versa).
-	// kubernetes-rd and tenant-rd carry helm-install-timeout today: the
-	// Kubernetes Application's parent chart contains CAPI/Kamaji
-	// resources whose admin-kubeconfig Secret is provisioned
-	// asynchronously and Kamaji cold-start routinely exceeds flux's
-	// default wait budget, and the Tenant parent chart bootstraps the
-	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
-	// Any future kind with the same shape can opt in by setting the
-	// same annotation.
+	// Both annotations live on the kind's ApplicationDefinition (for a
+	// kind shipped in this repo, the cozyrds manifest of its -rd
+	// package), so a kind whose chart can legitimately outlast the
+	// global wait budget opts in there rather than raising the default
+	// for every kind.
 	installTimeout := r.releaseConfig.HelmReleaseInstallTimeout
 	upgradeTimeout := r.releaseConfig.HelmReleaseUpgradeTimeout
 	if r.releaseConfig.HelmInstallTimeout > 0 {
