@@ -25,9 +25,14 @@ SHA256SUM = $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || ec
 include ../../../hack/package.mk
 
 # Phony because hack/package.mk's .PHONY line lists only the targets that file
-# defines: with neither name declared, a path named `test` or `update` next to
-# this Makefile would make that target up to date and skip the recipe.
-.PHONY: test update
+# defines: with none of these names declared, a path named `test`, `update` or
+# `generate` next to this Makefile would make that target up to date and skip
+# the recipe.
+.PHONY: test update generate
+
+# No -r: this package ships no README for cozyvalues-gen to update.
+generate:
+	cozyvalues-gen -v values.yaml -s values.schema.json
 
 # hack/package.mk defines no `test` target and hack/helm-unit-tests.sh only
 # runs a package whose `make -n test` resolves, so a tests/ directory with no
