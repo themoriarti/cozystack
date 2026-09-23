@@ -24,16 +24,12 @@ spec:
     replicas: ${KAFKA_REPLICAS}
     size: 2Gi
     resourcesPreset: "c1.small"
-  zookeeper:
-    replicas: 1
-    size: 1Gi
-    resourcesPreset: "c1.small"
   topics: []
 EOF
 
 wait_hr_ready "kafka-${KAFKA_NAME}"
 
-log_substep "Waiting for the Strimzi Kafka cluster to be Ready (brokers + ZooKeeper up)..."
+log_substep "Waiting for the Strimzi Kafka cluster to be Ready (broker and controller pools up)..."
 kubectl -n "$NAMESPACE" wait kafka.kafka.strimzi.io "kafka-${KAFKA_NAME}" \
     --for=condition=Ready --timeout=600s
 

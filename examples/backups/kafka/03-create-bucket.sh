@@ -74,13 +74,24 @@ done
 # copy for a publicly-trusted endpoint (see 00-helpers.sh).
 S3_CA_B64=""
 if [[ -n "$S3_CA_SECRET" ]]; then
-    if ! kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" >/dev/null 2>&1; then
+    # Only an absent Secret earns a discovery pass. The read crosses into
+    # another namespace, which a tenant persona is not granted, and a denial
+    # must say so rather than surface as "not found" and point at a name
+    # that cannot help.
+    if ! err=$(kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" 2>&1 >/dev/null); then
+        case "$err" in
+            *NotFound*|*"not found"*) ;;
+            *)
+                log_error "Cannot read S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET}: ${err}"
+                log_error "Run this step with a persona that can read Secrets in ${S3_CA_NAMESPACE}, or set S3_CA_SECRET=\"\" for a publicly-trusted endpoint."
+                exit 1 ;;
+        esac
         log_warning "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} not found; discovering the seaweedfs CA Certificate..."
         discovered=$(kubectl -n "$S3_CA_NAMESPACE" get certificates.cert-manager.io \
             -l app.kubernetes.io/name=seaweedfs \
-            -o jsonpath='{range .items[*]}{.spec.isCA}{" "}{.spec.secretName}{"\n"}{end}' 2>/dev/null \
+            -o jsonpath='{range .items[*]}{.spec.isCA}{" "}{.spec.secretName}{"\n"}{end}' \
             | awk '$1=="true"{print $2; exit}' || true)
-        [[ -n "$discovered" ]] || { log_error "No seaweedfs CA Certificate found in ${S3_CA_NAMESPACE}; set S3_CA_SECRET explicitly (or empty for a publicly-trusted endpoint)."; exit 1; }
+        [[ -n "$discovered" ]] || { log_error "No seaweedfs CA Certificate found in ${S3_CA_NAMESPACE} (or the read was denied, see above); set S3_CA_SECRET explicitly (or empty for a publicly-trusted endpoint)."; exit 1; }
         log_success "Discovered seaweedfs CA secret ${S3_CA_NAMESPACE}/${discovered}"
         S3_CA_SECRET="$discovered"
     fi

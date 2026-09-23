@@ -30,10 +30,6 @@ spec:
     replicas: ${KAFKA_REPLICAS}
     size: 2Gi
     resourcesPreset: "c1.small"
-  zookeeper:
-    replicas: 1
-    size: 1Gi
-    resourcesPreset: "c1.small"
   topics: []
 EOF
 

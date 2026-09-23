@@ -143,13 +143,15 @@ spec:
 # allowlist blocks a tenant-test Pod from reaching tenant-root's seaweedfs,
 # while a tenant-root Pod reaches it over same-tenant egress. The harness
 # targets the in-cluster endpoint (S3_ENDPOINT below) instead of the BucketInfo
-# external ingress URL, which in CI is an unroutable placeholder. The .svc FQDN
-# is load-bearing: the strategy's curl verifies TLS against the seaweedfs CA
-# the example copies into its S3 Secret, and the serving cert's SANs are
-# '*.tenant-root.svc' / '*.tenant-root.svc.cluster.local' — the 2-label
-# 'seaweedfs-s3.tenant-root' matches neither. KAFKA_IMAGE is resolved from the
-# running operator so the backup Pod reuses the exact Kafka image already
-# cached on the nodes (no extra pull, no version skew).
+# external ingress URL, which in CI is an unroutable placeholder. The strategy's
+# curl verifies TLS against the seaweedfs CA the example copies into its S3
+# Secret; the S3 listener serves the chart's client certificate
+# (packages/system/seaweedfs), whose SANs cover '*.tenant-root',
+# '*.tenant-root.svc' and '*.tenant-root.svc.cluster.local', so the 2-label
+# name would verify too — .svc is simply the fully-qualified in-cluster form.
+# KAFKA_IMAGE is resolved from the running operator so the backup Pod reuses
+# the exact Kafka image already cached on the nodes (no extra pull, no version
+# skew).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

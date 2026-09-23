@@ -124,7 +124,9 @@ spec:
 EOF
 wait_for_field restorejob "$RESTOREJOB_NONEMPTY_NAME" '{.status.phase}' Failed "$NAMESPACE" 600 Succeeded
 # The driver names the batch Job "<restorejob>-restore"; batch/v1 labels its
-# Pods job-name=<job>. Every attempt must have stopped at the emptiness check.
+# Pods job-name=<job>. At least one attempt must have logged the refusal;
+# that nothing was written by any attempt is what verify_restored below
+# establishes.
 refusals=$(kubectl -n "$NAMESPACE" logs -l "job-name=${RESTOREJOB_NONEMPTY_NAME}-restore" --tail=-1 2>/dev/null \
     | grep -c "already holds" || true)
 if [[ "$refusals" -lt 1 ]]; then

@@ -122,7 +122,12 @@ spec:
           args:
             - |
               set -eu
-              BIN=/opt/kafka/bin
+              # Overridable only so hack/kafka-topic-backup-strategy.bats can
+              # execute this body outside the Pod against stub CLIs; the Pod
+              # sets none of them.
+              BIN="\${BIN:-/opt/kafka/bin}"
+              SCRATCH="\${SCRATCH:-/tmp}"
+              CA_FILE="\${CA_FILE:-/etc/kafka-backup-s3/ca.crt}"
               BOOT="\${BOOTSTRAP}"
 
               # BucketInfo endpoints are bare host:port; COSI/seaweedfs serves
@@ -169,7 +174,7 @@ spec:
               # are deliberately unquoted so an empty value expands to no
               # argument.
               CA_OPT=""
-              if [ -s /etc/kafka-backup-s3/ca.crt ]; then CA_OPT="--cacert /etc/kafka-backup-s3/ca.crt"; fi
+              if [ -s "\${CA_FILE}" ]; then CA_OPT="--cacert \${CA_FILE}"; fi
               s3() { curl -fsS \${CA_OPT} \${CONNECT_TO} --aws-sigv4 "aws:amz:\${S3_REGION}:s3" --user "\${AWS_ACCESS_KEY_ID}:\${AWS_SECRET_ACCESS_KEY}" "\$@"; }
 
               # Records a topic currently holds, summed over its partitions as
@@ -183,10 +188,14 @@ spec:
               # so an unquoted name also matches its siblings ("audit.events"
               # matches "audit-events") and would mix another topic's
               # partitions into the count. \Q...\E pins it to a literal.
+              #
+              # Called as \$(topic_records ...) || exit 1, and a function run
+              # as the left operand of || has errexit switched off inside it,
+              # so every command here carries its own || return 1.
               topic_records() {
                 local t=\$1 want_parts=\$2 ends begins seen e ekey eo bo b total
-                ends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -1)
-                begins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2)
+                ends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -1) || return 1
+                begins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2) || return 1
                 seen=0
                 for e in \${ends}; do seen=\$((seen + 1)); done
                 if [ "\${seen}" -ne "\${want_parts}" ]; then
@@ -210,7 +219,8 @@ spec:
                 echo "\${total}"
               }
 
-              WORK=/tmp/kafka-dump
+              WORK="\${SCRATCH}/kafka-dump"
+              TARBALL="\${SCRATCH}/kafka-topics.tar"
               rm -rf "\${WORK}"; mkdir -p "\${WORK}"
 
               if [ "\${MODE}" = backup ]; then
@@ -335,13 +345,13 @@ spec:
                   done
                   echo "  \${t}: \${pc} partition(s), replication factor \${rf}"
                 done
-                tar -C "\${WORK}" -cf /tmp/kafka-topics.tar .
-                s3 -X PUT --upload-file /tmp/kafka-topics.tar "\${OBJ_URL}"
+                tar -C "\${WORK}" -cf "\${TARBALL}" .
+                s3 -X PUT --upload-file "\${TARBALL}" "\${OBJ_URL}"
                 echo "uploaded s3://\${S3_BUCKET}/\${KEY}"
               else
                 echo "restoring topics into \${BOOT} from s3://\${S3_BUCKET}/\${KEY}"
-                s3 -o /tmp/kafka-topics.tar "\${OBJ_URL}"
-                tar -C "\${WORK}" -xf /tmp/kafka-topics.tar
+                s3 -o "\${TARBALL}" "\${OBJ_URL}"
+                tar -C "\${WORK}" -xf "\${TARBALL}"
                 [ -f "\${WORK}/manifest.txt" ] || { echo "manifest missing in backup" >&2; exit 1; }
                 # The manifest arrives inside the downloaded tarball, so treat it
                 # as untrusted and validate before any field is used as a number.
@@ -356,6 +366,14 @@ spec:
                 while read -r mt mp mb me mr; do
                   lines=\$((lines + 1))
                   [ -n "\${mt}" ] || { echo "manifest line \${lines}: missing topic" >&2; exit 1; }
+                  # The topic name reaches unquoted expansions and a case
+                  # pattern below, with globbing on in this branch; hold it to
+                  # Kafka's name charset the way the backup side holds TOPICS.
+                  case "\${mt}" in
+                    *[!A-Za-z0-9._-]*)
+                      echo "manifest line \${lines}: topic name '\${mt}' carries a character outside Kafka's [a-zA-Z0-9._-]; refusing to restore from a malformed backup" >&2
+                      exit 1 ;;
+                  esac
                   for v in "\${mp}" "\${mb}" "\${me}" "\${mr}"; do
                     case "\${v}" in
                       ''|*[!0-9]*)
@@ -410,6 +428,10 @@ spec:
                   while read -r mt mp mb me mr; do
                     [ "\${mt}" = "\${t}" ] || continue
                     if [ "\${mp}" -ge "\${parts}" ]; then parts=\$((mp + 1)); fi
+                    if [ -n "\${rf}" ] && [ "\${rf}" != "\${mr}" ]; then
+                      echo "manifest lists \${t} with replication factors \${rf} and \${mr}; refusing to restore from an inconsistent backup" >&2
+                      exit 1
+                    fi
                     rf=\${mr}
                   done < "\${WORK}/manifest.txt"
                   if [ -n "\${REPLICATION_FACTOR}" ]; then rf=\${REPLICATION_FACTOR}; fi
@@ -419,18 +441,45 @@ spec:
                   # BackupClass to restore into a smaller cluster.
                   "\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --create --if-not-exists \
                     --topic "\${t}" --partitions "\${parts}" --replication-factor "\${rf}"
-                  # --if-not-exists leaves a pre-existing topic's partition count
-                  # alone, and the post-replay check below compares only the
-                  # per-topic total, so replaying into a topic with a different
-                  # partition count would silently re-place every keyed record
-                  # and still add up. Confirm the shape matches the backup.
-                  have_parts=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --describe --topic "\Q\${t}\E" \
-                    | sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' | head -1)
+                  # --if-not-exists leaves a pre-existing topic's partition
+                  # count and replication factor alone. The post-replay check
+                  # below compares only the per-topic total, so replaying into
+                  # a topic with a different partition count would silently
+                  # re-place every keyed record and still add up, and a
+                  # pre-existing topic with fewer replicas than the broker's
+                  # min.insync.replicas would take the replay and land nothing.
+                  # Confirm both against what the topic really has.
+                  desc=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --describe --topic "\Q\${t}\E")
+                  have_parts=\$(printf '%s\n' "\${desc}" | sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' | head -1)
+                  have_rf=\$(printf '%s\n' "\${desc}" | sed -n 's/.*ReplicationFactor: *\([0-9][0-9]*\).*/\1/p' | head -1)
                   case "\${have_parts}" in
                     ''|*[!0-9]*) echo "could not read PartitionCount for \${t} after create" >&2; exit 1 ;;
                   esac
+                  case "\${have_rf}" in
+                    ''|*[!0-9]*) echo "could not read ReplicationFactor for \${t} after create" >&2; exit 1 ;;
+                  esac
                   if [ "\${have_parts}" != "\${parts}" ]; then
                     echo "topic \${t} has \${have_parts} partition(s), backup recorded \${parts}; refusing to restore into a differently shaped topic" >&2
+                    exit 1
+                  fi
+                  if [ "\${have_rf}" != "\${rf}" ]; then
+                    echo "topic \${t} has replication factor \${have_rf}, restore expects \${rf}; refusing to replay into a pre-existing topic with a different replication factor" >&2
+                    exit 1
+                  fi
+                  # kafka-console-producer writes with acks=all, and a broker
+                  # rejects every such write into a topic whose replication
+                  # factor is below its min.insync.replicas - while the
+                  # producer only logs the rejection and exits 0. --describe
+                  # --all prints the effective value, broker default included,
+                  # so the mismatch is named here, with its remedy, instead of
+                  # surfacing as a count shortfall after an empty replay.
+                  misr=\$("\${BIN}"/kafka-configs.sh --bootstrap-server "\${BOOT}" --describe --all --entity-type topics --entity-name "\${t}" \
+                    | sed -n 's/.*min\.insync\.replicas=\([0-9][0-9]*\).*/\1/p' | head -1)
+                  case "\${misr}" in
+                    ''|*[!0-9]*) echo "could not read min.insync.replicas for \${t}" >&2; exit 1 ;;
+                  esac
+                  if [ "\${have_rf}" -lt "\${misr}" ]; then
+                    echo "topic \${t} has replication factor \${have_rf} but the broker requires min.insync.replicas=\${misr}, so every replayed write would be rejected. Set replicationFactor to at least \${misr} in the BackupClass (or restore into a cluster whose min.insync.replicas fits) and re-run." >&2
                     exit 1
                   fi
                   # Refuse a non-empty target BEFORE replaying, not after. The
