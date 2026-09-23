@@ -320,6 +320,10 @@ metadata:
   entries change that are in docs/oidc-tenant.md. That table is the one
   to update; there is deliberately no copy of it here.
 
+  The chart never renders a --feature-gates term of its own, so it never
+  enables an alpha gate for the operator; it reads the operator's gate entries
+  only to find an opt-out.
+
   Anchors for the split, read at v1.32.13 and v1.35.6:
   staging/src/k8s.io/apiserver/pkg/features/kube_features.go for the gate's
   versioned spec, and .../server/options/authentication.go Validate() for
@@ -332,9 +336,8 @@ metadata:
   union and an element the chart adds can only satisfy caseInsensitiveHas.
   --feature-gates collects into one bucket per component and is handed to
   featureGate.Set() once, so the last term for a gate name wins across
-  entries, and naming the kube component both bare and kube:-prefixed is
-  refused outright. --emulated-version is a StringSlice too,
-  and toVersionMap refuses two elements naming the same component.
+  entries. --emulated-version is a StringSlice too, and toVersionMap refuses
+  two elements naming the same component.
 
   Two pins decide that: the tenant control plane build in
   packages/system/kamaji, and the owner of the CR field read here,
@@ -348,7 +351,6 @@ metadata:
   arg has been seen.
 */}}
 {{- $uidHeaderUnsupported := false }}
-{{- $uidGateRequired := false }}
 {{- $emulatedKubeVersion := "" }}
 {{- $emulatedKubeDuplicated := false }}
 {{- $uidGateOptedOut := false }}
@@ -361,14 +363,10 @@ metadata:
 {{- $uidHeaderHasEmpty := false }}
 {{- $gateValues := dict }}
 {{- $gateArgs := dict }}
-{{- $gateUsesKubePrefix := false }}
-{{- $gateUsesBarePrefix := false }}
-{{- $gateKubePrefixArg := "" }}
-{{- $gateBarePrefixArg := "" }}
 {{- $gateArgSeen := "" }}
 {{- $uidGateSetting := "" }}
 {{- $allBetaSetting := "" }}
-{{- $allAlphaSetting := "" }}
+{{- $versionPattern := `^\s*v?([0-9]+(?:\.[0-9]+)*)(.*)$` }}
 {{- $uidArgs := list }}
 {{- /*
   Legacy `--oidc-*` flags in the user-supplied extraArgs are mutually
@@ -494,9 +492,8 @@ metadata:
   is a colon-separated multimap parsed above featureGate.Set(), which is the
   layer `known[Feature(k)]` belongs to.
 
-  A blanket AllAlpha/AllBeta counts: setUnsetAlphaGates and setUnsetBetaGates
-  skip a key an explicit entry already wrote, so the explicit one wins in
-  either map-iteration order.
+  A blanket AllBeta counts: setUnsetBetaGates skips a key an explicit entry
+  already wrote, so the explicit one wins in either map-iteration order.
 
   Settings accumulate across entries into one dict because the multimap
   does: every entry's terms land in the same per-component bucket and are
@@ -520,29 +517,13 @@ metadata:
 {{- /*
   Only a literal "kube" keys under the kube component. An empty component,
   as in ":Foo=true", keys under "" exactly like an unprefixed element. A
-  foreign component keeps its prefix, never matches one of the gate names
-  below, and says nothing about the spelling this chart has to match.
+  foreign component keeps its prefix and never matches one of the gate names
+  below.
 */}}
-{{-             if eq $component "kube" }}
-{{-               $gateUsesKubePrefix = true }}
-{{-               if eq $gateKubePrefixArg "" }}
-{{-                 $gateKubePrefixArg = $arg }}
-{{-               end }}
-{{-             else if eq $component "" }}
-{{-               $gateUsesBarePrefix = true }}
-{{-               if eq $gateBarePrefixArg "" }}
-{{-                 $gateBarePrefixArg = $arg }}
-{{-               end }}
+{{-             if has $component (list "kube" "") }}
+{{-               $element = trimPrefix (printf "%s:" (index (splitList ":" $element) 0)) $element }}
 {{-             else }}
 {{-               $elementIsKube = false }}
-{{-             end }}
-{{-             if $elementIsKube }}
-{{-               $element = trimPrefix (printf "%s:" (index (splitList ":" $element) 0)) $element }}
-{{-             end }}
-{{-           else }}
-{{-             $gateUsesBarePrefix = true }}
-{{-             if eq $gateBarePrefixArg "" }}
-{{-               $gateBarePrefixArg = $arg }}
 {{-             end }}
 {{-           end }}
 {{-           if $elementIsKube }}
@@ -556,7 +537,7 @@ metadata:
 {{-               else if has $gval (list "0" "f" "F" "false" "FALSE" "False") }}
 {{-                 $resolved = "false" }}
 {{-               end }}
-{{-               if and (ne $resolved "") (has $gname (list "RemoteRequestHeaderUID" "AllAlpha" "AllBeta")) }}
+{{-               if and (ne $resolved "") (has $gname (list "RemoteRequestHeaderUID" "AllBeta")) }}
 {{-                 $gateValues = set $gateValues $gname $resolved }}
 {{- /*
   Keyed by gate name, so the opt-out message can quote the entry that carries
@@ -571,22 +552,28 @@ metadata:
 {{-     end }}
 {{-     if hasPrefix "--emulated-version=" $arg }}
 {{- /*
-  Emulation moves the version the gate resolves at, and the flags below have
+  Emulation moves the version the gate resolves at, and the header flag has
   to follow it rather than the image tag. featureSpecAtEmulationVersion
   (featureSpecAtEmulationAndMinCompatVersion by v1.35) walks the versioned
   specs down to the emulated version, so RemoteRequestHeaderUID
-  is alpha-and-off at an emulated 1.32 on any binary, and PreAlpha below that,
-  where featureGate.Set() refuses to enable it at all.
+  is alpha-and-off at an emulated 1.32 on any binary, and the apiserver
+  refuses the header flag there.
 
   The value is a CSV of component=version, and an element naming no component
   is kube's. Anything else names another component and is none of our
-  business. An unparseable version is left alone, the way an unparseable gate
-  value is: the apiserver rejects it on its own terms.
+  business. $versionPattern copies versionMatchRE from version.Parse, which
+  toVersionMap uses: an optional v, a run of dot-separated numbers, and
+  anything after it ignored, so the chart reads v1.32, 1.32.0 and 1.32-rc all
+  as 1.32. A version it cannot parse is left
+  alone, the way an unparseable gate value is: the apiserver rejects it on its
+  own terms. A non-zero patch component in an unquoted value fails the render
+  instead: toVersionMap refuses it too, and the render error names the entry
+  where the apiserver would only crash-loop.
 
   Elements accumulate across entries, and toVersionMap refuses two of them
   naming the same component. A second kube element therefore stops the
   apiserver and leaves no version this code can trust, so it is tracked and
-  the flags below are withheld rather than rendered against a guess.
+  the header flag is withheld rather than rendered against a guess.
 */}}
 {{-       $emulatedValue := trimPrefix "--emulated-version=" $arg }}
 {{-       if ne $emulatedValue "" }}
@@ -594,11 +581,11 @@ metadata:
 {{-           $emulatedQuoted = true }}
 {{-         end }}
 {{-         range $e := splitList "," $emulatedValue }}
-{{-           $parts := splitList "=" (trim $e) }}
+{{-           $parts := regexSplit "=" (trim $e) 2 }}
 {{-           $candidate := "" }}
 {{-           if eq (len $parts) 1 }}
 {{-             $candidate = trim (index $parts 0) }}
-{{-           else if and (eq (len $parts) 2) (eq (trim (index $parts 0)) "kube") }}
+{{-           else if eq (trim (index $parts 0)) "kube" }}
 {{-             $candidate = trim (index $parts 1) }}
 {{-           end }}
 {{-           if ne $candidate "" }}
@@ -606,6 +593,12 @@ metadata:
 {{-               $emulatedKubeDuplicated = true }}
 {{-             end }}
 {{-             $emulatedKubeVersion = $candidate }}
+{{-             if and (not (contains "\"" $emulatedValue)) (regexMatch $versionPattern $candidate) }}
+{{-               $numeric := splitList "." (regexReplaceAll $versionPattern $candidate "${1}") }}
+{{-               if and (ge (len $numeric) 3) (ne (atoi (index $numeric 2)) 0) }}
+{{-                 fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver refuses an --emulated-version with a non-zero patch component (patch version not allowed), so the control plane would refuse to start. Emulation takes major.minor: write %s.%s instead of %s." $arg $.Values.oidc.mode (index $numeric 0) (index $numeric 1) $candidate) }}
+{{-               end }}
+{{-             end }}
 {{-           end }}
 {{-         end }}
 {{-       end }}
@@ -613,7 +606,6 @@ metadata:
 {{-   end }}
 {{-   $uidGateSetting = dig "RemoteRequestHeaderUID" "" $gateValues }}
 {{-   $allBetaSetting = dig "AllBeta" "" $gateValues }}
-{{-   $allAlphaSetting = dig "AllAlpha" "" $gateValues }}
 {{- /*
   Emulation can only move the effective version down, so the lower of the two
   decides. A tenant asking to emulate something newer than its own image is
@@ -623,9 +615,9 @@ metadata:
 {{-   $chartMinorParts := splitList "." (trimPrefix "v" .Values.version) }}
 {{-   $chartMinor := atoi (index $chartMinorParts 1) }}
 {{-   $effectiveMinor := $chartMinor }}
-{{-   if ne $emulatedKubeVersion "" }}
-{{-     $emulatedParts := splitList "." (trimPrefix "v" $emulatedKubeVersion) }}
-{{-     if and (ge (len $emulatedParts) 2) (regexMatch "^[0-9]+$" (index $emulatedParts 1)) }}
+{{-   if regexMatch $versionPattern $emulatedKubeVersion }}
+{{-     $emulatedParts := splitList "." (regexReplaceAll $versionPattern $emulatedKubeVersion "${1}") }}
+{{-     if ge (len $emulatedParts) 2 }}
 {{-       $emulatedMinor := atoi (index $emulatedParts 1) }}
 {{-       if lt $emulatedMinor $effectiveMinor }}
 {{-         $effectiveMinor = $emulatedMinor }}
@@ -640,40 +632,27 @@ metadata:
 {{-   if and (ne $emulatedKubeVersion "") (ne $effectiveMinor $chartMinor) }}
 {{-     $versionForMessage = printf "%s emulating %s" .Values.version $emulatedKubeVersion }}
 {{-   end }}
-{{-   $uidHeaderUnsupported = le $effectiveMinor 31 }}
-{{-   $uidGateRequired = eq $effectiveMinor 32 }}
+{{-   $uidHeaderUnsupported = lt $effectiveMinor 33 }}
 {{-   if eq $uidGateSetting "false" }}
 {{-     $uidGateOptedOut = true }}
 {{-     $gateArgSeen = dig "RemoteRequestHeaderUID" "" $gateArgs }}
-{{-   else if ne $uidGateSetting "true" }}
-{{-     if $uidGateRequired }}
-{{-       if eq $allAlphaSetting "false" }}
-{{-         $uidGateOptedOut = true }}
-{{-         $gateArgSeen = dig "AllAlpha" "" $gateArgs }}
-{{-       end }}
-{{-     else if eq $allBetaSetting "false" }}
-{{-       $uidGateOptedOut = true }}
-{{-       $gateArgSeen = dig "AllBeta" "" $gateArgs }}
-{{-     end }}
+{{-   else if and (ne $uidGateSetting "true") (eq $allBetaSetting "false") }}
+{{-     $uidGateOptedOut = true }}
+{{-     $gateArgSeen = dig "AllBeta" "" $gateArgs }}
 {{-   end }}
 {{-   $argUnreadable := or $gateArgUnreadable $emulatedArgUnreadable }}
-{{-   if not (or $uidHeaderUnsupported $emulatedQuoted $emulatedKubeDuplicated $argUnreadable) }}
-{{-     if and $gateUsesKubePrefix $gateUsesBarePrefix }}
-{{-       fail (printf "controlPlane.apiServer.extraArgs names the kube feature gates both ways, %q and %q, while spec.oidc.mode is %q — componentGlobalsRegistry.Set() refuses a configuration that names the kube component both ways, so the control plane would refuse to start and nothing the chart renders repairs it. Write every kube gate term in one spelling." $gateBarePrefixArg $gateKubePrefixArg $.Values.oidc.mode) }}
-{{-     end }}
-{{-   end }}
 {{- /*
   An unreadable entry leaves the gate or the version unknown, and what
   follows holds in every state it can hide. An explicit
   RemoteRequestHeaderUID=false is an opt-out at every version, so it is
-  refused behind an unread --emulated-version; a blanket AllBeta or
-  AllAlpha reaches the gate only at the maturity the version gives it, so
-  it waits for a reading. An unread --feature-gates term can turn the gate
-  back on, so it keeps the opt-out refusal off. An empty
-  element is fatal with the gate in either state. X-Remote-Uid beside an
+  refused behind an unread --emulated-version; a blanket AllBeta reaches
+  the gate only while the gate is beta, which a lower emulated version can
+  undo, so it waits for a reading. An unread --feature-gates term can turn
+  the gate back on, so it keeps the opt-out refusal off. An empty element
+  is fatal with the gate in either state. X-Remote-Uid beside an
   operator's own list can only help: the gate off refuses that list anyway.
   What the chart adds with no list of the operator's beside it, X-Remote-Uid
-  alone or the v1.32 gate term, waits for a reading.
+  alone, waits for a reading.
 */}}
 {{-   if not (or $uidHeaderUnsupported $emulatedQuoted $emulatedKubeDuplicated) }}
 {{-     if $uidGateOptedOut }}
@@ -691,19 +670,6 @@ metadata:
 */}}
 {{-       if and (not $uidHeaderConforms) (or (not $argUnreadable) (ne $uidHeaderArgSeen "")) }}
 {{-         $uidArgs = append $uidArgs "--requestheader-uid-headers=X-Remote-Uid" }}
-{{-       end }}
-{{-       if and (not $argUnreadable) $uidGateRequired (not (or (eq $uidGateSetting "true") (eq $allAlphaSetting "true"))) }}
-{{- /*
-  Only this chart's own term: the operator's entries reach featureGate.Set()
-  on their own, and the term goes last, where it wins. The spelling has to
-  match whatever the operator used, or the mix above becomes this chart's
-  doing.
-*/}}
-{{-         $ownTerm := "RemoteRequestHeaderUID=true" }}
-{{-         if $gateUsesKubePrefix }}
-{{-           $ownTerm = "kube:RemoteRequestHeaderUID=true" }}
-{{-         end }}
-{{-         $uidArgs = append $uidArgs (printf "--feature-gates=%s" $ownTerm) }}
 {{-       end }}
 {{-     end }}
 {{-   end }}
