@@ -3,10 +3,13 @@
 
 // Package collision detects when a tapped repository would shadow a core
 // component. Tapped repositories keep their own declared names (there is no
-// community. namespacing), so a name or ApplicationDefinition kind that clashes
-// with an existing component must be a hard error rather than a silent
-// overwrite. The same checks run on the CLI tap path and in the operator
-// materializer, so this logic lives in one place.
+// community. namespacing), so a PackageSource name that clashes with an
+// existing component must be a hard error rather than a silent overwrite. The
+// same checks run on the CLI tap path and in the operator materializer, so this
+// logic lives in one place. An ApplicationDefinition kind that clashes is not
+// checked here: internal/shared/appdefowner keeps the existing definition in
+// charge of the kind, and the ApplicationDefinition admission check refuses the
+// second one.
 package collision
 
 import (

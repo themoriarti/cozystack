@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
@@ -10,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -401,6 +404,18 @@ func vmInstanceAppDef(annotations map[string]string) *cozyv1alpha1.ApplicationDe
 	}
 }
 
+func harborDef(name, artifact string, created time.Time) *cozyv1alpha1.ApplicationDefinition {
+	return &cozyv1alpha1.ApplicationDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: metav1.NewTime(created)},
+		Spec: cozyv1alpha1.ApplicationDefinitionSpec{
+			Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "Harbor"},
+			Release: cozyv1alpha1.ApplicationDefinitionRelease{
+				ChartRef: &helmv2.CrossNamespaceSourceReference{Kind: "OCIRepository", Name: artifact, Namespace: "cozy-public"},
+			},
+		},
+	}
+}
+
 func reconcileVMInstance(t *testing.T, appDef *cozyv1alpha1.ApplicationDefinition, hr *helmv2.HelmRelease) *helmv2.HelmRelease {
 	t.Helper()
 
@@ -579,5 +594,70 @@ func TestAppDefHelm_DisableWaitScopedToKind(t *testing.T) {
 	}
 	if gotOther.Spec.Upgrade == nil || gotOther.Spec.Upgrade.DisableWait {
 		t.Fatalf("expected Harbor Upgrade.DisableWait=false, got %+v", gotOther.Spec.Upgrade)
+	}
+}
+
+// TestAppDefHelm_NonOwnerDoesNotRewrite pins the ownership relation: a second
+// definition declaring a kind that an older definition already owns must not
+// repoint that kind's releases at its own artifact, whatever it is named.
+func TestAppDefHelm_NonOwnerDoesNotRewrite(t *testing.T) {
+	scheme := newAppDefHelmScheme(t)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	owner := harborDef("harbor", "harbor-app", base)
+	// Sorts before the owner by name, so only creation order keeps it out.
+	newcomer := harborDef("a-harbor", "other-artifact", base.Add(time.Hour))
+	hr := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{Name: "harbor-release", Namespace: "tenant-foo", Labels: map[string]string{
+			"apps.cozystack.io/application.kind":  "Harbor",
+			"apps.cozystack.io/application.group": "apps.cozystack.io",
+		}},
+		Spec: helmv2.HelmReleaseSpec{ChartRef: &helmv2.CrossNamespaceSourceReference{Kind: "OCIRepository", Name: "harbor-app", Namespace: "cozy-public"}},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(owner, newcomer, hr).Build()
+	rec := record.NewFakeRecorder(4)
+	r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme, Recorder: rec}
+
+	for _, name := range []string{"a-harbor", "harbor"} {
+		if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
+			t.Fatalf("reconcile %s: %v", name, err)
+		}
+		got := &helmv2.HelmRelease{}
+		if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: "harbor-release", Namespace: "tenant-foo"}, got); err != nil {
+			t.Fatalf("get HR: %v", err)
+		}
+		if got.Spec.ChartRef == nil || got.Spec.ChartRef.Name != "harbor-app" {
+			t.Fatalf("after reconciling %s the release points at %+v, want the owner's harbor-app", name, got.Spec.ChartRef)
+		}
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "KindClaimed") || !strings.Contains(ev, "harbor") {
+			t.Fatalf("unexpected event %q", ev)
+		}
+	default:
+		t.Fatal("the non-owner must get a Warning event naming the owner")
+	}
+}
+
+// TestAppDefHelm_SameKindRequests pins the watch mapping: an event on any
+// definition enqueues every definition declaring the same kind, so when the
+// owner is deleted the next one takes over without waiting for its own change.
+func TestAppDefHelm_SameKindRequests(t *testing.T) {
+	scheme := newAppDefHelmScheme(t)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	other := &cozyv1alpha1.ApplicationDefinition{ObjectMeta: metav1.ObjectMeta{Name: "pg"}}
+	other.Spec.Application.Kind = "Postgres"
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(harborDef("harbor", "a", base), harborDef("tap-harbor", "b", base), other).Build()
+	r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
+
+	deleted := harborDef("harbor", "a", base)
+	reqs := r.sameKindRequests(context.TODO(), deleted)
+	names := map[string]bool{}
+	for _, q := range reqs {
+		names[q.Name] = true
+	}
+	if !names["harbor"] || !names["tap-harbor"] || names["pg"] || len(reqs) != 2 {
+		t.Fatalf("requests = %v (%d), want harbor and tap-harbor once each", names, len(reqs))
 	}
 }
