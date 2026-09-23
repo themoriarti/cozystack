@@ -155,9 +155,6 @@ cozy_assert_oidc_apiserver_flags() {
     -o jsonpath='{.spec.apiServer.extraArgs}')
   printf '%s\n' "${extra_args}" |
     grep -qF -- '--authentication-config=/etc/kubernetes/authentication-config/config.yaml'
-  # --feature-gates=RemoteRequestHeaderUID=true is deliberately not asserted:
-  # the chart renders it only on v1.32, while this lane takes the highest
-  # version in the map, which is above that.
   printf '%s\n' "${extra_args}" |
     grep -qF -- '--requestheader-uid-headers=X-Remote-Uid'
 }
