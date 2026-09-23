@@ -197,7 +197,7 @@ spec:
                 kubectl --namespace "$RELEASE_NAMESPACE" patch kamajicontrolplane "$RELEASE" \
                   --type=merge \
                   --patch {{ printf "{\"spec\":{\"apiServer\":{\"extraArgs\":%s,\"extraVolumeMounts\":%s},\"deployment\":{\"extraVolumes\":%s}}}"
-                      (default (list) .Values.controlPlane.apiServer.extraArgs | toJson)
+                      (include "kubernetes.apiServer.keptExtraArgs" .)
                       (default (list) .Values.controlPlane.apiServer.extraVolumeMounts | toJson)
                       (concat (list (dict "name" "talos-ca" "secret" (dict "secretName" (printf "%s-talos-ca" .Release.Name))) (dict "name" "talos-tls-cert" "secret" (dict "secretName" (printf "%s-talos-tls-cert" .Release.Name)))) (default (list) .Values.controlPlane.apiServer.extraVolumes) | toJson)
                       | quote }}

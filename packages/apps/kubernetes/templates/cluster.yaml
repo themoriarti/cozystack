@@ -193,6 +193,65 @@ data:
 {{-     fail (printf "controlPlane.apiServer.extraVolumeMounts: mount %q references no volume declared in controlPlane.apiServer.extraVolumes — the chart-managed talos volumes cannot be mounted" $mountName) }}
 {{-   end }}
 {{- end }}
+{{- /*
+  Mirrors the `managed` map of buildKubeAPIServerCommand in Kamaji's
+  internal/builders/controlplane/deployment.go (lines 726-774 at 26.9.4-edge,
+  the tag packages/system/kamaji builds), narrowed to what this chart renders:
+  an etcd DataStore, konnectivity on, no dataStoreOverrides. Kamaji cuts each
+  entry at the first "=" and drops it when the name is in that map, so the
+  bare two-entry spelling loses its flag and leaves the value behind as a
+  positional argument the apiserver refuses. Re-derive this list on every
+  Kamaji bump; the extraArgs description in values.yaml names the same flags.
+*/}}
+{{- $kamajiManagedArgs := list
+      "--advertise-address" "--client-ca-file" "--enable-admission-plugins"
+      "--service-cluster-ip-range" "--kubelet-client-certificate"
+      "--kubelet-client-key" "--kubelet-preferred-address-types"
+      "--proxy-client-cert-file" "--proxy-client-key-file"
+      "--requestheader-allowed-names" "--requestheader-client-ca-file"
+      "--secure-port" "--service-account-key-file"
+      "--service-account-signing-key-file" "--tls-cert-file"
+      "--tls-private-key-file" "--etcd-servers" "--etcd-cafile"
+      "--etcd-certfile" "--etcd-keyfile" "--etcd-prefix"
+      "--etcd-compaction-interval" "--egress-selector-config-file" }}
+{{- /*
+  Two of those flags have a field on the KamajiControlPlane that the control
+  plane renders them from, so an --flag=value entry is moved into that field
+  instead of refused, on every render: the entry stays in the values and
+  nothing rewrites it. The last entry wins, as it did while the control plane
+  kept one entry per flag name. The moved entry is left out of the rendered
+  extraArgs, so the list below is the one the apiserver receives.
+*/}}
+{{- $movedArgFields := include "kubernetes.apiServer.movedArgFields" . | fromJson }}
+{{- $admissionControllers := .Values.controlPlane.apiServer.admissionControllers | default list }}
+{{- $preferredAddressTypes := get (.Values.controlPlane.kubelet | default dict) "preferredAddressTypes" | default list }}
+{{- $movedArgs := dict }}
+{{- $keptExtraArgs := include "kubernetes.apiServer.keptExtraArgs" . | fromJsonArray }}
+{{- range $arg := .Values.controlPlane.apiServer.extraArgs | default list }}
+{{-   $flag := index (splitList "=" (toString $arg)) 0 }}
+{{-   $field := get $movedArgFields $flag }}
+{{-   if ne $field "" }}
+{{-     if not (contains "=" (toString $arg)) }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q with its value in a separate entry — the tenant control plane sets %s itself, from %s, and drops the entry naming it, which leaves the value behind as an argument the apiserver refuses. Write it as %s=value so the chart moves it into %s, or set that field instead." $arg $flag $field $flag $field) }}
+{{-     end }}
+{{-     $fieldIsSet := ternary (gt (len $admissionControllers) 0) (gt (len $preferredAddressTypes) 0) (eq $flag "--enable-admission-plugins") }}
+{{-     if $fieldIsSet }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while %s is also set — the tenant control plane takes %s only from %s, so the entry cannot apply. Remove the entry, or empty %s to have the chart take the list from it." $arg $field $flag $field $field) }}
+{{-     end }}
+{{-     if contains "\"" (toString $arg) }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q, whose value is quoted — the apiserver strips the quotes when it reads the list and the chart does not, so it cannot move the names into %s as written. Write the value without quotes." $arg $field) }}
+{{-     end }}
+{{-     $items := uniq (compact (splitList "," (trimPrefix (printf "%s=" $flag) (toString $arg)))) }}
+{{-     if eq (len $items) 0 }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q, which names nothing — the chart moves this flag into %s and has no list to move. Remove the entry." $arg $field) }}
+{{-     end }}
+{{-     $movedArgs = set $movedArgs $flag $items }}
+{{-   else if has $flag $kamajiManagedArgs }}
+{{-     fail (printf "controlPlane.apiServer.extraArgs contains %q — the tenant control plane sets %s itself and drops every entry naming it before the kube-apiserver sees the list, so this entry has no effect, and written without =value it leaves its value behind as an argument the apiserver refuses. Remove the entry; the description of controlPlane.apiServer.extraArgs lists every flag the control plane owns." $arg $flag) }}
+{{-   end }}
+{{- end }}
+{{- $admissionControllers = $admissionControllers | default (get $movedArgs "--enable-admission-plugins") }}
+{{- $preferredAddressTypes = $preferredAddressTypes | default (get $movedArgs "--kubelet-preferred-address-types") | default (list "InternalIP" "ExternalIP") }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -337,14 +396,12 @@ metadata:
   Silent is the one worth refusing the render over, and the other two arrive
   at the same place by a louder road.
 
-  Earlier in the list the same shape usually takes the operator's own next
-  entry, which is theirs to mean. Usually and not always: the control plane
-  drops an entry naming a flag it owns before the apiserver sees the list, so
-  a bare flag followed only by dropped entries ends up last after all. This
-  guard reads the list as written and does not model that drop, which leaves
-  that shape uncaught.
+  Earlier in the list the same shape takes the operator's own next entry,
+  which is theirs to mean. No entry between the two goes missing on the way
+  to the apiserver: an entry the control plane would drop is refused above or
+  moved out of this list.
 */}}
-{{-   $userExtraArgs := .Values.controlPlane.apiServer.extraArgs | default list }}
+{{-   $userExtraArgs := $keptExtraArgs }}
 {{-   if gt (len $userExtraArgs) 0 }}
 {{-     $lastUserArg := index $userExtraArgs (sub (len $userExtraArgs) 1) }}
 {{-     if has $lastUserArg (list "--requestheader-uid-headers" "--feature-gates" "--emulated-version") }}
@@ -667,7 +724,7 @@ spec:
       REPLACE patch that clears the stale value.
     */}}
     extraArgs:
-      {{- with .Values.controlPlane.apiServer.extraArgs }}
+      {{- with $keptExtraArgs }}
       {{- toYaml . | nindent 6 }}
       {{- end }}
       {{- if $oidcEnabled }}
@@ -676,7 +733,7 @@ spec:
       {{- toYaml . | nindent 6 }}
       {{- end }}
       {{- end }}
-      {{- if not (or .Values.controlPlane.apiServer.extraArgs $oidcEnabled) }} []{{ end }}
+      {{- if not (or $keptExtraArgs $oidcEnabled) }} []{{ end }}
     extraVolumeMounts:
       {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
       {{- toYaml . | nindent 6 }}
@@ -692,7 +749,7 @@ spec:
   scheduler:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.scheduler.resourcesPreset .Values.controlPlane.scheduler.resources $) | nindent 6 }}
   dataStoreName: "{{ $etcd }}"
-  {{- with .Values.controlPlane.apiServer.admissionControllers }}
+  {{- with $admissionControllers }}
   admissionControllers:
     {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -711,7 +768,7 @@ spec:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.konnectivity.server.resourcesPreset .Values.controlPlane.konnectivity.server.resources $) | nindent 10 }}
   kubelet:
     cgroupfs: systemd
-    preferredAddressTypes: {{- toYaml (get (.Values.controlPlane.kubelet | default dict) "preferredAddressTypes" | default (list "InternalIP" "ExternalIP")) | nindent 4 }}
+    preferredAddressTypes: {{- toYaml $preferredAddressTypes | nindent 4 }}
   network:
     serviceType: ClusterIP
     ingress:
