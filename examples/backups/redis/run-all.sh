@@ -72,7 +72,7 @@ if [[ -n "$S3_CA_SECRET" ]] \
     log_warning "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} not found; discovering the seaweedfs CA Certificate..."
     DISCOVERED_CA=$(kubectl -n "$S3_CA_NAMESPACE" get certificates.cert-manager.io \
         -l app.kubernetes.io/name=seaweedfs \
-        -o jsonpath='{range .items[*]}{.spec.isCA}{" "}{.spec.secretName}{"\n"}{end}' 2>/dev/null \
+        -o jsonpath='{range .items[*]}{.spec.isCA}{" "}{.spec.secretName}{"\n"}{end}' \
         | awk '$1=="true"{print $2; exit}' || true)
     if [[ -n "$DISCOVERED_CA" ]]; then
         log_success "Discovered seaweedfs CA secret ${S3_CA_NAMESPACE}/${DISCOVERED_CA}"
@@ -114,8 +114,8 @@ print_header "Step 00c: Create the Redis strategy + BackupClass"
 # platform default backups stack (backupstrategy-controller + CRDs) is
 # installed, without which the BackupJob below cannot reconcile at all.
 CLIENT_IMAGE=$(kubectl get redis.strategy.backups.cozystack.io cozy-default-redis \
-    -o jsonpath='{.spec.template.spec.containers[?(@.name=="redis-backup")].image}' 2>/dev/null || true)
-[[ -n "$CLIENT_IMAGE" ]] || { log_error "cozy-default-redis strategy not found: enable the platform default backups (backupstrategy-controller) before running this demo"; exit 1; }
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="redis-backup")].image}')
+[[ -n "$CLIENT_IMAGE" ]] || { log_error "cozy-default-redis strategy has no redis-backup container image"; exit 1; }
 log_substep "Reusing the platform strategy's client image: ${CLIENT_IMAGE}"
 subst redis-strategy.yaml | kubectl apply -f -
 kubectl apply -f "$SCRIPT_DIR/backupclass.yaml"
