@@ -20,10 +20,7 @@ tests:
   # `contains` answers "is ours still here" and cannot answer "has anything
   # been added beside it", and an assert per leaf cannot answer "has a key
   # appeared". Both directions matter for a file whose whole maintenance model
-  # is a hand reconciliation at each bump. Pinning featureGates whole also
-  # pins HonorWaitForFirstConsumer, which is upstream's rather than ours; that
-  # is a side effect of the shape, not a claim that the upstream half is
-  # covered.
+  # is a hand reconciliation at each bump.
   - it: keeps the local additions to the CDI object
     template: cdi-cr.yaml
     documentSelector:
@@ -31,11 +28,6 @@ tests:
       value: CDI
       matchMany: false
     asserts:
-      - equal:
-          path: spec.config.featureGates
-          value:
-            - HonorWaitForFirstConsumer
-            - ExpandDisks
       - equal:
           path: spec.infra.tolerations
           value:
@@ -50,6 +42,22 @@ tests:
             requests:
               cpu: 100m
               memory: 60M
+
+  # The list upstream ships, and nothing added to it. CDI looks a gate up by
+  # exact name and ignores one it does not declare, so a KubeVirt gate such as
+  # ExpandDisks listed here is accepted and has no effect, and nothing on the
+  # cluster rejects it.
+  - it: enables only the feature gate upstream ships
+    template: cdi-cr.yaml
+    documentSelector:
+      path: kind
+      value: CDI
+      matchMany: false
+    asserts:
+      - equal:
+          path: spec.config.featureGates
+          value:
+            - HonorWaitForFirstConsumer
 
   # The default is the empty string, so the block renders nothing and an
   # assertion on the default value would pass against a template that had
