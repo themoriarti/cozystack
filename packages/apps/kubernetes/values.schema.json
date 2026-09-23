@@ -314,6 +314,53 @@
             "resourcesPreset"
           ],
           "properties": {
+            "admissionControllers": {
+              "description": "Admission plugins the tenant kube-apiserver enables, passed through to KamajiControlPlane `spec.admissionControllers`, which the control plane renders as `--enable-admission-plugins`. A non-empty list replaces the control plane's default set instead of adding to it. The kube-apiserver enables these plugins in addition to its own default ones, so leaving a plugin out does not turn it off; to turn one off, name it in `--disable-admission-plugins` in `controlPlane.apiServer.extraArgs` and keep it out of this list, since the apiserver refuses to start with a plugin in both, and the control plane's default set names several. Empty by default, which keeps that default set, taken from the TenantControlPlane CRD: CertificateApproval, CertificateSigning, CertificateSubjectRestriction, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, LimitRanger, MutatingAdmissionWebhook, NamespaceLifecycle, PersistentVolumeClaimResize, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionWebhook. `NodeRestriction` is not in it.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string",
+                "enum": [
+                  "AlwaysAdmit",
+                  "AlwaysDeny",
+                  "AlwaysPullImages",
+                  "CertificateApproval",
+                  "CertificateSigning",
+                  "CertificateSubjectRestriction",
+                  "DefaultIngressClass",
+                  "DefaultStorageClass",
+                  "DefaultTolerationSeconds",
+                  "DenyEscalatingExec",
+                  "DenyExecOnPrivileged",
+                  "DenyServiceExternalIPs",
+                  "EventRateLimit",
+                  "ExtendedResourceToleration",
+                  "ImagePolicyWebhook",
+                  "LimitPodHardAntiAffinityTopology",
+                  "LimitRanger",
+                  "MutatingAdmissionWebhook",
+                  "NamespaceAutoProvision",
+                  "NamespaceExists",
+                  "NamespaceLifecycle",
+                  "NodeRestriction",
+                  "OwnerReferencesPermissionEnforcement",
+                  "PersistentVolumeClaimResize",
+                  "PersistentVolumeLabel",
+                  "PodNodeSelector",
+                  "PodSecurity",
+                  "PodSecurityPolicy",
+                  "PodTolerationRestriction",
+                  "Priority",
+                  "ResourceQuota",
+                  "RuntimeClass",
+                  "SecurityContextDeny",
+                  "ServiceAccount",
+                  "StorageObjectInUseProtection",
+                  "TaintNodesByCondition",
+                  "ValidatingAdmissionWebhook"
+                ]
+              }
+            },
             "extraArgs": {
               "description": "Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for unrelated apiserver flags. When `spec.oidc.mode` is not `None` the chart also renders OIDC flags here, reads what you have written on them, and refuses some combinations outright; `docs/oidc-tenant.md` carries which flags, which combinations, and why. Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).",
               "type": "array",
@@ -631,6 +678,28 @@
                     "2xlarge"
                   ]
                 }
+              }
+            }
+          }
+        },
+        "kubelet": {
+          "description": "Kubelet connection settings.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "preferredAddressTypes": {
+              "description": "Node address types the tenant kube-apiserver tries, in order, when it connects to a kubelet, passed through to KamajiControlPlane `spec.kubelet.preferredAddressTypes`, which the control plane renders as `--kubelet-preferred-address-types`. The KamajiControlPlane CRD rejects a repeated name. Empty by default, which renders `InternalIP`, `ExternalIP`.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string",
+                "enum": [
+                  "Hostname",
+                  "InternalIP",
+                  "ExternalIP",
+                  "InternalDNS",
+                  "ExternalDNS"
+                ]
               }
             }
           }

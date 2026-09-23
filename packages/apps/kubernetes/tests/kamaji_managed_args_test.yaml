@@ -1,0 +1,83 @@
+suite: admission controllers and kubelet address types on the KamajiControlPlane
+
+values:
+  - values/common.yaml
+
+release:
+  name: test
+  namespace: tenant-test
+
+templates:
+  - templates/cluster.yaml
+
+tests:
+  - it: leaves spec.admissionControllers out by default, so the control plane keeps its own default set
+    asserts:
+      - notExists:
+          path: spec.admissionControllers
+        documentIndex: 1
+
+  - it: leaves spec.admissionControllers out for an explicitly empty list
+    set:
+      controlPlane.apiServer.admissionControllers: []
+    asserts:
+      - notExists:
+          path: spec.admissionControllers
+        documentIndex: 1
+
+  - it: renders controlPlane.apiServer.admissionControllers into spec.admissionControllers verbatim
+    set:
+      controlPlane.apiServer.admissionControllers:
+        - NodeRestriction
+        - AlwaysPullImages
+    asserts:
+      - equal:
+          path: spec.admissionControllers
+          value:
+            - NodeRestriction
+            - AlwaysPullImages
+        documentIndex: 1
+
+  - it: renders the kubelet preferred address types the chart has always rendered by default
+    asserts:
+      - equal:
+          path: spec.kubelet.preferredAddressTypes
+          value:
+            - InternalIP
+            - ExternalIP
+        documentIndex: 1
+
+  - it: renders controlPlane.kubelet.preferredAddressTypes into spec.kubelet.preferredAddressTypes verbatim
+    set:
+      controlPlane.kubelet.preferredAddressTypes:
+        - Hostname
+        - InternalIP
+    asserts:
+      - equal:
+          path: spec.kubelet.preferredAddressTypes
+          value:
+            - Hostname
+            - InternalIP
+        documentIndex: 1
+
+  - it: renders the chart's address types for an empty preferredAddressTypes
+    set:
+      controlPlane.kubelet.preferredAddressTypes: []
+    asserts:
+      - equal:
+          path: spec.kubelet.preferredAddressTypes
+          value:
+            - InternalIP
+            - ExternalIP
+        documentIndex: 1
+
+  - it: renders the chart's address types for a null kubelet object
+    set:
+      controlPlane.kubelet: null
+    asserts:
+      - equal:
+          path: spec.kubelet.preferredAddressTypes
+          value:
+            - InternalIP
+            - ExternalIP
+        documentIndex: 1

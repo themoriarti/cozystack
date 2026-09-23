@@ -692,6 +692,10 @@ spec:
   scheduler:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.scheduler.resourcesPreset .Values.controlPlane.scheduler.resources $) | nindent 6 }}
   dataStoreName: "{{ $etcd }}"
+  {{- with .Values.controlPlane.apiServer.admissionControllers }}
+  admissionControllers:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   addons:
     konnectivity:
       {{- $konnVersion := include "kubernetes.konnectivityVersion" $ | trim }}
@@ -707,9 +711,7 @@ spec:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.konnectivity.server.resourcesPreset .Values.controlPlane.konnectivity.server.resources $) | nindent 10 }}
   kubelet:
     cgroupfs: systemd
-    preferredAddressTypes:
-    - InternalIP
-    - ExternalIP
+    preferredAddressTypes: {{- toYaml (get (.Values.controlPlane.kubelet | default dict) "preferredAddressTypes" | default (list "InternalIP" "ExternalIP")) | nindent 4 }}
   network:
     serviceType: ClusterIP
     ingress:
