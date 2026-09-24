@@ -10,13 +10,14 @@
 # parent kubernetes chart no longer renders a worker reconcile Job. These tests
 # therefore render packages/apps/kubernetes-nodes.
 #
-# The reconcile Job applies the TalosConfigTemplate via an UNQUOTED
-# `cat <<EOF | kubectl apply -f -` heredoc, so every line of its body is subject
-# to shell parameter expansion and command substitution at Job runtime. The
-# `talos.registryMirrors` knob and the Talos image coordinates render free-form
-# tenant-facing input into that heredoc. A helm-unittest string `matchRegex`
-# cannot catch a heredoc that the shell refuses to emit (e.g. an unbalanced
-# backtick from an un-escaped value): it never runs the shell. This test does.
+# The reconcile Job applies the TalosConfigTemplate via an UNQUOTED `cat <<EOF`
+# heredoc, captured into a variable and then applied, so every line of its body
+# is subject to shell parameter expansion and command substitution at Job
+# runtime. The `talos.registryMirrors` knob and the Talos image coordinates
+# render free-form tenant-facing input into that heredoc. A helm-unittest
+# string `matchRegex` cannot catch a heredoc that the shell refuses to emit
+# (e.g. an unbalanced backtick from an un-escaped value): it never runs the
+# shell. This test does.
 #
 # It renders the Job with HOSTILE values (`$(...)` + a backtick), extracts the
 # `cat <<EOF ... EOF` block, runs it through a real shell, and asserts the
@@ -51,7 +52,7 @@ VALS
         > "$work/cmd.sh"
     [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
     awk '
-      /^cat <<EOF \| kubectl apply/ { print "cat <<EOF"; inblock=1; next }
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
       inblock && /^EOF$/            { print "EOF"; inblock=0; next }
       inblock                       { print }
     ' "$work/cmd.sh" > "$work/heredoc.sh"
@@ -86,7 +87,7 @@ VALS
         > "$work/cmd.sh"
     [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
     awk '
-      /^cat <<EOF \| kubectl apply/ { print "cat <<EOF"; inblock=1; next }
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
       inblock && /^EOF$/            { print "EOF"; inblock=0; next }
       inblock                       { print }
     ' "$work/cmd.sh" > "$work/heredoc.sh"
