@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -961,6 +962,7 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err := r.Get(ctx, req.NamespacedName, fresh); err != nil {
 			return err
 		}
+		stored := fresh.Status.DeepCopy()
 		fresh.Status.ObservedReplicas = observedReplicas
 		fresh.Status.AvailableReplicas = availableReplicas
 
@@ -983,6 +985,9 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 		if fresh.Status.Message != "" {
 			fresh.Status.Operational = pointer.Bool(false)
+		}
+		if equality.Semantic.DeepEqual(stored, &fresh.Status) {
+			return nil
 		}
 		return r.Status().Update(ctx, fresh)
 	})
