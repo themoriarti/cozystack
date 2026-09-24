@@ -193,6 +193,65 @@ data:
 {{-     fail (printf "controlPlane.apiServer.extraVolumeMounts: mount %q references no volume declared in controlPlane.apiServer.extraVolumes — the chart-managed talos volumes cannot be mounted" $mountName) }}
 {{-   end }}
 {{- end }}
+{{- /*
+  Mirrors the `managed` map of buildKubeAPIServerCommand in Kamaji's
+  internal/builders/controlplane/deployment.go (lines 726-774 at 26.9.4-edge,
+  the tag packages/system/kamaji builds), narrowed to what this chart renders:
+  an etcd DataStore, konnectivity on, no dataStoreOverrides. Kamaji cuts each
+  entry at the first "=" and drops it when the name is in that map, so the
+  bare two-entry spelling loses its flag and leaves the value behind as a
+  positional argument the apiserver refuses. Re-derive this list on every
+  Kamaji bump; the extraArgs description in values.yaml names the same flags.
+*/}}
+{{- $kamajiManagedArgs := list
+      "--advertise-address" "--client-ca-file" "--enable-admission-plugins"
+      "--service-cluster-ip-range" "--kubelet-client-certificate"
+      "--kubelet-client-key" "--kubelet-preferred-address-types"
+      "--proxy-client-cert-file" "--proxy-client-key-file"
+      "--requestheader-allowed-names" "--requestheader-client-ca-file"
+      "--secure-port" "--service-account-key-file"
+      "--service-account-signing-key-file" "--tls-cert-file"
+      "--tls-private-key-file" "--etcd-servers" "--etcd-cafile"
+      "--etcd-certfile" "--etcd-keyfile" "--etcd-prefix"
+      "--etcd-compaction-interval" "--egress-selector-config-file" }}
+{{- /*
+  Two of those flags have a field on the KamajiControlPlane that the control
+  plane renders them from, so an --flag=value entry is moved into that field
+  instead of refused, on every render: the entry stays in the values and
+  nothing rewrites it. The last entry wins, as it did while the control plane
+  kept one entry per flag name. The moved entry is left out of the rendered
+  extraArgs, so the list below is the one the apiserver receives.
+*/}}
+{{- $movedArgFields := include "kubernetes.apiServer.movedArgFields" . | fromJson }}
+{{- $admissionControllers := .Values.controlPlane.apiServer.admissionControllers | default list }}
+{{- $preferredAddressTypes := get (.Values.controlPlane.kubelet | default dict) "preferredAddressTypes" | default list }}
+{{- $movedArgs := dict }}
+{{- $keptExtraArgs := include "kubernetes.apiServer.keptExtraArgs" . | fromJsonArray }}
+{{- range $arg := .Values.controlPlane.apiServer.extraArgs | default list }}
+{{-   $flag := index (splitList "=" (toString $arg)) 0 }}
+{{-   $field := get $movedArgFields $flag }}
+{{-   if ne $field "" }}
+{{-     if not (contains "=" (toString $arg)) }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q with its value in a separate entry — the tenant control plane sets %s itself, from %s, and drops the entry naming it, which leaves the value behind as an argument the apiserver refuses. Write it as %s=value so the chart moves it into %s, or set that field instead." $arg $flag $field $flag $field) }}
+{{-     end }}
+{{-     $fieldIsSet := ternary (gt (len $admissionControllers) 0) (gt (len $preferredAddressTypes) 0) (eq $flag "--enable-admission-plugins") }}
+{{-     if $fieldIsSet }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while %s is also set — the tenant control plane takes %s only from %s, so the entry cannot apply. Remove the entry, or empty %s to have the chart take the list from it." $arg $field $flag $field $field) }}
+{{-     end }}
+{{-     if contains "\"" (toString $arg) }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q, whose value is quoted — the apiserver strips the quotes when it reads the list and the chart does not, so it cannot move the names into %s as written. Write the value without quotes." $arg $field) }}
+{{-     end }}
+{{-     $items := uniq (compact (splitList "," (trimPrefix (printf "%s=" $flag) (toString $arg)))) }}
+{{-     if eq (len $items) 0 }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q, which names nothing — the chart moves this flag into %s and has no list to move. Remove the entry." $arg $field) }}
+{{-     end }}
+{{-     $movedArgs = set $movedArgs $flag $items }}
+{{-   else if has $flag $kamajiManagedArgs }}
+{{-     fail (printf "controlPlane.apiServer.extraArgs contains %q — the tenant control plane sets %s itself and drops every entry naming it before the kube-apiserver sees the list, so this entry has no effect, and written without =value it leaves its value behind as an argument the apiserver refuses. Remove the entry; the description of controlPlane.apiServer.extraArgs lists every flag the control plane owns." $arg $flag) }}
+{{-   end }}
+{{- end }}
+{{- $admissionControllers = $admissionControllers | default (get $movedArgs "--enable-admission-plugins") }}
+{{- $preferredAddressTypes = $preferredAddressTypes | default (get $movedArgs "--kubelet-preferred-address-types") | default (list "InternalIP" "ExternalIP") }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -257,9 +316,9 @@ metadata:
 {{- end }}
 {{- /*
   Aggregation-layer UID plumbing. What is rendered per version, why an
-  opt-out renders nothing rather than failing, and the migration note live
-  in docs/oidc-tenant.md. That table is the one to update; there is
-  deliberately no copy of it here.
+  opt-out renders nothing rather than failing, and how the operator's own
+  entries change that are in docs/oidc-tenant.md. That table is the one
+  to update; there is deliberately no copy of it here.
 
   Anchors for the split, read at v1.32.13 and v1.35.6:
   staging/src/k8s.io/apiserver/pkg/features/kube_features.go for the gate's
@@ -267,34 +326,45 @@ metadata:
   the refusals the guards below mirror. The version that decides is the
   EFFECTIVE one, which --emulated-version moves down.
 
-  The merged gate entry carries the operator's own value, in their own
-  prefix spelling, because that is correct whether duplicate flags collapse
-  by name (it is last and wins) or are preserved (featureGate.Set() merges
-  it into the earlier one).
+  Every entry of a flag reaches the apiserver, so every entry is read, and
+  the three flags accumulate differently. --requestheader-uid-headers is a
+  pflag StringSlice whose repeats append, so the apiserver validates the
+  union and an element the chart adds can only satisfy caseInsensitiveHas.
+  --feature-gates collects into one bucket per component and is handed to
+  featureGate.Set() once, so the last term for a gate name wins across
+  entries, and naming the kube component both bare and kube:-prefixed is
+  refused outright. --emulated-version is a StringSlice too,
+  and toVersionMap refuses two elements naming the same component.
 
-  Two things do depend on the collapse, pinned by packages/system/kamaji,
-  whose Makefile takes the newest -edge tag on `make update`. Reading only
-  the LAST entry of each flag cuts both ways: handed every copy the apiserver
-  merges them, so an earlier explicit setting the chart never saw would reach
-  the gate. Failing on a uid-headers list without X-Remote-Uid is the other:
-  handed both copies pflag appends, and the union passes caseInsensitiveHas.
-  The opt-out path is unaffected, since the chart emits nothing there.
+  Two pins decide that: the tenant control plane build in
+  packages/system/kamaji, and the owner of the CR field read here,
+  cluster-api-control-plane-provider-kamaji in
+  packages/system/capi-providers-cpprovider, which copies
+  spec.apiServer.extraArgs into the TenantControlPlane verbatim. A bump of
+  either is a reason to re-read this block.
 
-  Ownership is resolved after the arg loop because the last entry of each
-  flag, and the interaction between them, are known only once every arg has
-  been seen.
+  Ownership is resolved after the arg loop because the merged reading of
+  each flag, and the interaction between them, are known only once every
+  arg has been seen.
 */}}
 {{- $uidHeaderUnsupported := false }}
 {{- $uidGateRequired := false }}
 {{- $emulatedKubeVersion := "" }}
+{{- $emulatedKubeDuplicated := false }}
 {{- $uidGateOptedOut := false }}
 {{- $uidHeaderArgSeen := "" }}
-{{- $uidHeaderQuoted := false }}
+{{- $uidHeaderEmptyArg := "" }}
 {{- $emulatedQuoted := false }}
+{{- $gateArgUnreadable := false }}
+{{- $emulatedArgUnreadable := false }}
 {{- $uidHeaderConforms := false }}
 {{- $uidHeaderHasEmpty := false }}
-{{- $gateArgValue := "" }}
+{{- $gateValues := dict }}
+{{- $gateArgs := dict }}
 {{- $gateUsesKubePrefix := false }}
+{{- $gateUsesBarePrefix := false }}
+{{- $gateKubePrefixArg := "" }}
+{{- $gateBarePrefixArg := "" }}
 {{- $gateArgSeen := "" }}
 {{- $uidGateSetting := "" }}
 {{- $allBetaSetting := "" }}
@@ -314,63 +384,107 @@ metadata:
   preserved for backward compatibility.
 */}}
 {{- if $oidcEnabled }}
-{{-   range $arg := (.Values.controlPlane.apiServer.extraArgs | default list) }}
+{{- /*
+  The chart appends its own arguments after the operator's, starting with
+  --authentication-config. pflag gives a valueless long flag the next argv
+  element as its value whatever that element looks like, so an operator
+  entry that ends the list with one of the three flags read here swallows
+  that appended argument, and the AuthenticationConfiguration is never
+  applied. What that costs depends on the flag: a uid-headers list takes the
+  path verbatim and the apiserver starts with OIDC silently off, while
+  featureGate.Set and toVersionMap both reject it and the apiserver exits.
+  Silent is the one worth refusing the render over, and the other two arrive
+  at the same place by a louder road.
+
+  Earlier in the list the same shape takes the operator's own next entry,
+  which is theirs to mean. No entry between the two goes missing on the way
+  to the apiserver: an entry the control plane would drop is refused above or
+  moved out of this list.
+*/}}
+{{-   $userExtraArgs := $keptExtraArgs }}
+{{-   if gt (len $userExtraArgs) 0 }}
+{{-     $lastUserArg := index $userExtraArgs (sub (len $userExtraArgs) 1) }}
+{{-     if has $lastUserArg (list "--requestheader-uid-headers" "--feature-gates" "--emulated-version") }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs ends with %q while spec.oidc.mode is %q — the chart appends --authentication-config after your entries, and the kube-apiserver would read that as the value of your flag: the AuthenticationConfiguration is never applied, and the control plane either comes up with OIDC silently off or refuses to start at all, depending on which flag swallowed it. Give the flag its value in the same entry, as --flag=value." $lastUserArg $.Values.oidc.mode) }}
+{{-     end }}
+{{-   end }}
+{{-   range $arg := $userExtraArgs }}
 {{-     if hasPrefix "--oidc-" $arg }}
 {{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver refuses to boot with both --authentication-config (injected by spec.oidc) and legacy --oidc-* flags. Remove the --oidc-* flags from controlPlane.apiServer.extraArgs and use spec.oidc.mode: CustomConfig with a customConfig.config carrying the same issuer/audience if you need to override, or spec.oidc.mode: System for the platform cozy default." $arg $.Values.oidc.mode) }}
 {{-     end }}
 {{-     if hasPrefix "--authentication-config" $arg }}
 {{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart already injects --authentication-config= for OIDC. Drop your explicit flag and let spec.oidc.mode: CustomConfig own the AuthenticationConfiguration (customConfig.config or customConfig.secretRef.name), or leave spec.oidc.mode: None and keep managing the flag yourself." $arg $.Values.oidc.mode) }}
 {{-     end }}
+{{-     if eq $arg "--requestheader-uid-headers" }}
+{{- /*
+  The space-separated spelling, as two elements. pflag pairs them, so the
+  entry counts as present even though its value lives in the next element
+  and this loop never looks there. Presence is what the gate-disabled guard
+  needs; conformance and emptiness stay unknown, exactly as for a quoted
+  value below. The arrangement where the element pflag pairs with is the
+  chart's own is refused above, before this loop runs.
+*/}}
+{{-       if eq $uidHeaderArgSeen "" }}
+{{-         $uidHeaderArgSeen = $arg }}
+{{-       end }}
+{{-     end }}
 {{-     if hasPrefix "--requestheader-uid-headers=" $arg }}
 {{- /*
-  An empty value is not an opinion: readAsCSV returns an empty slice and
-  Validate() only inspects a non-empty list, so the chart reads the last
-  entry carrying one. Where the chart renders nothing for that flag the
-  operator's empty value survives the collapse and reaches the apiserver as
-  a BARE flag, which takes the next sorted argument as its value, and
-  Validate() refuses the result: not this code's to repair, and why docs
-  tell operators to delete such an entry rather than empty it.
+  An empty value is not an entry: readAsCSV returns an empty slice, pflag
+  appends nothing from it, and Validate() only inspects a non-empty list.
 
-  Only --flag=value is matched, and the space-separated spelling does not
-  survive the collapse, which keys on "=". Written as two elements the flag
-  comes back bare and takes whichever argument sorts after it as its value;
-  written as one element the whole string becomes the key and reaches pflag
-  as an unknown flag. The apiserver refuses to start either way.
+  Only --flag=value is read for its value here. One element holding both the
+  flag and its value, separated by a space, reaches pflag as an unknown flag
+  and the apiserver refuses to start; the two-element spelling is handled
+  above.
 
   Match whole ELEMENTS and do NOT trim them: caseInsensitiveHas compares with
   strings.EqualFold and pflag's CSV reader keeps surrounding spaces, so
-  "X-Remote-Uid-Extra" and "X-Remote-Uid " both fail there. Being more
-  permissive than upstream would skip the chart's flag for a list the
-  apiserver rejects. The emptiness test is the one that trims, because
-  checkForWhiteSpaceOnly does, and it refuses the list whatever else it holds.
+  "X-Remote-Uid-Extra" and "X-Remote-Uid " are both something else, and the
+  chart answers them by adding its own element rather than by reading them
+  permissively. The emptiness test is the one that trims, because
+  checkForWhiteSpaceOnly does, and it refuses the union whatever else it holds.
+
+  A quoted value is read by encoding/csv before the apiserver sees it and
+  this code does not reproduce that, so a quoted entry counts as present and
+  contributes nothing else: it can neither show the union conforms nor show
+  an element is empty. That is the rule for the whole block: fail only where
+  the operator's own entry would stop the apiserver from starting, and
+  withhold a reading rather than guess at one.
 */}}
 {{-       $headerValue := trimPrefix "--requestheader-uid-headers=" $arg }}
-{{- /*
-  Both flags this block reads are pflag StringSlice values, whose CSV reader
-  strips a pair of surrounding double quotes before the apiserver sees them.
-  Reproducing CSV here would be a second parser to keep correct, so a quoted
-  value in the entry the chart reads means it cannot know what the apiserver
-  will read and renders nothing at all, which is what it did before these
-  flags existed. Quotes are tracked per flag and reset with each entry, like
-  every other reading here: an earlier entry the collapse drops says nothing
-  about the one that reaches the apiserver.
-
-  That split is the rule for the whole block: fail only where the operator's
-  own entry would stop the apiserver from starting, and withhold silently
-  where the cluster keeps running and only misses the fix.
-*/}}
 {{-       if ne $headerValue "" }}
-{{-         $uidHeaderQuoted = contains "\"" $headerValue }}
-{{-         $uidHeaders := list }}
-{{-         $uidHeaderHasEmpty = false }}
-{{-         range $h := splitList "," $headerValue }}
-{{-           $uidHeaders = append $uidHeaders (lower $h) }}
-{{-           if eq (trim $h) "" }}
-{{-             $uidHeaderHasEmpty = true }}
+{{-         if eq $uidHeaderArgSeen "" }}
+{{-           $uidHeaderArgSeen = $arg }}
+{{-         end }}
+{{-         if not (contains "\"" $headerValue) }}
+{{-           range $h := splitList "," $headerValue }}
+{{-             if eq (lower $h) "x-remote-uid" }}
+{{-               $uidHeaderConforms = true }}
+{{-             end }}
+{{-             if eq (trim $h) "" }}
+{{-               $uidHeaderHasEmpty = true }}
+{{-               if eq $uidHeaderEmptyArg "" }}
+{{-                 $uidHeaderEmptyArg = $arg }}
+{{-               end }}
+{{-             end }}
 {{-           end }}
 {{-         end }}
-{{-         $uidHeaderArgSeen = $arg }}
-{{-         $uidHeaderConforms = has "x-remote-uid" $uidHeaders }}
+{{-       end }}
+{{-     end }}
+{{-     if or (eq $arg "--feature-gates") (eq $arg "--emulated-version") }}
+{{- /*
+  The space-separated spelling of the two flags whose values decide what is
+  rendered. pflag pairs the element with the next one, but the value is in
+  an element this loop does not read, so neither the gate nor the effective
+  version can be settled. Withhold what depends on that reading, the way a
+  quoted value does: rendering against a reading that was never taken is the
+  one outcome worth avoiding.
+*/}}
+{{-       if eq $arg "--feature-gates" }}
+{{-         $gateArgUnreadable = true }}
+{{-       else }}
+{{-         $emulatedArgUnreadable = true }}
 {{-       end }}
 {{-     end }}
 {{-     if hasPrefix "--feature-gates=" $arg }}
@@ -383,58 +497,76 @@ metadata:
   A blanket AllAlpha/AllBeta counts: setUnsetAlphaGates and setUnsetBetaGates
   skip a key an explicit entry already wrote, so the explicit one wins in
   either map-iteration order.
+
+  Settings accumulate across entries into one dict because the multimap
+  does: every entry's terms land in the same per-component bucket and are
+  joined into a single featureGate.Set(), so the last term for a gate name
+  wins and no earlier entry is dropped.
 */}}
 {{-       $gateValue := trimPrefix "--feature-gates=" $arg }}
-{{-       if ne $gateValue "" }}
-{{- /*
-  Per ARGUMENT, not per element: only the surviving --feature-gates entry
-  decides the spelling, so a prefix seen in an earlier entry must not leak
-  into a merge onto a later unprefixed one.
-*/}}
-{{-         $gateUsesKubePrefix = false }}
-{{-         $gateValues := dict }}
-{{-         range $g := splitList "," $gateValue }}
+{{-       range $g := splitList "," $gateValue }}
 {{- /*
   --feature-gates is a colon-separated multimap: each element is
-  component:name=value, and an element with no component belongs to kube.
-  Reading the whole "kube:Name" as the gate name misses every prefixed
-  spelling, and appending an unprefixed term next to a prefixed one is
-  rejected outright -- componentGlobalsRegistry.Set() refuses a mix of the
-  empty prefix and kube: in one flag (registry.go, read at v1.35.6).
+  component:name=value, and an element with no component belongs to the
+  empty key, which Set() folds into kube. Reading the whole "kube:Name" as
+  the gate name misses every prefixed spelling. Zero-length elements are
+  skipped the way ColonSeparatedMultimapStringString skips them.
 */}}
+{{-         if ne $g "" }}
 {{-           $element := $g }}
+{{-           $elementIsKube := true }}
 {{-           if contains ":" $element }}
 {{-             $component := trim (index (splitList ":" $element) 0) }}
 {{- /*
   Only a literal "kube" keys under the kube component. An empty component,
-  as in ":Foo=true", keys under "" exactly like an unprefixed element, so
-  answering it with a kube:-prefixed term would create the mix the registry
-  rejects. A foreign component keeps its prefix and so never matches one of
-  the gate names below.
+  as in ":Foo=true", keys under "" exactly like an unprefixed element. A
+  foreign component keeps its prefix, never matches one of the gate names
+  below, and says nothing about the spelling this chart has to match.
 */}}
 {{-             if eq $component "kube" }}
 {{-               $gateUsesKubePrefix = true }}
+{{-               if eq $gateKubePrefixArg "" }}
+{{-                 $gateKubePrefixArg = $arg }}
+{{-               end }}
+{{-             else if eq $component "" }}
+{{-               $gateUsesBarePrefix = true }}
+{{-               if eq $gateBarePrefixArg "" }}
+{{-                 $gateBarePrefixArg = $arg }}
+{{-               end }}
+{{-             else }}
+{{-               $elementIsKube = false }}
 {{-             end }}
-{{-             if or (eq $component "kube") (eq $component "") }}
+{{-             if $elementIsKube }}
 {{-               $element = trimPrefix (printf "%s:" (index (splitList ":" $element) 0)) $element }}
 {{-             end }}
+{{-           else }}
+{{-             $gateUsesBarePrefix = true }}
+{{-             if eq $gateBarePrefixArg "" }}
+{{-               $gateBarePrefixArg = $arg }}
+{{-             end }}
 {{-           end }}
-{{-           $kv := splitList "=" $element }}
-{{-           if eq (len $kv) 2 }}
-{{-             $gname := trim (index $kv 0) }}
-{{-             $gval := trim (index $kv 1) }}
-{{-             if has $gval (list "1" "t" "T" "true" "TRUE" "True") }}
-{{-               $gateValues = set $gateValues $gname "true" }}
-{{-             else if has $gval (list "0" "f" "F" "false" "FALSE" "False") }}
-{{-               $gateValues = set $gateValues $gname "false" }}
+{{-           if $elementIsKube }}
+{{-             $kv := splitList "=" $element }}
+{{-             if eq (len $kv) 2 }}
+{{-               $gname := trim (index $kv 0) }}
+{{-               $gval := trim (index $kv 1) }}
+{{-               $resolved := "" }}
+{{-               if has $gval (list "1" "t" "T" "true" "TRUE" "True") }}
+{{-                 $resolved = "true" }}
+{{-               else if has $gval (list "0" "f" "F" "false" "FALSE" "False") }}
+{{-                 $resolved = "false" }}
+{{-               end }}
+{{-               if and (ne $resolved "") (has $gname (list "RemoteRequestHeaderUID" "AllAlpha" "AllBeta")) }}
+{{-                 $gateValues = set $gateValues $gname $resolved }}
+{{- /*
+  Keyed by gate name, so the opt-out message can quote the entry that carries
+  the setting it names rather than whichever entry happened to be read last.
+*/}}
+{{-                 $gateArgs = set $gateArgs $gname $arg }}
+{{-               end }}
 {{-             end }}
 {{-           end }}
 {{-         end }}
-{{-         $gateArgSeen = $arg }}
-{{-         $gateArgValue = $gateValue }}
-{{-         $uidGateSetting = dig "RemoteRequestHeaderUID" "" $gateValues }}
-{{-         $allBetaSetting = dig "AllBeta" "" $gateValues }}
-{{-         $allAlphaSetting = dig "AllAlpha" "" $gateValues }}
 {{-       end }}
 {{-     end }}
 {{-     if hasPrefix "--emulated-version=" $arg }}
@@ -450,25 +582,38 @@ metadata:
   is kube's. Anything else names another component and is none of our
   business. An unparseable version is left alone, the way an unparseable gate
   value is: the apiserver rejects it on its own terms.
+
+  Elements accumulate across entries, and toVersionMap refuses two of them
+  naming the same component. A second kube element therefore stops the
+  apiserver and leaves no version this code can trust, so it is tracked and
+  the flags below are withheld rather than rendered against a guess.
 */}}
 {{-       $emulatedValue := trimPrefix "--emulated-version=" $arg }}
 {{-       if ne $emulatedValue "" }}
-{{- /*
-  Reset per argument, for the reason given at the --feature-gates parser.
-*/}}
-{{-         $emulatedKubeVersion = "" }}
-{{-         $emulatedQuoted = contains "\"" $emulatedValue }}
+{{-         if contains "\"" $emulatedValue }}
+{{-           $emulatedQuoted = true }}
+{{-         end }}
 {{-         range $e := splitList "," $emulatedValue }}
 {{-           $parts := splitList "=" (trim $e) }}
+{{-           $candidate := "" }}
 {{-           if eq (len $parts) 1 }}
-{{-             $emulatedKubeVersion = trim (index $parts 0) }}
+{{-             $candidate = trim (index $parts 0) }}
 {{-           else if and (eq (len $parts) 2) (eq (trim (index $parts 0)) "kube") }}
-{{-             $emulatedKubeVersion = trim (index $parts 1) }}
+{{-             $candidate = trim (index $parts 1) }}
+{{-           end }}
+{{-           if ne $candidate "" }}
+{{-             if ne $emulatedKubeVersion "" }}
+{{-               $emulatedKubeDuplicated = true }}
+{{-             end }}
+{{-             $emulatedKubeVersion = $candidate }}
 {{-           end }}
 {{-         end }}
 {{-       end }}
 {{-     end }}
 {{-   end }}
+{{-   $uidGateSetting = dig "RemoteRequestHeaderUID" "" $gateValues }}
+{{-   $allBetaSetting = dig "AllBeta" "" $gateValues }}
+{{-   $allAlphaSetting = dig "AllAlpha" "" $gateValues }}
 {{- /*
   Emulation can only move the effective version down, so the lower of the two
   decides. A tenant asking to emulate something newer than its own image is
@@ -499,44 +644,66 @@ metadata:
 {{-   $uidGateRequired = eq $effectiveMinor 32 }}
 {{-   if eq $uidGateSetting "false" }}
 {{-     $uidGateOptedOut = true }}
+{{-     $gateArgSeen = dig "RemoteRequestHeaderUID" "" $gateArgs }}
 {{-   else if ne $uidGateSetting "true" }}
 {{-     if $uidGateRequired }}
 {{-       if eq $allAlphaSetting "false" }}
 {{-         $uidGateOptedOut = true }}
+{{-         $gateArgSeen = dig "AllAlpha" "" $gateArgs }}
 {{-       end }}
 {{-     else if eq $allBetaSetting "false" }}
 {{-       $uidGateOptedOut = true }}
+{{-       $gateArgSeen = dig "AllBeta" "" $gateArgs }}
 {{-     end }}
 {{-   end }}
-{{-   if not (or $uidHeaderUnsupported $uidHeaderQuoted $emulatedQuoted) }}
+{{-   $argUnreadable := or $gateArgUnreadable $emulatedArgUnreadable }}
+{{-   if not (or $uidHeaderUnsupported $emulatedQuoted $emulatedKubeDuplicated $argUnreadable) }}
+{{-     if and $gateUsesKubePrefix $gateUsesBarePrefix }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs names the kube feature gates both ways, %q and %q, while spec.oidc.mode is %q — componentGlobalsRegistry.Set() refuses a configuration that names the kube component both ways, so the control plane would refuse to start and nothing the chart renders repairs it. Write every kube gate term in one spelling." $gateBarePrefixArg $gateKubePrefixArg $.Values.oidc.mode) }}
+{{-     end }}
+{{-   end }}
+{{- /*
+  An unreadable entry leaves the gate or the version unknown, and what
+  follows holds in every state it can hide. An explicit
+  RemoteRequestHeaderUID=false is an opt-out at every version, so it is
+  refused behind an unread --emulated-version; a blanket AllBeta or
+  AllAlpha reaches the gate only at the maturity the version gives it, so
+  it waits for a reading. An unread --feature-gates term can turn the gate
+  back on, so it keeps the opt-out refusal off. An empty
+  element is fatal with the gate in either state. X-Remote-Uid beside an
+  operator's own list can only help: the gate off refuses that list anyway.
+  What the chart adds with no list of the operator's beside it, X-Remote-Uid
+  alone or the v1.32 gate term, waits for a reading.
+*/}}
+{{-   if not (or $uidHeaderUnsupported $emulatedQuoted $emulatedKubeDuplicated) }}
 {{-     if $uidGateOptedOut }}
-{{-       if ne $uidHeaderArgSeen "" }}
+{{-       if and (ne $uidHeaderArgSeen "") (not $gateArgUnreadable) (or (not $emulatedArgUnreadable) (eq $uidGateSetting "false")) }}
 {{-         fail (printf "controlPlane.apiServer.extraArgs contains %q alongside %q, while spec.oidc.mode is %q on Kubernetes %s — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off." $uidHeaderArgSeen $gateArgSeen $.Values.oidc.mode $versionForMessage) }}
 {{-       end }}
-{{-     else }}
-{{-       if $uidHeaderHasEmpty }}
-{{-         fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry and let the chart render the flag." $uidHeaderArgSeen $.Values.oidc.mode) }}
-{{-       end }}
-{{-       if and (ne $uidHeaderArgSeen "") (not $uidHeaderConforms) }}
-{{-         fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart injects --requestheader-uid-headers=X-Remote-Uid so the authenticated user UID survives the aggregation layer, and the kube-apiserver rejects a uid-headers list that omits X-Remote-Uid. Add X-Remote-Uid to your entry, or drop the entry and let the chart render the flag." $uidHeaderArgSeen $.Values.oidc.mode) }}
-{{-       end }}
-{{-       if eq $uidHeaderArgSeen "" }}
+{{-     end }}
+{{-     if $uidHeaderHasEmpty }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, and it validates every entry of the flag as one list, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry." $uidHeaderEmptyArg $.Values.oidc.mode) }}
+{{-     end }}
+{{-     if not $uidGateOptedOut }}
+{{- /*
+  Adding a second X-Remote-Uid to a list that already has one is harmless,
+  so this is only about leaving a conforming setup rendering as it did.
+*/}}
+{{-       if and (not $uidHeaderConforms) (or (not $argUnreadable) (ne $uidHeaderArgSeen "")) }}
 {{-         $uidArgs = append $uidArgs "--requestheader-uid-headers=X-Remote-Uid" }}
 {{-       end }}
-{{-       if and $uidGateRequired (not (or (eq $uidGateSetting "true") (eq $allAlphaSetting "true"))) }}
-{{-         if ne $gateArgValue "" }}
+{{-       if and (not $argUnreadable) $uidGateRequired (not (or (eq $uidGateSetting "true") (eq $allAlphaSetting "true"))) }}
 {{- /*
-  Match the operator's spelling: a prefixed value must get a prefixed term,
-  or the apiserver rejects the mixed flag before any gate is read.
+  Only this chart's own term: the operator's entries reach featureGate.Set()
+  on their own, and the term goes last, where it wins. The spelling has to
+  match whatever the operator used, or the mix above becomes this chart's
+  doing.
 */}}
-{{-           $ownTerm := "RemoteRequestHeaderUID=true" }}
-{{-           if $gateUsesKubePrefix }}
-{{-             $ownTerm = "kube:RemoteRequestHeaderUID=true" }}
-{{-           end }}
-{{-           $uidArgs = append $uidArgs (printf "--feature-gates=%s,%s" $gateArgValue $ownTerm) }}
-{{-         else }}
-{{-           $uidArgs = append $uidArgs "--feature-gates=RemoteRequestHeaderUID=true" }}
+{{-         $ownTerm := "RemoteRequestHeaderUID=true" }}
+{{-         if $gateUsesKubePrefix }}
+{{-           $ownTerm = "kube:RemoteRequestHeaderUID=true" }}
 {{-         end }}
+{{-         $uidArgs = append $uidArgs (printf "--feature-gates=%s" $ownTerm) }}
 {{-       end }}
 {{-     end }}
 {{-   end }}
@@ -557,7 +724,7 @@ spec:
       REPLACE patch that clears the stale value.
     */}}
     extraArgs:
-      {{- with .Values.controlPlane.apiServer.extraArgs }}
+      {{- with $keptExtraArgs }}
       {{- toYaml . | nindent 6 }}
       {{- end }}
       {{- if $oidcEnabled }}
@@ -566,7 +733,7 @@ spec:
       {{- toYaml . | nindent 6 }}
       {{- end }}
       {{- end }}
-      {{- if not (or .Values.controlPlane.apiServer.extraArgs $oidcEnabled) }} []{{ end }}
+      {{- if not (or $keptExtraArgs $oidcEnabled) }} []{{ end }}
     extraVolumeMounts:
       {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
       {{- toYaml . | nindent 6 }}
@@ -582,6 +749,10 @@ spec:
   scheduler:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.scheduler.resourcesPreset .Values.controlPlane.scheduler.resources $) | nindent 6 }}
   dataStoreName: "{{ $etcd }}"
+  {{- with $admissionControllers }}
+  admissionControllers:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   addons:
     konnectivity:
       {{- $konnVersion := include "kubernetes.konnectivityVersion" $ | trim }}
@@ -597,9 +768,7 @@ spec:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.konnectivity.server.resourcesPreset .Values.controlPlane.konnectivity.server.resources $) | nindent 10 }}
   kubelet:
     cgroupfs: systemd
-    preferredAddressTypes:
-    - InternalIP
-    - ExternalIP
+    preferredAddressTypes: {{- toYaml $preferredAddressTypes | nindent 4 }}
   network:
     serviceType: ClusterIP
     ingress:

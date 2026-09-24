@@ -210,3 +210,32 @@ string this admits parses to a positive duration.
 {{- end -}}
 {{- $value -}}
 {{- end -}}
+
+{{/*
+  The two kube-apiserver flags the tenant control plane owns that have a
+  KamajiControlPlane field it renders them from, keyed to that field.
+  cluster.yaml moves an --flag=value entry for either into the field.
+*/}}
+{{- define "kubernetes.apiServer.movedArgFields" -}}
+{{- dict
+      "--enable-admission-plugins" "controlPlane.apiServer.admissionControllers"
+      "--kubelet-preferred-address-types" "controlPlane.kubelet.preferredAddressTypes"
+    | toJson }}
+{{- end }}
+
+{{/*
+  controlPlane.apiServer.extraArgs as the KamajiControlPlane carries it, as a
+  JSON list: every entry except an --flag=value entry that cluster.yaml moves
+  into its field. Every writer of spec.apiServer.extraArgs reads this.
+*/}}
+{{- define "kubernetes.apiServer.keptExtraArgs" -}}
+{{- $moved := include "kubernetes.apiServer.movedArgFields" . | fromJson }}
+{{- $kept := list }}
+{{- range $arg := .Values.controlPlane.apiServer.extraArgs | default list }}
+{{-   $flag := index (splitList "=" (toString $arg)) 0 }}
+{{-   if not (and (hasKey $moved $flag) (contains "=" (toString $arg))) }}
+{{-     $kept = append $kept $arg }}
+{{-   end }}
+{{- end }}
+{{- toJson $kept }}
+{{- end }}

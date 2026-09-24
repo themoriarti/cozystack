@@ -555,9 +555,9 @@ tests:
         documentIndex: 1
 
   - it: a user entry already carrying X-Remote-Uid suppresses the chart copy
-    # Kamaji collapses extraArgs into a map keyed by flag name, so two
-    # --requestheader-uid-headers entries cannot coexist: the later one wins
-    # silently. The equal on the full list proves the chart emitted no duplicate.
+    # The apiserver appends repeated entries of this flag, so the chart's own
+    # element would be a duplicate here rather than a fix. The equal on the
+    # full list proves it emitted none.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -577,7 +577,10 @@ tests:
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
         documentIndex: 1
 
-  - it: fails when a user uid-headers entry omits X-Remote-Uid
+  - it: adds its own element beside a uid-headers entry that omits X-Remote-Uid
+    # Repeats of the flag append, so the apiserver validates the union and the
+    # operator's own header keeps working beside the standard one. Rendering
+    # both is what makes the list the apiserver would have refused acceptable.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -590,8 +593,13 @@ tests:
       controlPlane.apiServer.extraArgs:
         - "--requestheader-uid-headers=X-Custom-Uid"
     asserts:
-      - failedTemplate:
-          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Custom-Uid" while spec.oidc.mode is "System" — the chart injects --requestheader-uid-headers=X-Remote-Uid so the authenticated user UID survives the aggregation layer, and the kube-apiserver rejects a uid-headers list that omits X-Remote-Uid. Add X-Remote-Uid to your entry, or drop the entry and let the chart render the flag.'
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--requestheader-uid-headers=X-Custom-Uid"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+            - "--requestheader-uid-headers=X-Remote-Uid"
+        documentIndex: 1
 
   - it: a user uid-headers list containing X-Remote-Uid among others suppresses the chart copy
     # The realistic multi-header shape. X-Remote-Uid is present as its own
@@ -615,11 +623,11 @@ tests:
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
         documentIndex: 1
 
-  - it: fails when a user uid-headers entry only looks like X-Remote-Uid
+  - it: does not read a uid-headers element that only looks like X-Remote-Uid
     # Upstream matches a whole list element, not a substring: X-Remote-Uid-Extra
-    # does NOT satisfy the requirement. Treating it as ownership would skip the
-    # chart's own flag and leave the apiserver with a list it refuses to start
-    # on — a substring test would do exactly that.
+    # does NOT satisfy the requirement. Reading it as the standard element would
+    # suppress the chart's own and leave the apiserver with a list it refuses to
+    # start on — a substring test would do exactly that.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -632,15 +640,20 @@ tests:
       controlPlane.apiServer.extraArgs:
         - "--requestheader-uid-headers=X-Remote-Uid-Extra"
     asserts:
-      - failedTemplate:
-          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid-Extra" while spec.oidc.mode is "System" — the chart injects --requestheader-uid-headers=X-Remote-Uid so the authenticated user UID survives the aggregation layer, and the kube-apiserver rejects a uid-headers list that omits X-Remote-Uid. Add X-Remote-Uid to your entry, or drop the entry and let the chart render the flag.'
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--requestheader-uid-headers=X-Remote-Uid-Extra"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+            - "--requestheader-uid-headers=X-Remote-Uid"
+        documentIndex: 1
 
-  - it: fails when a user uid-headers list pads X-Remote-Uid with spaces
+  - it: does not read a space-padded X-Remote-Uid as the standard element
     # The flag is a pflag stringSlice and its CSV reader keeps surrounding
     # spaces, so upstream compares "X-Remote-Uid " against "X-Remote-Uid" and
-    # rejects the list. The chart must not read that as ownership: skipping its
-    # own flag here would leave the apiserver with a list it refuses to start
-    # on. Being more permissive than upstream is the one direction this guard
+    # finds no match. Reading that as the standard element would suppress the
+    # chart's own and leave the apiserver with a list it refuses to start on.
+    # Being more permissive than upstream is the one direction this reading
     # must never take.
     release:
       name: kubernetes-app
@@ -654,14 +667,18 @@ tests:
       controlPlane.apiServer.extraArgs:
         - "--requestheader-uid-headers=X-Remote-Uid , Other"
     asserts:
-      - failedTemplate:
-          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid , Other" while spec.oidc.mode is "System" — the chart injects --requestheader-uid-headers=X-Remote-Uid so the authenticated user UID survives the aggregation layer, and the kube-apiserver rejects a uid-headers list that omits X-Remote-Uid. Add X-Remote-Uid to your entry, or drop the entry and let the chart render the flag.'
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--requestheader-uid-headers=X-Remote-Uid , Other"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+            - "--requestheader-uid-headers=X-Remote-Uid"
+        documentIndex: 1
 
   - it: fails when a user uid-headers list carries a whitespace-only element
     # checkForWhiteSpaceOnly runs over the same list and refuses an element that
     # is empty after TrimSpace, so the X-Remote-Uid next to it does not save the
-    # list. Reading it as ownership would skip the chart's flag and leave the
-    # apiserver with a list it refuses to start on.
+    # list, and nothing the chart adds repairs it either.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -675,12 +692,12 @@ tests:
         - "--requestheader-uid-headers=X-Remote-Uid, "
     asserts:
       - failedTemplate:
-          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid, " while spec.oidc.mode is "System" — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry and let the chart render the flag.'
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid, " while spec.oidc.mode is "System" — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, and it validates every entry of the flag as one list, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry.'
 
-  - it: does not carry an empty element from an earlier uid-headers entry into a later one
-    # Only the last entry survives the collapse, and this one is well formed.
-    # Failing on the earlier entry's trailing comma would refuse a list the
-    # apiserver never sees, and quote the wrong entry while doing it.
+  - it: fails on an empty element in an earlier uid-headers entry
+    # Repeats append, so the trailing comma in the first entry puts an empty
+    # element in the very list checkForWhiteSpaceOnly walks, however well formed
+    # the later entry is. The message quotes the entry that carries it.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -694,13 +711,8 @@ tests:
         - "--requestheader-uid-headers=X-Remote-Uid,"
         - "--requestheader-uid-headers=X-Remote-Uid"
     asserts:
-      - equal:
-          path: spec.apiServer.extraArgs
-          value:
-            - "--requestheader-uid-headers=X-Remote-Uid,"
-            - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
-        documentIndex: 1
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid," while spec.oidc.mode is "System" — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, and it validates every entry of the flag as one list, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry.'
 
   - it: reads a spaced feature-gates entry disabling the gate as an opt-out from v1.33 on
     # featureGate.Set() TrimSpace-s the name and the value separately, so
@@ -774,13 +786,11 @@ tests:
           content: "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
-  - it: merges the v1.32 gate into an unrelated feature-gates entry
+  - it: adds the v1.32 gate beside an unrelated feature-gates entry
     # The chart needs the gate on for its own header flag, and the operator
-    # expressed no opinion about it. Failing here would strand a rendering
-    # cluster on a HelmRelease that no longer converges; emitting a bare second
-    # entry would displace Foo=true wherever duplicate flags collapse. Carrying
-    # the operator value into the merged entry decides the gate under both
-    # readings and keeps every other term.
+    # expressed no opinion about it. Foo=true reaches featureGate.Set() from
+    # the operator's own entry, so the chart carries only its own term, which
+    # goes last and wins.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -799,11 +809,11 @@ tests:
             - "--feature-gates=Foo=true"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=Foo=true,RemoteRequestHeaderUID=true"
+            - "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
-  - it: merges the v1.32 gate for an operator who supplies their own header flag
-    # The chart yields the header flag and still merges the gate, so a setup
+  - it: adds the v1.32 gate for an operator who supplies their own header flag
+    # The chart yields the header flag and still adds the gate, so a setup
     # that could not start before this code existed now does. Ordering matters —
     # the header entry is listed after the gate entry, so this pins that the
     # decision is taken once every arg has been seen rather than mid-loop.
@@ -826,7 +836,7 @@ tests:
             - "--feature-gates=Foo=true"
             - "--requestheader-uid-headers=X-Remote-Uid"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
-            - "--feature-gates=Foo=true,RemoteRequestHeaderUID=true"
+            - "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: renders the standalone v1.32 gate for a conforming header entry with no gate entry
@@ -854,9 +864,9 @@ tests:
         documentIndex: 1
 
   - it: renders the standalone v1.32 gate when only an earlier uid-headers entry is quoted
-    # The collapse keeps the last entry, so the quoted one never reaches the
-    # apiserver. Letting its quotes decide would withhold the gate the surviving,
-    # conforming entry needs, and nothing would tell the operator why.
+    # Quotes on this flag hide a value, never a version, so they withhold a
+    # reading of that entry and nothing else. The unquoted entry still shows the
+    # union conforms, and the gate the list needs is still rendered.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -879,9 +889,10 @@ tests:
             - "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
-  - it: reads an unquoted --emulated-version that replaces an earlier quoted one
-    # Same rule on the other CSV flag: the surviving entry is unquoted and
-    # readable, so the chart renders for the version it names.
+  - it: renders nothing when a second --emulated-version entry joins a quoted one
+    # This flag accumulates instead of replacing, so neither entry goes away:
+    # the quoted one hides its value and toVersionMap refuses two elements
+    # naming kube in any case. There is no version to render against.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -901,14 +912,38 @@ tests:
             - '--emulated-version="1.32"'
             - "--emulated-version=1.34"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
-            - "--requestheader-uid-headers=X-Remote-Uid"
         documentIndex: 1
 
-  - it: yields to a quoted uid-headers entry instead of failing the render
+  - it: renders nothing when two --emulated-version entries both name kube
+    # toVersionMap returns "duplicate version flag" and the apiserver never
+    # starts, so there is no effective version the chart could render against.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.35"
+      controlPlane.apiServer.extraArgs:
+        - "--emulated-version=1.34"
+        - "--emulated-version=kube=1.33"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--emulated-version=1.34"
+            - "--emulated-version=kube=1.33"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1
+
+  - it: adds its own element beside a quoted uid-headers entry
     # pflag parses this flag as a StringSlice, whose CSV reader strips a pair of
     # surrounding double quotes, so the apiserver sees X-Remote-Uid and starts.
     # The chart compares the raw element and cannot see through the quotes, so
-    # it renders nothing rather than failing a cluster that works today.
+    # it cannot claim the union conforms; adding its own element is safe
+    # whatever that value turns out to be, and it duplicates at worst.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -926,6 +961,32 @@ tests:
           value:
             - '--requestheader-uid-headers="X-Remote-Uid"'
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+            - "--requestheader-uid-headers=X-Remote-Uid"
+        documentIndex: 1
+
+  - it: does not fail on an empty element a quoted uid-headers entry may not hold
+    # encoding/csv reads "X-Remote-Uid,,Other" as one element, so the commas
+    # inside the quotes are data rather than separators and the list upstream
+    # validates has nothing empty in it. Reading the raw text would refuse a
+    # cluster that starts.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.33"
+      controlPlane.apiServer.extraArgs:
+        - '--requestheader-uid-headers="X-Remote-Uid,,Other"'
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - '--requestheader-uid-headers="X-Remote-Uid,,Other"'
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+            - "--requestheader-uid-headers=X-Remote-Uid"
         documentIndex: 1
 
   - it: renders nothing when quotes hide the emulated version from the chart
@@ -982,14 +1043,10 @@ tests:
     # applies to every beta gate with no explicit entry of its own — the same
     # opt-out as the named one, by a less obvious route.
     #
-    # The length here matters beyond the values. It is two, and the render
-    # without this entry is also two (see the v1.35 case above), so adding the
-    # opt-out to a running tenant leaves the entry count unchanged. The tenant
-    # control plane rewrites apiserver args only when that count changes, so the
-    # previously rendered header flag survives on the live Deployment next to
-    # the now-disabled gate, and the apiserver will not start. docs/oidc-tenant.md
-    # carries the operator-facing note. If a future edit changes either length,
-    # that hazard changes with it.
+    # Adding the opt-out to a running tenant leaves the rendered list two
+    # entries long, as it was without it. The tenant control plane rebuilds
+    # the apiserver args from a checksum of the list, so a same-length edit
+    # still removes the header flag the previous render carried.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -1032,10 +1089,10 @@ tests:
             - "--requestheader-uid-headers=X-Remote-Uid"
         documentIndex: 1
 
-  - it: judges the last uid-headers entry when the operator supplies several
-    # Same collapse rule as --feature-gates: the control plane keeps the last
-    # entry, so an earlier non-conforming one is already dead and must not fail
-    # the render.
+  - it: reads the union when an earlier uid-headers entry does not conform
+    # Repeats append, so X-Remote-Uid is in the list the apiserver validates
+    # whichever entry carries it, and the operator's own header travels beside
+    # it. The chart adds nothing.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -1057,8 +1114,10 @@ tests:
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
         documentIndex: 1
 
-  - it: fails on the last uid-headers entry when that is the non-conforming one
-    # Mirror: an earlier conforming entry does not rescue a later broken one.
+  - it: reads the union when a later uid-headers entry does not conform
+    # Mirror of the case above, and the one the old collapse made a render
+    # failure: a later entry cannot take X-Remote-Uid back out of a list that
+    # is only ever appended to.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -1072,8 +1131,13 @@ tests:
         - "--requestheader-uid-headers=X-Remote-Uid"
         - "--requestheader-uid-headers=X-Custom"
     asserts:
-      - failedTemplate:
-          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Custom" while spec.oidc.mode is "System" — the chart injects --requestheader-uid-headers=X-Remote-Uid so the authenticated user UID survives the aggregation layer, and the kube-apiserver rejects a uid-headers list that omits X-Remote-Uid. Add X-Remote-Uid to your entry, or drop the entry and let the chart render the flag.'
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--requestheader-uid-headers=X-Remote-Uid"
+            - "--requestheader-uid-headers=X-Custom"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1
 
   - it: accepts the documented v1.32 hand-written setup unchanged
     # The shape the released field documentation told operators to write: the
@@ -1120,11 +1184,11 @@ tests:
       - failedTemplate:
           errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid" alongside "--feature-gates=RemoteRequestHeaderUID=false", while spec.oidc.mode is "System" on Kubernetes v1.34 — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off.'
 
-  - it: judges the last feature-gates entry when the operator supplies several
-    # The control plane keeps one entry per flag name and the last one wins, so
-    # the earlier entry is already dead by the time the apiserver reads it.
+  - it: takes the last setting of a gate when the operator supplies several entries
+    # Every entry lands in the same per-component bucket and is joined into one
+    # featureGate.Set(), so the last term for a name is the one that decides.
     # Judging entries as they arrive would fail this config even though the
-    # surviving entry enables the gate.
+    # operator ends up with the gate on.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -1147,10 +1211,10 @@ tests:
             - "--requestheader-uid-headers=X-Remote-Uid"
         documentIndex: 1
 
-  - it: merges into the last feature-gates entry when that is the one leaving the gate off
-    # Mirror of the case above: the surviving entry is the one that matters, so
-    # an earlier entry enabling the gate does not rescue a later one that omits
-    # it, and the merge carries the last entry's terms.
+  - it: keeps an earlier entry's gate setting when a later entry omits the name
+    # Mirror of the case above. A later entry that says nothing about
+    # RemoteRequestHeaderUID does not unset it, so the operator still owns the
+    # gate and the chart adds only the header flag.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -1171,7 +1235,6 @@ tests:
             - "--feature-gates=Foo=true"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=Foo=true,RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: reads a v1.32 blanket AllAlpha=true as gate ownership
@@ -1430,7 +1493,7 @@ tests:
             - "--feature-gates=remoterequestheaderuid=true"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=remoterequestheaderuid=true,RemoteRequestHeaderUID=true"
+            - "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: does not read a mis-cased gate name as an opt-out from v1.33 on
@@ -1482,8 +1545,9 @@ tests:
   - it: treats an empty uid-headers value as no entry at all
     # pflag readAsCSV returns an empty slice for an empty value and Validate()
     # only inspects a non-empty list, so the value itself says nothing. Reading
-    # it as a list would fail the render, where rendering the chart's own flag
-    # after it leaves the collapse a conforming last entry.
+    # it as a list would fail the render, where rendering the chart's own
+    # element puts X-Remote-Uid in the union and the list the apiserver
+    # validates conforms.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -1643,10 +1707,10 @@ tests:
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
         documentIndex: 1
 
-  - it: merges into a kube:-prefixed entry using the operator's spelling
-    # componentGlobalsRegistry.Set() refuses a --feature-gates value that mixes the
-    # empty prefix with kube:, so an unprefixed term appended to a prefixed value
-    # stops the apiserver before any gate is read.
+  - it: answers a kube:-prefixed entry using the operator's spelling
+    # componentGlobalsRegistry.Set() refuses a configuration that mixes the empty
+    # prefix with kube: across any two entries, so an unprefixed term of the
+    # chart's own would stop the apiserver before any gate is read.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -1665,10 +1729,10 @@ tests:
             - "--feature-gates=kube:Foo=true"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=kube:Foo=true,kube:RemoteRequestHeaderUID=true"
+            - "--feature-gates=kube:RemoteRequestHeaderUID=true"
         documentIndex: 1
 
-  - it: leaves another component's gates alone and merges unprefixed
+  - it: leaves another component's gates alone and answers unprefixed
     # wardle:Foo=true names a different component, so it carries no opinion about
     # RemoteRequestHeaderUID, and an unprefixed term beside it is not a mix: the
     # keys are wardle and the empty default, not the empty default and kube.
@@ -1690,7 +1754,7 @@ tests:
             - "--feature-gates=wardle:Foo=true"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=wardle:Foo=true,RemoteRequestHeaderUID=true"
+            - "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: does not read AllBeta=false as an opt-out on v1.32
@@ -1714,7 +1778,7 @@ tests:
             - "--feature-gates=AllBeta=false"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=AllBeta=false,RemoteRequestHeaderUID=true"
+            - "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: does not read AllAlpha=false as an opt-out from v1.33 on
@@ -1761,7 +1825,7 @@ tests:
             - "--feature-gates= kube :Foo=true"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates= kube :Foo=true,kube:RemoteRequestHeaderUID=true"
+            - "--feature-gates=kube:RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: skips a zero-length element the way both parse layers do
@@ -1785,7 +1849,7 @@ tests:
             - "--feature-gates=Foo=true,,Bar=true"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=Foo=true,,Bar=true,RemoteRequestHeaderUID=true"
+            - "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: takes the last value when one gate is named twice in a value
@@ -1858,7 +1922,7 @@ tests:
             - "--feature-gates=RemoteRequestHeaderUID"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=RemoteRequestHeaderUID,RemoteRequestHeaderUID=true"
+            - "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: passes an unparseable blanket value through without reading an opinion
@@ -1981,7 +2045,7 @@ tests:
             - "--feature-gates=:Foo=true"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=:Foo=true,RemoteRequestHeaderUID=true"
+            - "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: reads an empty-component opt-out from v1.33 on
@@ -2004,10 +2068,10 @@ tests:
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
         documentIndex: 1
 
-  - it: drops a blanket AllAlpha when a later feature-gates entry omits it
-    # State-overwrite row. Only the surviving entry reaches the apiserver, so an
-    # AllAlpha=true read from an earlier argument must not still count as
-    # ownership: the chart would skip a gate term the apiserver never receives.
+  - it: keeps a blanket AllAlpha when a later feature-gates entry omits it
+    # Accumulation row. Both entries land in the same bucket, so AllAlpha=true is
+    # still what setUnsetAlphaGates applies; reading only the later entry would
+    # add a gate term for a gate the operator already switched on.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -2028,12 +2092,12 @@ tests:
             - "--feature-gates=Foo=true"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=Foo=true,RemoteRequestHeaderUID=true"
         documentIndex: 1
 
-  - it: drops a blanket AllBeta when a later feature-gates entry omits it
-    # Mirror row for the opt-out side: an AllBeta=false left behind by an earlier
-    # argument must not suppress the header flag once a later entry replaces it.
+  - it: keeps a blanket AllBeta opt-out when a later feature-gates entry omits it
+    # Mirror row for the opt-out side, and the shape that made this rewrite
+    # necessary: reading only the later entry renders the header flag next to a
+    # gate the apiserver has switched off, and the control plane never starts.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -2053,14 +2117,346 @@ tests:
             - "--feature-gates=AllBeta=false"
             - "--feature-gates=Foo=true"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
-            - "--requestheader-uid-headers=X-Remote-Uid"
         documentIndex: 1
 
-  - it: takes the prefix spelling from the surviving feature-gates entry only
-    # The prefix is a property of the entry that reaches the apiserver, not of
-    # anything seen earlier in extraArgs. Carrying it across arguments would
-    # append kube:RemoteRequestHeaderUID=true onto an unprefixed value, and
-    # componentGlobalsRegistry.Set() rejects that mix before reading any gate.
+  - it: keeps an explicit opt-out from an earlier feature-gates entry
+    # The same shape named explicitly rather than through a blanket. Both are
+    # inputs to one featureGate.Set(), so the gate is off and the header flag
+    # must not be rendered beside it.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=RemoteRequestHeaderUID=false"
+        - "--feature-gates=Foo=true"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--feature-gates=RemoteRequestHeaderUID=false"
+            - "--feature-gates=Foo=true"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1
+
+  - it: keeps a v1.32 blanket AllAlpha opt-out from an earlier feature-gates entry
+    # The v1.32 half of the same shape: the gate is alpha there, so AllAlpha=false
+    # is the opt-out, and a later entry that says nothing about it does not undo
+    # the opinion.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.32"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=AllAlpha=false"
+        - "--feature-gates=Foo=true"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--feature-gates=AllAlpha=false"
+            - "--feature-gates=Foo=true"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1
+
+  - it: fails on a header flag whose opt-out lives in an earlier feature-gates entry
+    # The fail path under accumulation: the opt-out and the header flag never
+    # share an entry, and the apiserver still refuses the pair. Reading only the
+    # last gate entry would let this render and the control plane would not start.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=RemoteRequestHeaderUID=false"
+        - "--feature-gates=Foo=true"
+        - "--requestheader-uid-headers=X-Remote-Uid"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid" alongside "--feature-gates=RemoteRequestHeaderUID=false", while spec.oidc.mode is "System" on Kubernetes v1.34 — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off.'
+
+  - it: quotes the entry carrying the opt-out, not the last entry naming a gate
+    # The message tells the operator which of their two entries to drop, so it
+    # has to name the one that turned the gate off. AllBeta=true is read later
+    # and turns it on; quoting that entry would send them to delete a setting
+    # that is not the problem, and the render would still fail.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=RemoteRequestHeaderUID=false"
+        - "--feature-gates=AllBeta=true"
+        - "--requestheader-uid-headers=X-Remote-Uid"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid" alongside "--feature-gates=RemoteRequestHeaderUID=false", while spec.oidc.mode is "System" on Kubernetes v1.34 — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off.'
+
+  - it: quotes the blanket entry that carries a v1.32 opt-out
+    # Same rule on the blanket path, where the gate is alpha: AllAlpha=false is
+    # the opt-out and AllBeta=true is a later recognized setting that decides
+    # nothing here.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.32"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=AllAlpha=false"
+        - "--feature-gates=AllBeta=true"
+        - "--requestheader-uid-headers=X-Remote-Uid"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid" alongside "--feature-gates=AllAlpha=false", while spec.oidc.mode is "System" on Kubernetes v1.32 — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off.'
+
+  - it: quotes the blanket AllBeta entry that carries the opt-out
+    # The third selection branch, on the version range where the gate is beta.
+    # AllAlpha=true is recognized and read later, so it is what a selection
+    # keyed on the last term seen would quote.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=AllBeta=false"
+        - "--feature-gates=AllAlpha=true"
+        - "--requestheader-uid-headers=X-Remote-Uid"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid" alongside "--feature-gates=AllBeta=false", while spec.oidc.mode is "System" on Kubernetes v1.34 — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off.'
+
+  - it: fails when a read flag ends the list and would eat the chart's own entry
+    # The chart appends --authentication-config after the operator's entries,
+    # and pflag hands a valueless long flag the next argument whatever it looks
+    # like. Rendering here produces a control plane that starts, reads no
+    # AuthenticationConfiguration, and fails every OIDC login in silence.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--requestheader-uid-headers"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs ends with "--requestheader-uid-headers" while spec.oidc.mode is "System" — the chart appends --authentication-config after your entries, and the kube-apiserver would read that as the value of your flag: the AuthenticationConfiguration is never applied, and the control plane either comes up with OIDC silently off or refuses to start at all, depending on which flag swallowed it. Give the flag its value in the same entry, as --flag=value.'
+
+  - it: fails on a trailing bare --feature-gates for the same reason
+    # The sibling flag, where the swallowed argument merely stops the apiserver
+    # instead of disabling OIDC quietly. Same cause, so the same refusal rather
+    # than one message per flag.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.32"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs ends with "--feature-gates" while spec.oidc.mode is "System" — the chart appends --authentication-config after your entries, and the kube-apiserver would read that as the value of your flag: the AuthenticationConfiguration is never applied, and the control plane either comes up with OIDC silently off or refuses to start at all, depending on which flag swallowed it. Give the flag its value in the same entry, as --flag=value.'
+
+  - it: keeps a quoted --emulated-version unreadable once a later entry is readable
+    # Quoting is remembered across entries rather than re-decided per entry, and
+    # this is the shape that tells the two apart: the second entry names a
+    # foreign component, so it triggers no duplicate of its own and the
+    # withholding can only come from the quotes on the first. Re-deciding per
+    # entry would read the quoted "1.32" as no emulation at all — its minor
+    # fails the digits check — and render the header flag for v1.35.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.35"
+      controlPlane.apiServer.extraArgs:
+        - '--emulated-version="1.32"'
+        - "--emulated-version=wardle=1.2"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - '--emulated-version="1.32"'
+            - "--emulated-version=wardle=1.2"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1
+
+  - it: fails on a trailing bare --emulated-version, the third name in the guard
+    # The guard reads one list of three flag names and the other two have cases
+    # of their own; this is the third, so a name dropped from that list cannot
+    # pass unnoticed.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.35"
+      controlPlane.apiServer.extraArgs:
+        - "--emulated-version"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs ends with "--emulated-version" while spec.oidc.mode is "System" — the chart appends --authentication-config after your entries, and the kube-apiserver would read that as the value of your flag: the AuthenticationConfiguration is never applied, and the control plane either comes up with OIDC silently off or refuses to start at all, depending on which flag swallowed it. Give the flag its value in the same entry, as --flag=value.'
+
+  - it: fails on a mixed gate spelling from v1.33 on, where the chart adds no term
+    # The refusal does not depend on the chart having a term to add: from v1.33
+    # the gate is beta-on and the chart renders none, and the apiserver still
+    # refuses the configuration. Pinning only the v1.32 case would let the guard
+    # be narrowed to the version where the chart happens to write something.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.33"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=kube:Foo=true"
+        - "--feature-gates=Bar=true"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs names the kube feature gates both ways, "--feature-gates=Bar=true" and "--feature-gates=kube:Foo=true", while spec.oidc.mode is "System" — componentGlobalsRegistry.Set() refuses a configuration that names the kube component both ways, so the control plane would refuse to start and nothing the chart renders repairs it. Write every kube gate term in one spelling.'
+
+  - it: quotes the uid-headers entry carrying the empty element, not the first
+    # The message tells the operator which entry to edit, and the entries are
+    # read as one list, so the empty element can sit in any of them. A well
+    # formed first entry must not be the one quoted.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--requestheader-uid-headers=X-Remote-Uid"
+        - "--requestheader-uid-headers=A,"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=A," while spec.oidc.mode is "System" — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, and it validates every entry of the flag as one list, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry.'
+
+  - it: sees a uid-headers entry written as two elements
+    # pflag pairs "--requestheader-uid-headers" with the element after it, so
+    # the apiserver really does get the list and really does refuse it while
+    # the gate is off. Matching only the --flag=value spelling would let this
+    # render and leave the operator with a control plane that will not start.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=RemoteRequestHeaderUID=false"
+        - "--requestheader-uid-headers"
+        - "X-Remote-Uid"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers" alongside "--feature-gates=RemoteRequestHeaderUID=false", while spec.oidc.mode is "System" on Kubernetes v1.34 — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off.'
+
+  - it: renders nothing when --feature-gates is written as two elements
+    # The gate setting lives in an element this loop never reads, so the chart
+    # cannot tell an opt-out from an unrelated term. Rendering the header flag
+    # against a reading it did not take is the one outcome worth avoiding.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.32"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates"
+        - "RemoteRequestHeaderUID=false"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--feature-gates"
+            - "RemoteRequestHeaderUID=false"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1
+
+  - it: renders nothing when --emulated-version is written as two elements
+    # Same rule on the flag that decides the version: an unread value could be
+    # a minor with no such flag at all.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      version: "v1.35"
+      controlPlane.apiServer.extraArgs:
+        - "--emulated-version"
+        - "1.31"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--emulated-version"
+            - "1.31"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1
+
+  - it: fails when the operator names the kube gates both bare and kube:-prefixed
+    # The prefix is a property of the whole configuration, not of one entry:
+    # componentGlobalsRegistry.Set() refuses the empty key beside kube before it
+    # reads a gate, so no spelling of the chart's own term can help and the
+    # message has to say which two entries disagree.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -2074,22 +2470,14 @@ tests:
         - "--feature-gates=kube:Foo=true"
         - "--feature-gates=Bar=true"
     asserts:
-      - equal:
-          path: spec.apiServer.extraArgs
-          value:
-            - "--feature-gates=kube:Foo=true"
-            - "--feature-gates=Bar=true"
-            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
-            - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=Bar=true,RemoteRequestHeaderUID=true"
-        documentIndex: 1
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs names the kube feature gates both ways, "--feature-gates=Bar=true" and "--feature-gates=kube:Foo=true", while spec.oidc.mode is "System" — componentGlobalsRegistry.Set() refuses a configuration that names the kube component both ways, so the control plane would refuse to start and nothing the chart renders repairs it. Write every kube gate term in one spelling.'
 
-  - it: does not carry a kube emulation into a later entry that names another component
-    # Only the surviving --emulated-version reaches the apiserver, and
-    # wardle=1.2 names no kube version, so the chart decides at the binary
-    # version. Holding 1.31 from the earlier entry would read an emulation the
-    # apiserver never receives. The apiserver refuses wardle=1.2 on its own, so
-    # this pins the parser's per-entry reset, not a cluster that starts.
+  - it: carries a kube emulation into a later entry that names another component
+    # --emulated-version is a StringSlice, so wardle=1.2 joins 1.31 rather than
+    # replacing it and the effective version is still 1.31, below the gate's
+    # first spec. Resetting per entry would render the header flag for a version
+    # that has no such flag.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -2109,14 +2497,13 @@ tests:
             - "--emulated-version=1.31"
             - "--emulated-version=wardle=1.2"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
-            - "--requestheader-uid-headers=X-Remote-Uid"
         documentIndex: 1
 
   - it: keeps the last non-empty --emulated-version when a later one is empty
     # An empty value parses to an empty slice and emulates nothing, so an
-    # apiserver handed both entries still emulates 1.32 and needs the gate. Where
-    # the collapse keeps only the empty one, it reaches the apiserver bare and
-    # the control plane does not start whatever the chart renders.
+    # apiserver handed both entries still emulates 1.32 and needs the gate.
+    # Reading the empty entry as the operative one would drop the emulation and
+    # render for the image tag instead.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -2235,10 +2622,10 @@ tests:
             - "--requestheader-uid-headers=X-Remote-Uid"
         documentIndex: 1
 
-  - it: keeps reading the last non-empty feature-gates entry when a later one is empty
-    # An empty value changes no gate, so it does not replace the entry the
-    # chart read: the merge still carries Foo=true. Treating the empty entry as
-    # the operative one would drop the operator's term from the merged copy.
+  - it: reads nothing from a feature-gates entry with an empty value
+    # An empty value contributes no term and no component key, so it settles
+    # nothing and, in particular, does not make the bare spelling one of the
+    # two the mix guard compares.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -2249,17 +2636,17 @@ tests:
       oidc.mode: System
       version: "v1.32"
       controlPlane.apiServer.extraArgs:
-        - "--feature-gates=Foo=true"
+        - "--feature-gates=kube:Foo=true"
         - "--feature-gates="
     asserts:
       - equal:
           path: spec.apiServer.extraArgs
           value:
-            - "--feature-gates=Foo=true"
+            - "--feature-gates=kube:Foo=true"
             - "--feature-gates="
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=Foo=true,RemoteRequestHeaderUID=true"
+            - "--feature-gates=kube:RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: reads a capitalised gate value as ownership on v1.32
@@ -2310,7 +2697,7 @@ tests:
   - it: does not read a mixed-case gate value as an opinion on v1.32
     # strconv.ParseBool rejects tRuE, so the apiserver never enables the gate on
     # it. Folding case before the match would read it as ownership and withhold
-    # the merged term.
+    # the chart's own term.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -2329,7 +2716,7 @@ tests:
             - "--feature-gates=RemoteRequestHeaderUID=tRuE"
             - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
             - "--requestheader-uid-headers=X-Remote-Uid"
-            - "--feature-gates=RemoteRequestHeaderUID=tRuE,RemoteRequestHeaderUID=true"
+            - "--feature-gates=RemoteRequestHeaderUID=true"
         documentIndex: 1
 
   - it: reads a capitalised F gate value as an opt-out from v1.33 on

@@ -46,7 +46,10 @@ type ConfigSpec struct {
 }
 
 type APIServer struct {
-	// Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for unrelated apiserver flags. When `spec.oidc.mode` is not `None` the chart also renders `--requestheader-uid-headers=X-Remote-Uid` here from Kubernetes `v1.32`, plus `--feature-gates=RemoteRequestHeaderUID=true` on `v1.32` itself. It reads an entry of your own on either flag and adapts where it can, and fails the render on shapes the apiserver would refuse to start on; `docs/oidc-tenant.md` documents these shapes and what `--emulated-version` changes. Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).
+	// Admission plugins the tenant kube-apiserver enables, passed through to KamajiControlPlane `spec.admissionControllers`, which the control plane renders as `--enable-admission-plugins`. A non-empty list replaces the control plane's default set instead of adding to it. The kube-apiserver enables these plugins in addition to its own default ones, so leaving a plugin out does not turn it off; to turn one off, name it in `--disable-admission-plugins` in `controlPlane.apiServer.extraArgs` and keep it out of this list, since the apiserver refuses to start with a plugin in both, and the control plane's default set names several. Empty by default, which keeps that default set, taken from the TenantControlPlane CRD: CertificateApproval, CertificateSigning, CertificateSubjectRestriction, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, LimitRanger, MutatingAdmissionWebhook, NamespaceLifecycle, PersistentVolumeClaimResize, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionWebhook. `NodeRestriction` is not in it.
+	// +kubebuilder:default:={}
+	AdmissionControllers []AdmissionController `json:"admissionControllers,omitempty"`
+	// Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for unrelated apiserver flags. The tenant control plane sets each of the following flags itself and drops an entry naming one before the apiserver sees it. The chart moves an `--enable-admission-plugins=` entry into `controlPlane.apiServer.admissionControllers` and a `--kubelet-preferred-address-types=` entry into `controlPlane.kubelet.preferredAddressTypes` while that field is empty, and refuses any other entry naming one of them: `--advertise-address`, `--client-ca-file`, `--enable-admission-plugins`, `--service-cluster-ip-range`, `--kubelet-client-certificate`, `--kubelet-client-key`, `--kubelet-preferred-address-types`, `--proxy-client-cert-file`, `--proxy-client-key-file`, `--requestheader-allowed-names`, `--requestheader-client-ca-file`, `--secure-port`, `--service-account-key-file`, `--service-account-signing-key-file`, `--tls-cert-file`, `--tls-private-key-file`, `--etcd-servers`, `--etcd-cafile`, `--etcd-certfile`, `--etcd-keyfile`, `--etcd-prefix`, `--etcd-compaction-interval`, `--egress-selector-config-file`. When `spec.oidc.mode` is not `None` the chart also renders OIDC flags here, reads what you have written on them, and refuses some combinations outright; `docs/oidc-tenant.md` carries which flags, which combinations, and why. Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).
 	// +kubebuilder:default:={}
 	ExtraArgs []string `json:"extraArgs,omitempty"`
 	// Extra volume mounts added to the tenant kube-apiserver container, passed through to KamajiControlPlane `spec.apiServer.extraVolumeMounts`. Each `name` must reference a volume declared in `extraVolumes`; the chart-managed talos secret volumes cannot be mounted. Each item is a core/v1 VolumeMount. Empty by default.
@@ -124,6 +127,9 @@ type ControlPlane struct {
 	// Konnectivity configuration.
 	// +kubebuilder:default:={}
 	Konnectivity Konnectivity `json:"konnectivity"`
+	// Kubelet connection settings.
+	// +kubebuilder:default:={}
+	Kubelet Kubelet `json:"kubelet,omitempty"`
 	// Number of control-plane replicas.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
@@ -211,6 +217,12 @@ type KonnectivityServer struct {
 	// Preset if `resources` omitted.
 	// +kubebuilder:default:="t1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
+}
+
+type Kubelet struct {
+	// Node address types the tenant kube-apiserver tries, in order, when it connects to a kubelet, passed through to KamajiControlPlane `spec.kubelet.preferredAddressTypes`, which the control plane renders as `--kubelet-preferred-address-types`. The KamajiControlPlane CRD rejects a repeated name. Empty by default, which renders `InternalIP`, `ExternalIP`, or the list of a `--kubelet-preferred-address-types=` entry in `controlPlane.apiServer.extraArgs` when there is one.
+	// +kubebuilder:default:={}
+	PreferredAddressTypes []NodeAddressType `json:"preferredAddressTypes,omitempty"`
 }
 
 type MonitoringAgentsAddon struct {
@@ -314,8 +326,14 @@ type VerticalPodAutoscalerAddon struct {
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
+// +kubebuilder:validation:Enum="AlwaysAdmit";"AlwaysDeny";"AlwaysPullImages";"CertificateApproval";"CertificateSigning";"CertificateSubjectRestriction";"DefaultIngressClass";"DefaultStorageClass";"DefaultTolerationSeconds";"DenyEscalatingExec";"DenyExecOnPrivileged";"DenyServiceExternalIPs";"EventRateLimit";"ExtendedResourceToleration";"ImagePolicyWebhook";"LimitPodHardAntiAffinityTopology";"LimitRanger";"MutatingAdmissionWebhook";"NamespaceAutoProvision";"NamespaceExists";"NamespaceLifecycle";"NodeRestriction";"OwnerReferencesPermissionEnforcement";"PersistentVolumeClaimResize";"PersistentVolumeLabel";"PodNodeSelector";"PodSecurity";"PodSecurityPolicy";"PodTolerationRestriction";"Priority";"ResourceQuota";"RuntimeClass";"SecurityContextDeny";"ServiceAccount";"StorageObjectInUseProtection";"TaintNodesByCondition";"ValidatingAdmissionWebhook"
+type AdmissionController string
+
 // +kubebuilder:validation:Enum="Proxied";"LoadBalancer"
 type IngressNginxExposeMethod string
+
+// +kubebuilder:validation:Enum="Hostname";"InternalIP";"ExternalIP";"InternalDNS";"ExternalDNS"
+type NodeAddressType string
 
 // +kubebuilder:validation:Enum="None";"System";"CustomConfig"
 type OIDCMode string
