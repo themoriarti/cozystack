@@ -120,9 +120,19 @@ print_header "Step 02: Create the Rabbitmq strategy + BackupClass"
 # Pod needs no package install at run time. Its presence also confirms the
 # platform default backups stack (backupstrategy-controller + CRDs) is installed,
 # without which the BackupJob below cannot reconcile at all.
+# Wait for it rather than read it once. The strategy is rendered behind a lookup
+# of the platform bucket, so it exists only once a Helm upgrade has run after
+# that bucket was provisioned. The controller forces that upgrade, but helm-
+# controller holds it while any release in its dependsOn is not Ready, so a
+# platform change made just before this runs can keep it absent for minutes.
+# kubectl wait keeps polling through NotFound and fails on any other error.
+log_substep "Waiting for the platform's cozy-default-rabbitmq strategy..."
+kubectl wait --for=create rabbitmqs.strategy.backups.cozystack.io/cozy-default-rabbitmq \
+    --timeout=15m >/dev/null \
+    || { log_error "cozy-default-rabbitmq strategy did not appear: enable the platform default backups (backupstrategy-controller) before running this demo"; exit 1; }
 CLIENT_IMAGE=$(kubectl get rabbitmqs.strategy.backups.cozystack.io cozy-default-rabbitmq \
-    -o jsonpath='{.spec.template.spec.containers[?(@.name=="rabbitmq-backup")].image}' 2>/dev/null || true)
-[[ -n "$CLIENT_IMAGE" ]] || { log_error "cozy-default-rabbitmq strategy not found: enable the platform default backups (backupstrategy-controller) before running this demo"; exit 1; }
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="rabbitmq-backup")].image}')
+[[ -n "$CLIENT_IMAGE" ]] || { log_error "cozy-default-rabbitmq strategy has no rabbitmq-backup container image"; exit 1; }
 log_substep "Reusing the platform strategy's client image: ${CLIENT_IMAGE}"
 subst 03-rabbitmq-strategy.yaml | kubectl apply -f -
 kubectl apply -f "$SCRIPT_DIR/04-backupclass.yaml"

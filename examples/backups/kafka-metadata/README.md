@@ -18,7 +18,7 @@ The platform default backups stack must be installed: the `backupstrategy-contro
 
 ## Flow
 
-- `00-helpers.sh` — shared bash helpers (waiters, kafka seed/verify via a throwaway CLI pod, the demo strategy derivation + S3 CA copy).
+- `00-helpers.sh` — shared bash helpers (waiters, kafka seed/verify via a long-lived CLI pod it execs into, the demo strategy derivation + S3 CA copy).
 - `03-backupclass.yaml` — the demo `BackupClass` (`kafka-metadata`) mapping `Kafka` to the derived `kafka-strategy-default`.
 - `05-kafka-src.yaml` — the source application (no `backup:` block; the strategy carries the coordinates).
 - `10-backupjob-adhoc.yaml` — an ad-hoc `BackupJob` routed to the demo `kafka-metadata` BackupClass.

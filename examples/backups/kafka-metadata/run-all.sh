@@ -37,6 +37,19 @@ wait_hr_ready "kafka-${KAFKA_SRC_NAME}" 300
 kafka_wait_ready "$KAFKA_SRC_NAME" 600
 
 print_header "Step 05a: Derive the demo Kafka strategy '${STRATEGY_NAME}' + BackupClass '${BACKUPCLASS_NAME}'"
+# Wait for the strategy rather than read it once. The shipped cozy-default-kafka
+# is rendered behind a lookup of the platform bucket, so it exists only once a
+# Helm upgrade has run after that bucket was provisioned. The controller forces
+# that upgrade, but helm-controller holds it while any release in its dependsOn
+# is not Ready, so a platform change made just before this runs can keep it
+# absent for minutes. Both the endpoint read below and provision_demo_strategy
+# derive from it, so wait once here; kubectl wait keeps polling through NotFound
+# and fails on any other error.
+log_substep "Waiting for the platform's cozy-default-kafka strategy..."
+kubectl wait --for=create kafka.strategy.backups.cozystack.io/cozy-default-kafka \
+    --timeout=15m >/dev/null \
+    || { log_error "cozy-default-kafka strategy did not appear: enable the platform default backups (backupstrategy-controller) before running this demo"; exit 1; }
+
 # The shipped cozy-default-kafka advertises the platform's EXTERNAL S3 ingress,
 # which in-cluster Pods cannot resolve or TLS-validate in CI. Derive a demo
 # strategy from it (so the driver script stays a single source of truth) pointed
