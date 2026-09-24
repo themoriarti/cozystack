@@ -632,13 +632,13 @@ func TestMigrationProgressSurfacesForkliftErrors(t *testing.T) {
 func TestInventoryVMYieldsNetworksAndDatastores(t *testing.T) {
 	const record = `{
 	  "id": "86",
-	  "name": "test-matthieu",
+	  "name": "sample-vm",
 	  "firmware": "efi",
 	  "powerState": "poweredOff",
-	  "networks": [{"kind": "Network", "id": "HaNetwork-Cluster Hidora tools"}],
+	  "networks": [{"kind": "Network", "id": "HaNetwork-Cluster Example"}],
 	  "disks": [
-	    {"datastore": {"kind": "Datastore", "id": "61f94272-8f3a3584-b45f-3448edf98902"}},
-	    {"datastore": {"kind": "Datastore", "id": "61f94272-8f3a3584-b45f-3448edf98902"}}
+	    {"datastore": {"kind": "Datastore", "id": "61f94272-8f3a3584-b45f-00005e005301"}},
+	    {"datastore": {"kind": "Datastore", "id": "61f94272-8f3a3584-b45f-00005e005301"}}
 	  ]
 	}`
 
@@ -649,11 +649,11 @@ func TestInventoryVMYieldsNetworksAndDatastores(t *testing.T) {
 	if vm.Firmware != "efi" || vm.PowerState != "poweredOff" {
 		t.Errorf("firmware/power = %q/%q", vm.Firmware, vm.PowerState)
 	}
-	if got := vm.networkIDs(); len(got) != 1 || got[0] != "HaNetwork-Cluster Hidora tools" {
+	if got := vm.networkIDs(); len(got) != 1 || got[0] != "HaNetwork-Cluster Example" {
 		t.Errorf("networkIDs = %v", got)
 	}
 	// Two disks on one datastore yield one map entry, not two.
-	if got := vm.datastoreIDs(); len(got) != 1 || got[0] != "61f94272-8f3a3584-b45f-3448edf98902" {
+	if got := vm.datastoreIDs(); len(got) != 1 || got[0] != "61f94272-8f3a3584-b45f-00005e005301" {
 		t.Errorf("datastoreIDs = %v", got)
 	}
 }
