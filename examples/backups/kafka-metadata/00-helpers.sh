@@ -58,13 +58,15 @@ export S3_CA_KEY="${S3_CA_KEY:-ca.crt}"
 export CA_MOUNT_DIR="${CA_MOUNT_DIR:-/etc/ssl/kafka-backup-ca}"
 # The Cozystack chart names the Strimzi cluster kafka-<app>; its plaintext
 # bootstrap Service is kafka-<app>-kafka-bootstrap:9092.
-# KAFKA_IMAGE only drives the host-side throwaway CLI pods here (seed/verify).
-# The backup/restore Jobs no longer use it: the controller resolves the target
-# broker's own image at reconcile time and renders it as the strategy's
-# .ClientImage. Override this only to match your operator's image for the
-# seed/verify pods if it differs.
+# KAFKA_IMAGE runs the long-lived CLI Pod the seed/verify helpers exec into (see
+# kafka_run). The backup/restore Jobs no longer use it: the controller resolves
+# the target broker's own image at reconcile time and renders it as the
+# strategy's .ClientImage. Override this only to match your operator's image if
+# the CLI it carries differs.
 export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1@sha256:ba52ed046b1dccdbd96f4e68057ce014d862a7c9c1fc670760c023b9aa09f23f}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
+# Name of that long-lived CLI Pod; cleanup.sh removes it.
+export KAFKA_CLI_POD="${KAFKA_CLI_POD:-kafka-cli}"
 
 log_info()    { echo -e "${BLUE}i${NC} $*" >&2; }
 log_success() { echo -e "${GREEN}OK${NC} $*" >&2; }
@@ -200,18 +202,46 @@ kafka_wait_ready() {
         '{.status.conditions[?(@.type=="Ready")].status}' True "$NAMESPACE" "$timeout"
 }
 
-# Run a bash snippet in a throwaway Strimzi Kafka Pod, with $BOOT / $BIN / $TOPIC
-# pre-set (values injected via printf %q so the snippet needs no nested quoting).
-# Host-side analogue used only to seed and verify — the backup/restore Jobs are
-# created by the controller from the strategy.
+# Ensure the long-lived kafka-cli Pod exists and is Ready, so kafka_run can exec
+# into it. Idempotent: a Ready Pod this demo owns is reused across calls and
+# across the numbered demo scripts; a leftover in a terminal phase (Succeeded /
+# Failed) is replaced rather than waited on; and a same-named Pod this demo does
+# not own is refused rather than hijacked or deleted. cleanup.sh removes it.
+kafka_cli_pod() {
+    local phase owner
+    phase=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_CLI_POD" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    owner=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_CLI_POD" -o jsonpath='{.metadata.labels.cozystack\.io/backup-demo}' 2>/dev/null || true)
+    if [ -n "$phase" ] && [ "$owner" != "kafka-metadata" ]; then
+        log_error "Pod $NAMESPACE/$KAFKA_CLI_POD exists but this demo does not own it; refusing to use or delete it"
+        return 1
+    fi
+    if [ "$phase" != "Running" ] && [ "$phase" != "Pending" ]; then
+        kubectl -n "$NAMESPACE" delete pod "$KAFKA_CLI_POD" --grace-period=1 --ignore-not-found >/dev/null
+        kubectl -n "$NAMESPACE" run "$KAFKA_CLI_POD" --image="$KAFKA_IMAGE" \
+            --labels=cozystack.io/backup-demo=kafka-metadata \
+            --restart=Never --command -- sleep infinity >/dev/null
+    fi
+    kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/$KAFKA_CLI_POD" \
+        --timeout=5m >/dev/null
+}
+
+# Run a bash snippet against the source Kafka, with $BOOT / $BIN / $TOPIC /
+# $PARTITIONS pre-set (values injected via printf %q so the snippet needs no
+# nested quoting). Host-side analogue used only to seed and verify — the
+# backup/restore Jobs are created by the controller from the strategy.
+#
+# The snippet runs by `kubectl exec` in the long-lived CLI Pod, not a throwaway
+# `kubectl run -i` Pod per call. A throwaway Pod's stdout comes back over an
+# attach that only carries what the container writes after the attach registers,
+# so a CLI that finishes in between returns empty with exit 0. An exec'd process
+# owns its pipes, so its output cannot be missed that way, and kubectl's and the
+# CLI's stderr stay attached so a failed read says why instead of reading as ''.
 kafka_run() {
     local app="$1"; shift
     local snippet="$1"
     local boot="kafka-${app}-kafka-bootstrap.${NAMESPACE}.svc:9092"
-    kubectl -n "$NAMESPACE" run "kafka-cli-$RANDOM" \
-        --image="$KAFKA_IMAGE" --restart=Never --rm -i --quiet \
-        --pod-running-timeout=5m \
-        --command -- bash -c "set -eu
+    kafka_cli_pod
+    kubectl -n "$NAMESPACE" exec -i "$KAFKA_CLI_POD" -- bash -c "set -eu
 BOOT=$(printf %q "$boot")
 BIN=$(printf %q "$KAFKA_BIN")
 TOPIC=$(printf %q "$TOPIC")
@@ -262,7 +292,7 @@ topic_partitions() {
         line=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --describe --topic "\Q$TOPIC\E" 2>/dev/null | head -1) || exit 0
         [ -n "$line" ] || exit 0
         printf "%s" "$line" | grep -oE "PartitionCount: [0-9]+" | awk "{print \$2}"
-    ' 2>/dev/null | tr -d '\r\n'
+    ' | tr -d '\r\n'
 }
 
 # Print "<partitions> <retention.ms>" for the demo topic, or "" if absent.
@@ -274,5 +304,5 @@ topic_meta() {
         parts=$(printf "%s" "$line" | grep -oE "PartitionCount: [0-9]+" | awk "{print \$2}")
         ret=$(printf "%s" "$line" | grep -oE "retention.ms=[0-9]+" | head -1 | cut -d= -f2)
         printf "%s %s\n" "$parts" "$ret"
-    ' 2>/dev/null | tr -d '\r'
+    ' | tr -d '\r'
 }

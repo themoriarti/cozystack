@@ -19,5 +19,6 @@ kubectl -n "$NAMESPACE" delete kafka.apps.cozystack.io "$KAFKA_SRC_NAME" --ignor
 kubectl delete backupclass.backups.cozystack.io "$BACKUPCLASS_NAME" --ignore-not-found
 kubectl delete kafka.strategy.backups.cozystack.io "$STRATEGY_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete secret "$CA_SECRET" --ignore-not-found
+kubectl -n "$NAMESPACE" delete pod -l cozystack.io/backup-demo=kafka-metadata --grace-period=1 --ignore-not-found
 
 log_success "Cleanup complete."
