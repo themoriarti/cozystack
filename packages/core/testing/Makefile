@@ -46,6 +46,9 @@ e2e: test-openapi test-chainsaw ## Run the end-to-end tests in existing sandbox
 copy-nocloud-image:
 	docker cp ../../../_out/assets/nocloud-amd64.raw.xz "${SANDBOX_NAME}":/workspace/_out/assets/nocloud-amd64.raw.xz
 
+# Live BATS suites need a literal invocation here: the root unit glob excludes
+# hack/e2e-* and subdirectories. hack/bats-runner-coverage.bats checks for files
+# with no runner and for runner paths whose files no longer exist.
 prepare-cluster: copy-nocloud-image
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster.bats'
 
