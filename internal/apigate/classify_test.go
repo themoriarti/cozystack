@@ -139,6 +139,10 @@ func TestClassifyNameDeclaration(t *testing.T) {
 		return res("apps.cozystack.io", "Kubernetes", "kuberneteses", SourceCozyRD, s)
 	}
 	capAt := func(n float64) map[string]any { return map[string]any{"type": "string", "maxLength": n} }
+	kubeRaw := func(declaration any) Resource {
+		s := Schema{"type": "object", "properties": map[string]any{}, "x-cozystack-name": declaration}
+		return res("apps.cozystack.io", "Kubernetes", "kuberneteses", SourceCozyRD, s)
+	}
 
 	for _, tc := range []struct {
 		name       string
@@ -151,6 +155,10 @@ func TestClassifyNameDeclaration(t *testing.T) {
 		{"cap raised", kube(capAt(32)), kube(capAt(40)), false},
 		{"cap dropped", kube(capAt(32)), kube(nil), false},
 		{"unchanged", kube(capAt(32)), kube(capAt(32)), false},
+		{"declaration turned into a string", kube(capAt(32)), kubeRaw("32"), true},
+		{"misspelled keyword", kube(nil), kube(map[string]any{"maxLenght": 32.0}), true},
+		{"null declaration", kube(capAt(32)), kubeRaw(nil), true},
+		{"annotation added", kube(capAt(32)), kube(map[string]any{"type": "string", "maxLength": 32.0, "title": "Name"}), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := countCategory(Classify(snap(tc.base), snap(tc.head)), Breaking)

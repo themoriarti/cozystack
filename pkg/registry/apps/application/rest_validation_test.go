@@ -221,15 +221,15 @@ func TestConvertHelmReleaseToApplication_TenantNamespaceKindGate(t *testing.T) {
 }
 
 func TestValidateNameLength(t *testing.T) {
-	declaredCap := func(maxLen int64, description string) *applicationNameSchema {
-		return &applicationNameSchema{MaxLength: &maxLen, Description: description}
+	declaredCap := func(maxLen int64, description string) *validation.NameSchema {
+		return &validation.NameSchema{MaxLength: &maxLen, Description: description}
 	}
 
 	tests := []struct {
 		name       string
 		kindName   string
 		prefix     string
-		nameSchema *applicationNameSchema
+		nameSchema *validation.NameSchema
 		appName    string
 		wantError  bool
 	}{

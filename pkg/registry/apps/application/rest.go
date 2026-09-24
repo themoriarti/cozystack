@@ -17,12 +17,10 @@ limitations under the License.
 package application
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,7 +96,7 @@ type REST struct {
 	singularName  string
 	releaseConfig config.ReleaseConfig
 	specSchema    *structuralschema.Structural
-	nameSchema    *applicationNameSchema
+	nameSchema    *validation.NameSchema
 	nameSchemaErr error
 }
 
@@ -1315,21 +1313,6 @@ const maxHelmReleaseName = 53
 // must fit inside a single 63-char DNS-1123 label.
 const maxNamespaceName = 63
 
-// applicationNameSchema is an application's own declaration of what its name
-// may look like. A chart's naming budget follows from the sub-resources the
-// chart renders and the names they take — facts that live in the chart and
-// nowhere else — so the budget travels with the chart's schema instead of
-// being a branch on Kind here.
-type applicationNameSchema struct {
-	Type        string `json:"type,omitempty"`
-	Description string `json:"description,omitempty"`
-	MinLength   *int64 `json:"minLength,omitempty"`
-	MaxLength   *int64 `json:"maxLength,omitempty"`
-	Pattern     string `json:"pattern,omitempty"`
-
-	compiledPattern *regexp.Regexp
-}
-
 // legacyNameCaps are the caps this server enforced in code before applications
 // declared their own. An upgrade brings cozystack-api up before the
 // application definitions it serves are re-rendered, so for that window a
@@ -1337,7 +1320,7 @@ type applicationNameSchema struct {
 // admitted then renders sub-resources that cannot exist. They apply only to a
 // definition that declares nothing, and go once no supported upgrade starts
 // from a definition without the declaration.
-var legacyNameCaps = map[string]applicationNameSchema{
+var legacyNameCaps = map[string]validation.NameSchema{
 	"Kubernetes": {
 		MaxLength:   new(int64(32)),
 		Description: "worker pools are KubernetesNodes releases named `kubernetes-nodes-<name>-<pool>`, which must fit the 53-character Helm release name limit",
@@ -1352,8 +1335,8 @@ var legacyNameCaps = map[string]applicationNameSchema{
 // An error means the declaration exists but cannot be enforced as written;
 // the caller refuses creates for that kind rather than guess, since guessing
 // either admits names the chart cannot render or rejects names it can.
-func resolveNameSchema(cfg *config.Resource) (*applicationNameSchema, error) {
-	declared, err := parseNameSchema(cfg.Application.OpenAPISchema)
+func resolveNameSchema(cfg *config.Resource) (*validation.NameSchema, error) {
+	declared, err := validation.ParseNameSchema(cfg.Application.OpenAPISchema)
 	if err != nil {
 		return nil, err
 	}
@@ -1370,68 +1353,6 @@ func resolveNameSchema(cfg *config.Resource) (*applicationNameSchema, error) {
 	return declared, nil
 }
 
-// parseNameSchema extracts the x-cozystack-name declaration from an
-// ApplicationDefinition's openAPISchema. Returns (nil, nil) when the schema is
-// empty or declares nothing about the name. The openAPISchema is untrusted
-// input — definitions from other repositories are written by hand — so an
-// unknown keyword, a wrong type or a declaration no name can satisfy is an
-// error rather than a constraint silently dropped.
-func parseNameSchema(raw string) (*applicationNameSchema, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	var doc map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-		return nil, fmt.Errorf("unmarshal OpenAPI schema: %w", err)
-	}
-	declared, ok := doc[appsv1alpha1.NameSchemaExtension]
-	if !ok {
-		return nil, nil
-	}
-
-	// encoding/json decodes null as "leave unset", which would turn a null
-	// declaration into an empty one that skips legacyNameCaps, and a null
-	// keyword into a dropped constraint.
-	var keywords map[string]json.RawMessage
-	if err := json.Unmarshal(declared, &keywords); err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
-	}
-	if keywords == nil {
-		return nil, fmt.Errorf("declaration is null")
-	}
-	for k, v := range keywords {
-		if string(bytes.TrimSpace(v)) == "null" {
-			return nil, fmt.Errorf("%s is null", k)
-		}
-	}
-
-	var ns applicationNameSchema
-	dec := json.NewDecoder(bytes.NewReader(declared))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&ns); err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
-	}
-	switch {
-	case ns.Type != "" && ns.Type != "string":
-		return nil, fmt.Errorf("type %q: a name is a string", ns.Type)
-	case ns.MaxLength != nil && *ns.MaxLength < 1:
-		return nil, fmt.Errorf("maxLength %d admits no name", *ns.MaxLength)
-	case ns.MinLength != nil && *ns.MinLength < 0:
-		return nil, fmt.Errorf("minLength %d is negative", *ns.MinLength)
-	case ns.MinLength != nil && ns.MaxLength != nil && *ns.MinLength > *ns.MaxLength:
-		return nil, fmt.Errorf("minLength %d exceeds maxLength %d", *ns.MinLength, *ns.MaxLength)
-	}
-	if ns.Pattern != "" {
-		re, err := regexp.Compile(ns.Pattern)
-		if err != nil {
-			return nil, fmt.Errorf("pattern %q does not compile as RE2: %w", ns.Pattern, err)
-		}
-		ns.compiledPattern = re
-	}
-	return &ns, nil
-}
-
 // validateNameFormat checks an Application name against DNS-1035, any
 // kind-specific format rules (e.g. Tenant names must be alphanumeric — see
 // validation.ValidateApplicationName for the reasoning), and the format the
@@ -1443,8 +1364,7 @@ func (r *REST) validateNameFormat(name string) field.ErrorList {
 
 // validateNameAgainstSchema applies the minLength and pattern the application
 // declares for its name; maxLength is applied in validateNameLength, together
-// with the Helm budget it shares. The pattern is unanchored, as JSON Schema
-// specifies: a declaration that means the whole name writes ^...$.
+// with the Helm budget it shares.
 func (r *REST) validateNameAgainstSchema(name string) field.ErrorList {
 	if r.nameSchema == nil {
 		return nil
@@ -1456,7 +1376,7 @@ func (r *REST) validateNameAgainstSchema(name string) field.ErrorList {
 		allErrs = append(allErrs, field.Invalid(fldPath, name,
 			fmt.Sprintf("must be at least %d characters (%s)", *minLen, r.declaredReason())))
 	}
-	if re := r.nameSchema.compiledPattern; re != nil && !re.MatchString(name) {
+	if !r.nameSchema.MatchesPattern(name) {
 		allErrs = append(allErrs, field.Invalid(fldPath, name,
 			fmt.Sprintf("must match %q (%s)", r.nameSchema.Pattern, r.declaredReason())))
 	}
