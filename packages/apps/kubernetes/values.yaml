@@ -75,7 +75,7 @@ storageClass: replicated
 ## @value v1.32
 ## @value v1.31
 
-## @param {Version} version - Kubernetes major.minor version to deploy. On `v1.32` with `spec.oidc.mode` other than `None` the chart also renders `--feature-gates=RemoteRequestHeaderUID=true` next to `controlPlane.apiServer.extraArgs`, and an entry of your own there can change what it renders (see that field).
+## @param {Version} version - Kubernetes major.minor version to deploy
 version: "v1.35"
 
 

@@ -22,7 +22,7 @@
       }
     },
     "version": {
-      "description": "Kubernetes major.minor version to deploy. On `v1.32` with `spec.oidc.mode` other than `None` the chart also renders `--feature-gates=RemoteRequestHeaderUID=true` next to `controlPlane.apiServer.extraArgs`, and an entry of your own there can change what it renders (see that field).",
+      "description": "Kubernetes major.minor version to deploy",
       "type": "string",
       "default": "v1.35",
       "enum": [

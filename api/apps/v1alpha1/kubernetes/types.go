@@ -22,7 +22,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
-	// Kubernetes major.minor version to deploy. On `v1.32` with `spec.oidc.mode` other than `None` the chart also renders `--feature-gates=RemoteRequestHeaderUID=true` next to `controlPlane.apiServer.extraArgs`, and an entry of your own there can change what it renders (see that field).
+	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
 	Version Version `json:"version"`
 	// External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.
