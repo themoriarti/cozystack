@@ -221,7 +221,7 @@
     - name is at most 42 characters: the operator names the StatefulSet
       vtstorage-<name>, and each pod carries the label controller-revision-hash:
       vtstorage-<name>-<hash> (hash up to 10 characters, value capped at 63).
-    - storage is not zero: in single mode the operator mounts an EmptyDir when
+    - storage is positive: in single mode the operator mounts an EmptyDir when
       the requested size IsZero, so the store reports operational with no volume.
     - retentionDiskUsageBytes uses the operator's BytesString grammar, which
       rejects the Kubernetes-quantity `Gi` suffix that storage uses.
@@ -241,8 +241,9 @@
 {{-   if and (ne $mode "cluster") (ne $mode "single") -}}
 {{-     fail (printf "monitoring: tracingStorages[%s].mode must be either \"cluster\" or \"single\"" $name) -}}
 {{-   end -}}
-{{-   if regexMatch "^[+-]?[0.]*([KMGTPE]i|[numkMGTPE]|[eE][+-]?[0-9]+)?$" ($s.storage | default "" | toString) -}}
-{{-     fail (printf "monitoring: tracingStorages[%s].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule." $name) -}}
+{{-   $storage := $s.storage | default "" | toString -}}
+{{-   if or (regexMatch "^[+-]?[0.]*([KMGTPE]i|[numkMGTPE]|[eE][+-]?[0-9]+)?$" $storage) (hasPrefix "-" $storage) -}}
+{{-     fail (printf "monitoring: tracingStorages[%s].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created." $name) -}}
 {{-   end -}}
 {{-   with $s.retentionDiskUsageBytes -}}
 {{-     $bytes := . | toString -}}

@@ -268,7 +268,7 @@ tests:
           storage: ""
     asserts:
       - failedTemplate:
-          errorMessage: "monitoring: tracingStorages[generic].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule."
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
 
   - it: rejects a zero storage (0Gi) in single mode (the operator would mount an EmptyDir)
     templates:
@@ -281,7 +281,7 @@ tests:
           storage: 0Gi
     asserts:
       - failedTemplate:
-          errorMessage: "monitoring: tracingStorages[generic].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule."
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
 
   - it: rejects a zero storage (0) in single mode (the operator would mount an EmptyDir)
     templates:
@@ -294,7 +294,7 @@ tests:
           storage: "0"
     asserts:
       - failedTemplate:
-          errorMessage: "monitoring: tracingStorages[generic].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule."
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
 
   - it: rejects a zero storage (0.0) in single mode (the operator would mount an EmptyDir)
     templates:
@@ -307,7 +307,7 @@ tests:
           storage: "0.0"
     asserts:
       - failedTemplate:
-          errorMessage: "monitoring: tracingStorages[generic].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule."
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
 
   - it: rejects a zero storage (0e3) in single mode (the operator would mount an EmptyDir)
     templates:
@@ -320,7 +320,7 @@ tests:
           storage: "0e3"
     asserts:
       - failedTemplate:
-          errorMessage: "monitoring: tracingStorages[generic].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule."
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
 
   - it: rejects a zero storage (.0) in single mode (the operator would mount an EmptyDir)
     templates:
@@ -333,7 +333,7 @@ tests:
           storage: ".0"
     asserts:
       - failedTemplate:
-          errorMessage: "monitoring: tracingStorages[generic].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule."
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
 
   - it: rejects a zero storage (0m) in single mode (the operator would mount an EmptyDir)
     templates:
@@ -346,7 +346,7 @@ tests:
           storage: "0m"
     asserts:
       - failedTemplate:
-          errorMessage: "monitoring: tracingStorages[generic].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule."
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
 
   - it: rejects a zero storage (+0) in single mode (the operator would mount an EmptyDir)
     templates:
@@ -359,7 +359,7 @@ tests:
           storage: "+0"
     asserts:
       - failedTemplate:
-          errorMessage: "monitoring: tracingStorages[generic].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule."
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
 
   - it: rejects a zero storage (-0Mi) in single mode (the operator would mount an EmptyDir)
     templates:
@@ -372,7 +372,35 @@ tests:
           storage: "-0Mi"
     asserts:
       - failedTemplate:
-          errorMessage: "monitoring: tracingStorages[generic].storage must be a non-zero Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule."
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: rejects a negative storage (-1Gi)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: "-1Gi"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: accepts an explicitly signed positive storage (+5Gi)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: "+5Gi"
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTSingle
+          name: generic
 
   - it: accepts a non-zero storage written with an exponent (5e3)
     templates:
