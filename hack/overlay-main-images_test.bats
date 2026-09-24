@@ -204,10 +204,10 @@
     inside')"
   [ -n "$block" ] || { echo "the base-branch packages pull step is missing from $wf" >&2; exit 1; }
 
-  # The artifact tag must come from the base branch, passed via env.
-  printf '%s\n' "$block" | grep -qF 'cozystack-packages:${BASE_REF}' || {
-    echo "the packages artifact tag is not the PR's base branch. Reading a fixed" >&2
-    echo "tag (e.g. :main) hands a release-line PR another generation's images." >&2
+  # The artifact tag must be derived from the base branch, passed via env.
+  printf '%s\n' "$block" | grep -qF 'cozystack-packages:${ARTIFACT_REF}' || {
+    echo "the packages artifact tag is not derived from the PR's base branch. Reading" >&2
+    echo "a fixed tag (e.g. :main) hands a release-line PR another generation's images." >&2
     exit 1; }
   printf '%s\n' "$block" | grep -qF 'BASE_REF: ${{ github.base_ref }}' || {
     echo "BASE_REF is not wired to github.base_ref in the pull step's env." >&2; exit 1; }
@@ -221,6 +221,52 @@
   printf '%s\n%s\n' "$block" "$overlay" | grep -qF 'cozystack-packages:main' && {
     echo "an overlay step still pins cozystack-packages:main" >&2; exit 1; }
   return 0
+}
+
+# A stacked PR's base is a feature branch: `fix/x` is not a valid OCI tag, and
+# no artifact is published for it anyway. Such a PR must read the artifact of
+# the line its stack grew from, not fall through to the committed release refs
+# (#4391), and not main's when the stack sits on a release line (#3437).
+@test "the pull step maps the base branch to a published artifact tag" {
+  root=$(pwd)
+  w="${BATS_TEST_TMPDIR:-$(mktemp -d)}"
+  git init --quiet --initial-branch=main "$w/repo"
+  cd "$w/repo"
+  git config user.email ci@example.invalid
+  git config user.name ci
+  git config commit.gpgsign false
+  c() { git commit --quiet --allow-empty --message "$1"; }
+  c m1
+  git checkout --quiet -b release-1.5; c q1
+  git checkout --quiet main; git checkout --quiet -b release-1.6; c r1
+  git checkout --quiet -b stack/x; c s1
+  git checkout --quiet release-1.6; git checkout --quiet -b release-1.6.1; c p1
+  git checkout --quiet main; c m2; c m3
+  # release-1.7 and fix/some-branch both grow from m3, so they tie: main must win.
+  git checkout --quiet -b release-1.7; c x1
+  git checkout --quiet main; git checkout --quiet -b fix/some-branch; c f1
+  for b in main release-1.5 release-1.6 release-1.7 stack/x release-1.6.1 fix/some-branch; do
+    git update-ref "refs/remotes/origin/$b" "$b"
+  done
+
+  script="$(awk '
+    $0 == "      - name: Pull base-branch packages tree" { step = 1; next }
+    step && /^      - name: / { exit }
+    step && $0 == "        run: |" { body = 1; next }
+    body && /^        [^ ]/ { exit }
+    body { sub(/^          /, ""); print }' "$root/.github/workflows/pull-requests.yaml")"
+  [ -n "$script" ] || { echo "cannot extract the pull step's script" >&2; exit 1; }
+
+  mkdir -p "$w/bin"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$3" > "%s/pulled"\nexit 1\n' "$w" > "$w/bin/flux"
+  chmod +x "$w/bin/flux"
+  for pair in main=main release-1.6=release-1.6 fix/some-branch=main \
+              stack/x=release-1.6 release-1.6.1=release-1.6 gone/branch=main; do
+    rm -f "$w/pulled"
+    BASE_REF="${pair%%=*}" REGISTRY=r PATH="$w/bin:$PATH" bash -eo pipefail -c "$script" >/dev/null
+    [ "$(cat "$w/pulled")" = "oci://r/cozystack-packages:${pair#*=}" ] || {
+      echo "base ${pair%%=*}: pulled '$(cat "$w/pulled")', want tag ${pair#*=}" >&2; exit 1; }
+  done
 }
 
 @test "every maintained release line publishes its own packages artifact" {
