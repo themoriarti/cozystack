@@ -134,3 +134,16 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'substrate "vsphere" is not supported; use "kubevirt" or "proxmox"'
+
+  # The parent chart writes dnsServers into ProxmoxCluster.spec.dnsServers, where
+  # no shell reads it, but the same validation runs here as in the pool chart so
+  # that a hostname or a stray metacharacter is refused at the same place on
+  # both sides.
+  - it: refuses a dnsServers entry that is not an address
+    template: templates/cluster.yaml
+    set:
+      proxmox:
+        dnsServers: ["$(id -u)"]
+    asserts:
+      - failedTemplate:
+          errorPattern: "proxmox.dnsServers\\[0\\] is"
