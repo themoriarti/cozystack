@@ -38,6 +38,20 @@ tests:
       - notExists:
           path: spec.configuration.migrations
 
+  - it: sets the cluster evictionStrategy to LiveMigrateIfPossible
+    asserts:
+      - equal:
+          path: spec.configuration.evictionStrategy
+          value: LiveMigrateIfPossible
+
+  - it: keeps Evict as the workload update fallback for VMs that cannot migrate
+    asserts:
+      - equal:
+          path: spec.workloadUpdateStrategy.workloadUpdateMethods
+          value:
+          - LiveMigrate
+          - Evict
+
   - it: omits migrations when explicitly empty
     set:
       migrations: {}
