@@ -25,6 +25,23 @@ tests:
           path: spec.waitStrategy.name
           value: poller
 
+  - it: passes tenant-set oidc values through to the inner chart
+    set:
+      oidc.mode: System
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
+    asserts:
+      - equal:
+          path: spec.values.oidc.mode
+          value: System
+      - equal:
+          path: spec.values.oidc.users[0].email
+          value: alice@example.com
+      - equal:
+          path: spec.values.oidc.users[0].role
+          value: Admin
+
   - it: gates readiness on the VLCluster status.updateStatus
     asserts:
       - equal:

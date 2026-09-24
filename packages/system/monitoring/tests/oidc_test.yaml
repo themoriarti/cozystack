@@ -212,6 +212,10 @@ tests:
           value: tenant-root-monitoring-audience
         documentIndex: 0
       - equal:
+          path: spec.protocolMappers[0].protocolMapper
+          value: oidc-audience-mapper
+        documentIndex: 0
+      - equal:
           path: spec.protocolMappers[0].config["included.client.audience"]
           value: tenant-root-monitoring
         documentIndex: 0
@@ -467,6 +471,11 @@ tests:
         - email: bob@example.com
           role: Viewer
     asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_MODE
+            value: System
       - contains:
           path: spec.template.spec.containers[0].env
           content:
