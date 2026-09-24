@@ -225,14 +225,39 @@ stringData:
     done
 
     echo "== delete databases"
+    {{- /*
+      A restore replaces spec.databases with the Backup's snapshot, but recovery
+      replays WAL past it, so a database created after the Backup comes back still
+      commented 'database managed by helm' and would be dropped here. The first run
+      after a restore is told apart by bootstrap.newServerName, which the restore
+      driver sets to a value unique to each RestoreJob; the last pass records it as
+      a setting of the postgres database, which the recovery replaces with the
+      source's along with the rest of the catalog. Until then an undeclared managed database is released
+      instead: its comment and its roles' comments are cleared, which keeps the
+      orphaned-roles pass below off roles that still hold grants inside it. The
+      value is free text in values, so it arrives base64-encoded and reaches SQL
+      only as a psql variable.
+    */}}
+    RESTORE_MARK={{ with .Values.bootstrap.newServerName }}$(echo {{ b64enc . }} | base64 -d){{ end }}
+    ADOPTED_MARK=$(psql -v ON_ERROR_STOP=1 -t -A --dbname postgres -c "SELECT current_setting('cozystack.adopted_restore', true)")
     MANAGED_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm'")
     DEFINED_DBS="{{ join " " (keys .Values.databases) }}"
     DELETE_DBS=$(for db in $MANAGED_DBS; do case " $DEFINED_DBS " in *" $db "*) :;; *) echo $db;; esac; done)
 
+    if [ -n "$RESTORE_MARK" ] && [ "$ADOPTED_MARK" != "$RESTORE_MARK" ]; then
+    echo "databases the restore brought back that values do not declare, released from management: $DELETE_DBS"
+    for db in $DELETE_DBS; do
+    psql -v ON_ERROR_STOP=1 --echo-all -v db="$db" <<\EOT
+    COMMENT ON DATABASE :"db" IS NULL;
+    SELECT format('COMMENT ON ROLE %I IS NULL', r) FROM unnest(ARRAY[:'db' || '_admin', :'db' || '_readonly']) AS r WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = r)\gexec
+    EOT
+    done
+    else
     echo "databases to delete: $DELETE_DBS"
     for db in $DELETE_DBS; do
     psql -v ON_ERROR_STOP=1 --echo-all -c "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE);"
     done
+    fi
 
     echo "== delete orphaned managed roles"
     MANAGED_ROLES=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT rolname FROM pg_roles r JOIN pg_shdescription s ON r.oid = s.objoid WHERE s.description = 'role managed by helm'")
@@ -380,5 +405,12 @@ stringData:
     {{- end }}
     EOT
     {{- end }}
+    {{- end }}
+    {{- if .Values.bootstrap.newServerName }}
+
+    echo "== record the adopted restore"
+    psql -v ON_ERROR_STOP=1 --echo-all -v mark="$RESTORE_MARK" <<\EOT
+    ALTER DATABASE postgres SET cozystack.adopted_restore = :'mark';
+    EOT
     {{- end }}
 {{- end }}
