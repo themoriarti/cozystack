@@ -54,7 +54,7 @@ Declarative suites assert on `status.conditions` and concrete fields. Inherently
 
 ## Running locally
 
-Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` additionally needs `mc` and `nc` on the host; `kuberture`/`openbao`/`harbor` need `jq`.
+Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` additionally needs `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`harbor` need `jq`.
 
 ```bash
 # install chainsaw
