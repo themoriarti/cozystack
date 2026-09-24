@@ -156,3 +156,19 @@ tests:
           path: spec.minReplicas
       - exists:
           path: spec.selector
+
+  - it: refuses osImage on proxmox, where the disk comes from the template
+    set:
+      substrate: proxmox
+      proxmox:
+        templateTags: [talos]
+        network:
+          bridge: vmbr0
+        dnsServers: ["10.0.0.1"]
+      osImage:
+        factory:
+          version: v1.12.6
+    template: templates/nodegroup.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "substrate proxmox does not take osImage"

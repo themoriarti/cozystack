@@ -60,6 +60,19 @@
 {{-   if not $.Values.proxmox.dnsServers }}
 {{-     fail "substrate proxmox requires proxmox.dnsServers: an off-cluster worker cannot resolve through the management cluster's CoreDNS" }}
 {{-   end }}
+{{- /* osImage decides where a KubeVirt worker's system disk comes from, and a
+         Proxmox worker's disk does not come from there at all: capmox clones a
+         VM template that already carries Talos. Half of the field would still
+         appear to work, which is the reason to refuse it rather than ignore it
+         — osImage.factory.version reaches the machineconfig's installer image,
+         so a pool could set it, see the Job change, and be running a different
+         Talos than it asked for, with the boot image still whatever the
+         template holds. osImage.builtin, a CDI clone of a golden image, has no
+         meaning here at all. The installer target is settable on this substrate
+         through talos.version, which does reach it. */}}
+{{-   if $.Values.osImage }}
+{{-     fail "substrate proxmox does not take osImage: the worker disk is cloned from the Proxmox VM template, not imported from an image source. Set the Talos the template carries, and use talos.version / talos.schematicID for the in-guest installer target." }}
+{{-   end }}
 {{- /* A target storage is a full-clone parameter. A linked clone always lives on
       the template's storage, and both Proxmox and capmox's CRD refuse the pair;
       refusing it here names the two values instead of an object the operator
@@ -853,10 +866,9 @@ spec:
 {{- $_ := set $context "group" $group }}
 {{- $_ := set $context "groupName" $groupName }}
 {{- $_ := set $context "clusterName" $clusterName }}
-{{- /* The $kubevirtmachinetemplate* variables now hold either kind; the names
-       are historical. Renaming them is safe — the content hash below is taken
-       over the rendered template, not over the variable name — and is left out
-       of this change only to keep the diff to the substrate. */}}
+{{- /* These variables hold either kind despite their names. The content hash
+       below is taken over the rendered template, so the names reach nothing
+       outside this block. */}}
 {{- $machineTemplateKind := ternary "ProxmoxMachineTemplate" "KubevirtMachineTemplate" $isProxmox }}
 {{- $kubevirtmachinetemplate := include (ternary "proxmoxmachinetemplate" "kubevirtmachinetemplate" $isProxmox) $context }}
 {{- $kubevirtmachinetemplateHash := $kubevirtmachinetemplate | sha256sum | trunc 6 }}
