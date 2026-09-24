@@ -45,7 +45,7 @@ tests:
             - "x; ALTER ROLE app SUPERUSER; --"
     asserts:
       - failedTemplate:
-          errorMessage: 'invalid extension name "x; ALTER ROLE app SUPERUSER; --" for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site)'
+          errorMessage: 'invalid extension name "x; ALTER ROLE app SUPERUSER; --" for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site). A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e.g. [cube, earthdistance]'
 
   - it: quotes the extension name so a hyphenated one (uuid-ossp) is valid SQL
     set:
@@ -163,6 +163,36 @@ tests:
       - failedTemplate:
           errorPattern: 'invalid extension name .* for database "mydb": an extension name may contain only letters'
 
+  # The value was once spliced into CREATE EXTENSION whole, so a release can carry
+  # a clause after the name. The guard still refuses it; the message has to say
+  # how to get past it without losing the dependency the clause pulled in.
+  - it: tells how to replace a CASCADE clause when it refuses one on upgrade
+    release:
+      upgrade: true
+    set:
+      databases:
+        mydb:
+          extensions:
+            - earthdistance CASCADE
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid extension name "earthdistance CASCADE" for database "mydb": .*A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e\.g\. \[cube, earthdistance\]$'
+
+  - it: creates extensions in the order they are listed
+    set:
+      databases:
+        mydb:
+          extensions:
+            - cube
+            - earthdistance
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: '(?s)CREATE EXTENSION IF NOT EXISTS "cube";\s*CREATE EXTENSION IF NOT EXISTS "earthdistance";'
+
   - it: renders normally for a valid database and extension
     set:
       databases:
@@ -215,7 +245,7 @@ tests:
             - "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     asserts:
       - failedTemplate:
-          errorMessage: 'invalid extension name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site)'
+          errorMessage: 'invalid extension name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site). A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e.g. [cube, earthdistance]'
 
   - it: renders normally for an extension name at the 63-character boundary
     set:
@@ -330,7 +360,7 @@ tests:
           extensions: ["."]
     asserts:
       - failedTemplate:
-          errorMessage: 'invalid extension name "." for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site)'
+          errorMessage: 'invalid extension name "." for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site). A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e.g. [cube, earthdistance]'
 
   - it: fails the render for an extension name starting with ".."
     set:
@@ -339,4 +369,4 @@ tests:
           extensions: ["..x"]
     asserts:
       - failedTemplate:
-          errorMessage: 'invalid extension name "..x" for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site)'
+          errorMessage: 'invalid extension name "..x" for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site). A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e.g. [cube, earthdistance]'

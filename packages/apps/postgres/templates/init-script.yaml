@@ -59,7 +59,7 @@
   {{- range $extension := ($d.extensions | default (list)) }}
     {{- $name := include "postgres.extensionName" $extension }}
     {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $name)) (eq $name ".") (hasPrefix ".." $name) (gt (len $name) 63) }}
-      {{- fail (printf "invalid extension name %q for database %q: an extension name may contain only letters, digits and the characters -._ , must not be \".\" or start with \"..\", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry \"-\", e.g. uuid-ossp, so it is quoted at the call site)" $extension $database) }}
+      {{- fail (printf "invalid extension name %q for database %q: an extension name may contain only letters, digits and the characters -._ , must not be \".\" or start with \"..\", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry \"-\", e.g. uuid-ossp, so it is quoted at the call site). A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e.g. [cube, earthdistance]" $extension $database) }}
     {{- end }}
   {{- end }}
 {{- end }}
