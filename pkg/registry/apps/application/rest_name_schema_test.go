@@ -105,7 +105,8 @@ func TestInvalidNameSchemaFailsClosed(t *testing.T) {
 		{"maxLength as string", `{"maxLength":"32"}`, "decode"},
 		{"fractional maxLength", `{"maxLength":32.5}`, "decode"},
 		{"overflowing maxLength", `{"maxLength":1e20}`, "decode"},
-		{"misspelled keyword", `{"maxLenght":32}`, `unknown field "maxLenght"`},
+		{"misspelled keyword", `{"maxLenght":32}`, `unsupported keyword "maxLenght"`},
+		{"constraint the server does not enforce", `{"maxLength":32,"format":"hostname"}`, `unsupported keyword "format"`},
 		{"one bad field beside a good one", `{"minLength":"3","maxLength":32}`, "decode"},
 		{"non-string type", `{"type":"integer","maxLength":32}`, `type "integer"`},
 		{"zero maxLength", `{"maxLength":0}`, "maxLength 0 admits no name"},
@@ -181,20 +182,33 @@ func TestUndescribedDeclarationStillExplainsItself(t *testing.T) {
 	}
 }
 
-// TestParseNameSchemaDeclaresNothing covers the common case: schemas with no
-// declaration, which must not produce one.
-func TestParseNameSchemaDeclaresNothing(t *testing.T) {
-	for _, in := range []string{"", "   ", `{"title":"Chart Values","type":"object"}`} {
-		got, err := parseNameSchema(in)
-		if err != nil {
-			t.Errorf("parseNameSchema(%q) returned error: %v", in, err)
+// TestUnparseableSchemaDeclaresNothing keeps a schema that is not a JSON object
+// from being blamed on a declaration it cannot contain: creates keep working,
+// and a kind with a legacy cap keeps it.
+func TestUnparseableSchemaDeclaresNothing(t *testing.T) {
+	for _, raw := range []string{"{not json", `["not", "an", "object"]`, `"x-cozystack-name"`} {
+		widget := newTestREST(t, "Widget", "widget-", raw)
+		if widget.nameSchemaErr != nil {
+			t.Errorf("schema %q reported as a bad name declaration: %v", raw, widget.nameSchemaErr)
 		}
-		if got != nil {
-			t.Errorf("parseNameSchema(%q) returned a declaration where the schema has none", in)
+		if errs := widget.validateNameLength(strings.Repeat("a", 46)); len(errs) > 0 {
+			t.Errorf("schema %q refused a name within the Helm budget: %v", raw, errs)
+		}
+		if errs := newTestREST(t, "Kubernetes", "kubernetes-", raw).validateNameLength(strings.Repeat("a", 33)); len(errs) != 1 {
+			t.Errorf("schema %q dropped the Kubernetes legacy cap: %v", raw, errs)
 		}
 	}
-	if _, err := parseNameSchema("{not json"); err == nil {
-		t.Error("parseNameSchema accepted malformed JSON without error")
+}
+
+// TestNameDeclarationIgnoresAnnotations covers keywords that constrain nothing:
+// a generator adding one must not take the kind offline.
+func TestNameDeclarationIgnoresAnnotations(t *testing.T) {
+	r := newTestREST(t, "Widget", "widget-", `{"type":"object","x-cozystack-name":{"type":"string","title":"Name","examples":["abc"],"$comment":"c","x-hint":{"a":1},"maxLength":10},"properties":{}}`)
+	if r.nameSchemaErr != nil {
+		t.Fatalf("annotation keywords refused: %v", r.nameSchemaErr)
+	}
+	if errs := r.validateNameLength(strings.Repeat("a", 11)); len(errs) != 1 {
+		t.Errorf("maxLength beside annotations not enforced: %v", errs)
 	}
 }
 
