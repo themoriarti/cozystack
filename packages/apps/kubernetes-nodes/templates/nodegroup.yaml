@@ -27,6 +27,7 @@
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
 {{- include "kubernetes-nodes.assertNoForeignPool" . }}
 {{- include "kubernetes-nodes.assertParentVersion" . }}
+{{- include "kubernetes-nodes.assertSubstrateMatches" . }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- /* Substrate selects which infrastructure provider renders this pool's
        machine template. Everything downstream of the template — autoscaler
@@ -852,9 +853,10 @@ spec:
 {{- $_ := set $context "group" $group }}
 {{- $_ := set $context "groupName" $groupName }}
 {{- $_ := set $context "clusterName" $clusterName }}
-{{- /* The variable keeps its kubevirt name so the rendered bytes of the
-       default path are unchanged: this template is content-hash named, and a
-       rename here would roll every live worker VM on every existing cluster. */}}
+{{- /* The $kubevirtmachinetemplate* variables now hold either kind; the names
+       are historical. Renaming them is safe — the content hash below is taken
+       over the rendered template, not over the variable name — and is left out
+       of this change only to keep the diff to the substrate. */}}
 {{- $machineTemplateKind := ternary "ProxmoxMachineTemplate" "KubevirtMachineTemplate" $isProxmox }}
 {{- $kubevirtmachinetemplate := include (ternary "proxmoxmachinetemplate" "kubevirtmachinetemplate" $isProxmox) $context }}
 {{- $kubevirtmachinetemplateHash := $kubevirtmachinetemplate | sha256sum | trunc 6 }}
@@ -995,7 +997,19 @@ metadata:
   name: {{ $clusterName }}-{{ $groupName }}
   namespace: {{ $.Release.Namespace }}
 spec:
+  {{- /* The controller counts PODS matching the selector below and reports
+         Operational=false while fewer than minReplicas of them are ready. On
+         kubevirt those Pods exist — they are the virt-launcher Pods, and the
+         VMI template carries the deployment-name label further down. A proxmox
+         worker is a VM on another machine with no Pod here at all, so the count
+         is always zero and any minReplicas above zero would pin the pool, and
+         through the lineage labels its whole application, to WorkloadsReady=False
+         while every node is healthy. The object still renders: the dashboard and
+         the lineage read it. What it cannot carry on proxmox is a threshold
+         counted in Pods. */}}
+  {{- if ne ($.Values.substrate | default "kubevirt") "proxmox" }}
   minReplicas: {{ $group.minReplicas }}
+  {{- end }}
   kind: kubernetes
   type: worker
   selector:

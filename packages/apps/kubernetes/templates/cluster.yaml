@@ -49,7 +49,9 @@
 {{- if not .Values.proxmox.dnsServers }}
 {{- fail "substrate proxmox requires proxmox.dnsServers: the ProxmoxCluster schema makes it mandatory" }}
 {{- end }}
+{{- include "kubernetes.assertDnsServersAreAddresses" . }}
 {{- end }}
+{{- include "kubernetes.assertSubstrateUnchanged" . }}
 {{- $infraKind := ternary "ProxmoxCluster" "KubevirtCluster" $isProxmox }}
 {{- /*
   When $etcd is empty, the parent Tenant application has not populated

@@ -41,7 +41,13 @@
     "substrate": {
       "description": "Which infrastructure provider backs this cluster's worker VMs. `kubevirt` runs them inside this cluster; `proxmox` runs them on an external Proxmox VE cluster through capmox. The control plane is Kamaji either way — this selects the infrastructure half only. Must match the `substrate` of every KubernetesNodes pool attached to this cluster: the pools reference this cluster's infrastructure object by kind, and a mismatch leaves their Machines unreconciled. Switching an existing cluster is not supported; create a new one.",
       "type": "string",
-      "default": "kubevirt"
+      "default": "kubevirt",
+      "x-kubernetes-validations": [
+        {
+          "rule": "self == oldSelf",
+          "message": "substrate is immutable"
+        }
+      ]
     },
     "proxmox": {
       "description": "Proxmox substrate settings.",

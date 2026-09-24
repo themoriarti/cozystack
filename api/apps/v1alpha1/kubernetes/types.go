@@ -30,6 +30,7 @@ type ConfigSpec struct {
 	Host string `json:"host"`
 	// Which infrastructure provider backs this cluster's worker VMs. `kubevirt` runs them inside this cluster; `proxmox` runs them on an external Proxmox VE cluster through capmox. The control plane is Kamaji either way — this selects the infrastructure half only. Must match the `substrate` of every KubernetesNodes pool attached to this cluster: the pools reference this cluster's infrastructure object by kind, and a mismatch leaves their Machines unreconciled. Switching an existing cluster is not supported; create a new one.
 	// +kubebuilder:default:="kubevirt"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="substrate is immutable"
 	Substrate string `json:"substrate"`
 	// Proxmox substrate settings.
 	// +kubebuilder:default:={}

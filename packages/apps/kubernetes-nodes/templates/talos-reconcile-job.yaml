@@ -1,3 +1,6 @@
+{{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
+{{- include "kubernetes-nodes.assertDnsServersAreAddresses" . }}
+{{- end }}
 {{- /*
   Main-phase Job (NOT a Helm hook) that produces this pool's TalosConfigTemplate
   and patches the parent KamajiControlPlane.spec.network.certSANs with the live
@@ -199,7 +202,16 @@ spec:
             - sh
             - -ec
             - |
-              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for apiserver Service address, Talos CA, K8s CA, management CoreDNS"
+              {{- /* The wording differs per substrate because the address does:
+                     a ClusterIP on kubevirt, the Service's LoadBalancer address
+                     on proxmox. Keeping the kubevirt line exactly as it was also
+                     keeps this Job's content hash — and so its name — unchanged
+                     for every pool that is not on proxmox. */}}
+              {{- if eq ($.Values.substrate | default "kubevirt") "proxmox" }}
+              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for apiserver Service LoadBalancer address, Talos CA, K8s CA, management CoreDNS"
+              {{- else }}
+              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for Service ClusterIP, Talos CA, K8s CA, management CoreDNS"
+              {{- end }}
               for i in $(seq 1 120); do
                 {{- /* Which address the workers must resolve the apiserver to.
                       On kubevirt they are Pods in this cluster and the ClusterIP
