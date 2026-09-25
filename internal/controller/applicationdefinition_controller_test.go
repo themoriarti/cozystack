@@ -2,6 +2,9 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -290,5 +293,52 @@ func TestApplicationDefinition_HashIgnoresUnrelatedAnnotations(t *testing.T) {
 
 	if bare != noisy {
 		t.Fatalf("unrelated annotations moved the hash: %q vs %q", bare, noisy)
+	}
+}
+
+// TestApplicationDefinition_HashTracksKindOwnership pins that the config hash
+// that restarts cozystack-api moves when ownership of a kind moves, even though
+// no spec changed: ownership depends on creation time, which the spec does not
+// carry. It also pins that a cluster with no duplicate kinds hashes exactly as
+// before ownership existed, so the upgrade itself does not restart the API.
+func TestApplicationDefinition_HashTracksKindOwnership(t *testing.T) {
+	scheme := newAppDefScheme(t)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mk := func(name string, at time.Time) *cozyv1alpha1.ApplicationDefinition {
+		d := &cozyv1alpha1.ApplicationDefinition{ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: metav1.NewTime(at)}}
+		d.Spec.Application.Kind = "Harbor"
+		return d
+	}
+	hash := func(objs ...*cozyv1alpha1.ApplicationDefinition) string {
+		b := fake.NewClientBuilder().WithScheme(scheme)
+		for _, o := range objs {
+			b = b.WithObjects(o)
+		}
+		r := &ApplicationDefinitionReconciler{Client: b.Build(), Scheme: scheme}
+		h, err := r.computeConfigHash(context.TODO())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+
+	// Same names, same specs; only which one was created first differs.
+	harborOwns := hash(mk("harbor", base), mk("tap-harbor", base.Add(time.Hour)))
+	tapOwns := hash(mk("harbor", base.Add(2*time.Hour)), mk("tap-harbor", base.Add(time.Hour)))
+	if harborOwns == tapOwns {
+		t.Fatal("hash did not change when ownership of the kind moved to another definition")
+	}
+
+	single := mk("harbor", base)
+	view, err := json.Marshal([]struct {
+		Name string                                 `json:"name"`
+		Spec cozyv1alpha1.ApplicationDefinitionSpec `json:"spec"`
+	}{{Name: single.Name, Spec: single.Spec}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(view)
+	if got := hash(single); got != hex.EncodeToString(sum[:]) {
+		t.Fatal("hash of a cluster without duplicate kinds changed format, which would restart cozystack-api on upgrade")
 	}
 }

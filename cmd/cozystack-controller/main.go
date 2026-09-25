@@ -261,8 +261,9 @@ func main() {
 	}
 
 	if err = (&controller.ApplicationDefinitionHelmReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("applicationdefinition-helm-reconciler"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionHelmReconciler")
 		os.Exit(1)

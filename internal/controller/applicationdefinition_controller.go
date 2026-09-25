@@ -11,6 +11,7 @@ import (
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/shared/appdefowner"
 	"github.com/cozystack/cozystack/pkg/config"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -79,6 +80,12 @@ type appDefHashView struct {
 	// rewrite annotations of their own on every apply and hashing those would
 	// roll the api Deployment on every reconcile.
 	Annotations map[string]string `json:"annotations,omitempty"`
+	// Skipped marks a definition cozystack-api leaves out because another
+	// definition owns its kind. Ownership depends on creation time, which the
+	// spec does not carry, so without it a recreated owner could move ownership
+	// while the hash stays put and the API keeps serving the old owner.
+	// omitempty keeps the hash of a cluster with no duplicate kinds unchanged.
+	Skipped bool `json:"skipped,omitempty"`
 }
 
 // releaseAnnotations returns the release.cozystack.io/* annotations of a
@@ -106,12 +113,15 @@ func (r *ApplicationDefinitionReconciler) computeConfigHash(ctx context.Context)
 
 	slices.SortFunc(list.Items, sortAppDefs)
 
+	owners := appdefowner.Owners(list.Items)
 	views := make([]appDefHashView, 0, len(list.Items))
 	for i := range list.Items {
+		kind := list.Items[i].Spec.Application.Kind
 		views = append(views, appDefHashView{
 			Name:        list.Items[i].Name,
 			Spec:        list.Items[i].Spec,
 			Annotations: releaseAnnotations(list.Items[i].Annotations),
+			Skipped:     kind != "" && owners[kind] != list.Items[i].Name,
 		})
 	}
 	b, err := json.Marshal(views)
