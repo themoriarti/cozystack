@@ -239,3 +239,51 @@ string this admits parses to a positive duration.
 {{- end }}
 {{- toJson $kept }}
 {{- end }}
+{{- /*
+  Nameservers are addresses, so each entry is checked to be one.
+
+  Here the value reaches no shell: this chart writes it into
+  ProxmoxCluster.spec.dnsServers through toYaml. It is checked all the same, so
+  that a hostname or a typo is refused at the same place in both charts rather
+  than accepted here and rejected in the pool chart, where the same list is
+  written into the reconcile Job's unquoted heredoc and has to be an address.
+
+  IPv6 is matched on its character set rather than its full grammar; the
+  apiserver rejects a malformed address anyway.
+*/ -}}
+{{- define "kubernetes.assertDnsServersAreAddresses" -}}
+{{- $v4 := `^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$` -}}
+{{- range $i, $e := (default (list) .Values.proxmox.dnsServers) -}}
+{{- $s := $e | toString -}}
+{{- if not (or (regexMatch $v4 $s) (and (contains ":" $s) (regexMatch `^[0-9A-Fa-f:]+$` $s))) -}}
+{{- fail (printf "proxmox.dnsServers[%d] is %q: entries must be IPv4 or IPv6 addresses. Talos takes addresses here, and this list is written into a shell heredoc, so anything else is both invalid for Talos and unsafe to interpolate." $i $s) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  substrate decides which infrastructure provider this cluster's Cluster object
+  points at, and it is safe to choose only once. Switching it on a live cluster
+  renders no KubevirtCluster, no kccm, no kubevirt-csi controller and no
+  in-tenant -csi HelmRelease — so Flux
+  uninstalls the CSI driver behind every PVC the tenant already has, and the
+  same render adds a ProxmoxCluster and turns the apiserver Service into a
+  LoadBalancer. CAPI does not stop it: its Cluster webhook forbids removing
+  spec.infrastructureRef but admits a change of kind. The `## @immutable` marker
+  on the value is dashboard-only, which is why this reads the live object.
+
+  Inert offline, like the other lookup guards here: with no apiserver the lookup
+  is empty and the render proceeds, so `helm template` and the unit tests are
+  unaffected and a first install has nothing to compare against.
+*/ -}}
+{{- define "kubernetes.assertSubstrateUnchanged" -}}
+{{- $isProxmox := eq (.Values.substrate | default "kubevirt") "proxmox" -}}
+{{- $wantKind := ternary "ProxmoxCluster" "KubevirtCluster" $isProxmox -}}
+{{- $live := lookup "cluster.x-k8s.io/v1beta1" "Cluster" .Release.Namespace .Release.Name -}}
+{{- if $live -}}
+{{- $liveKind := dig "spec" "infrastructureRef" "kind" "" $live -}}
+{{- if and $liveKind (ne $liveKind $wantKind) -}}
+{{- fail (printf "kubernetes: cluster %q already runs on %s and substrate is now %q, which renders a %s. Switching the substrate of a live cluster removes the cloud-controller-manager, the CSI controller and the in-tenant CSI HelmRelease, so Flux uninstalls the driver behind every existing PVC. Create a new cluster on the other substrate and migrate the workloads instead." .Release.Name $liveKind (.Values.substrate | default "kubevirt") $wantKind) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

@@ -141,3 +141,113 @@ VALS
     printf '%s' "$out" | grep -qF 'http://m$(id)`x`y' || { echo "kubernetes-nodes hostile endpoint not preserved literally" >&2; rm -rf "$work"; exit 1; }
     rm -rf "$work"
 }
+
+# The proxmox substrate adds the only tenant-controlled value in this heredoc
+# that is not shell-escaped: proxmox.dnsServers. `quote` there is YAML quoting
+# and leaves $(...) and backticks for the Job's shell to run — rendered with a
+# substitution, the shell executed it and its output ended up in the worker's
+# resolver list. The fix is render-time validation rather than escaping, because
+# Talos takes addresses here and an address cannot carry a metacharacter, so
+# these two tests hold both halves: the render refuses what is not an address,
+# and what is an address survives the shell untouched.
+@test "kubernetes-nodes refuses a proxmox dnsServers entry that is not an address" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+substrate: proxmox
+proxmox:
+  templateTags: [talos]
+  network: {bridge: vmbr0}
+  dnsServers: ["10.0.0.1", "$(id -u)"]
+VALS
+    if helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
+        --show-only templates/talos-reconcile-job.yaml > "$work/out.yaml" 2>"$work/err"; then
+        echo "render accepted a command substitution in proxmox.dnsServers" >&2
+        rm -rf "$work"; exit 1
+    fi
+    grep -qF 'proxmox.dnsServers[1]' "$work/err" || { echo "refusal does not name the offending entry" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+# The validator has two branches and a value without a colon never reaches the
+# second one. This case does: `::1$(id -u)` looks enough like an IPv6 address to
+# take the IPv6 path, so it is what pins that path's character class. Widen the
+# class and this entry renders, with the substitution back in the heredoc, while
+# the case above still passes on its IPv4 branch.
+@test "kubernetes-nodes refuses an IPv6-shaped dnsServers entry carrying a substitution" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+substrate: proxmox
+proxmox:
+  templateTags: [talos]
+  network: {bridge: vmbr0}
+  dnsServers: ["10.0.0.1", "::1$(id -u)"]
+VALS
+    if helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
+        --show-only templates/talos-reconcile-job.yaml > "$work/out.yaml" 2>"$work/err"; then
+        echo "render accepted a substitution inside an IPv6-shaped entry" >&2
+        rm -rf "$work"; exit 1
+    fi
+    grep -qF 'proxmox.dnsServers[1]' "$work/err" || { echo "refusal does not name the IPv6-shaped entry" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "kubernetes-nodes proxmox heredoc emits the nameservers it was given" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+substrate: proxmox
+proxmox:
+  templateTags: [talos]
+  network: {bridge: vmbr0}
+  dnsServers: ["10.0.0.1", "2001:4860:4860::8888"]
+VALS
+    helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
+        --show-only templates/talos-reconcile-job.yaml \
+        | yq 'select(.kind == "Job") | .spec.template.spec.containers[0].command[2]' \
+        > "$work/cmd.sh"
+    [ -s "$work/cmd.sh" ] || { echo "proxmox render produced no Job command" >&2; rm -rf "$work"; exit 1; }
+    awk '
+      # Matched on shape: `cat <<EOF` at the start of a line, or right after
+      # `=$(` / `="$(` when the heredoc is captured into a variable.
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
+      inblock && /^EOF$/            { print "EOF"; inblock=0; next }
+      inblock                       { print }
+    ' "$work/cmd.sh" > "$work/heredoc.sh"
+    grep -q '^cat <<EOF$' "$work/heredoc.sh" || { echo "could not extract the proxmox heredoc" >&2; rm -rf "$work"; exit 1; }
+    out=$(sh "$work/heredoc.sh" 2>"$work/err") || { echo "proxmox heredoc shell exited non-zero" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    printf '%s' "$out" | grep -qF -e '- "10.0.0.1"' || { echo "IPv4 nameserver missing from the emitted config" >&2; rm -rf "$work"; exit 1; }
+    printf '%s' "$out" | grep -qF -e '- "2001:4860:4860::8888"' || { echo "IPv6 nameserver missing from the emitted config" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}

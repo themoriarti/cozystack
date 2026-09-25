@@ -351,3 +351,70 @@ string this admits parses to a positive duration.
 {{- end -}}
 {{- $value -}}
 {{- end -}}
+
+{{- /*
+  Nameservers are addresses, so each entry is checked to be one.
+
+  The reason it is checked rather than escaped: this value is written into the
+  reconcile Job's unquoted heredoc, where the shell expands what it finds, and
+  `quote` there is YAML quoting that does nothing about $(...) or backticks. The
+  other tenant-controlled values that reach the same heredoc — talos.version,
+  talos.schematicID, talos.installerRepository, talos.registryMirrors — are
+  shell-escaped instead, as the INVARIANT comment beside them says. An address
+  admits neither approach's failure mode: it has no metacharacters to escape.
+  Checking also catches the ordinary mistake of writing a hostname where Talos
+  takes only an IP.
+
+  IPv6 is matched on its character set rather than its full grammar. What this
+  guard owes is a bound on which bytes may reach the shell, not a verdict on
+  whether every zero-run is written correctly, and the apiserver rejects a
+  malformed address anyway.
+*/ -}}
+{{- define "kubernetes-nodes.assertDnsServersAreAddresses" -}}
+{{- $v4 := `^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$` -}}
+{{- range $i, $e := (default (list) .Values.proxmox.dnsServers) -}}
+{{- $s := $e | toString -}}
+{{- if not (or (regexMatch $v4 $s) (and (contains ":" $s) (regexMatch `^[0-9A-Fa-f:]+$` $s))) -}}
+{{- fail (printf "proxmox.dnsServers[%d] is %q: entries must be IPv4 or IPv6 addresses. Talos takes addresses here, and this list is written into a shell heredoc, so anything else is both invalid for Talos and unsafe to interpolate." $i $s) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  Two ways a pool can end up on the wrong substrate, both silent, both guarded
+  here against the live cluster rather than against the `## @immutable` marker,
+  which is dashboard-only.
+
+  Switching an existing pool rolls every worker to the other hypervisor and, on
+  the way, drops the machine template the draining MachineSet still references:
+  the retention loop in nodegroup.yaml looks up only the kind the new substrate
+  uses, so the old kind stops being rendered and Helm deletes it — exactly the
+  failure that loop exists to prevent.
+
+  A pool that disagrees with its parent is the other one. The README says the
+  two must match; nothing checked it. A proxmox pool under a KubeVirt cluster
+  gets machines no ProxmoxCluster owns, and its workers never join.
+
+  Inert offline, like assertNoForeignPool and assertParentVersion above.
+*/ -}}
+{{- define "kubernetes-nodes.assertSubstrateMatches" -}}
+{{- $clusterName := include "kubernetes-nodes.clusterName" . -}}
+{{- $groupName := include "kubernetes-nodes.groupName" . -}}
+{{- $isProxmox := eq (.Values.substrate | default "kubevirt") "proxmox" -}}
+{{- $wantTemplateKind := ternary "ProxmoxMachineTemplate" "KubevirtMachineTemplate" $isProxmox -}}
+{{- $wantClusterKind := ternary "ProxmoxCluster" "KubevirtCluster" $isProxmox -}}
+{{- $md := lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" .Release.Namespace (printf "%s-%s" $clusterName $groupName) -}}
+{{- if $md -}}
+{{- $liveKind := dig "spec" "template" "spec" "infrastructureRef" "kind" "" $md -}}
+{{- if and $liveKind (ne $liveKind $wantTemplateKind) -}}
+{{- fail (printf "kubernetes-nodes: pool %q already runs %s workers and substrate is now %q, which renders a %s. Switching rolls every worker to the other hypervisor and drops the template the draining MachineSet still references. Create a new pool on the other substrate and scale this one down instead." $groupName $liveKind (.Values.substrate | default "kubevirt") $wantTemplateKind) -}}
+{{- end -}}
+{{- end -}}
+{{- $cluster := lookup "cluster.x-k8s.io/v1beta1" "Cluster" .Release.Namespace $clusterName -}}
+{{- if $cluster -}}
+{{- $parentKind := dig "spec" "infrastructureRef" "kind" "" $cluster -}}
+{{- if and $parentKind (ne $parentKind $wantClusterKind) -}}
+{{- fail (printf "kubernetes-nodes: pool %q is set to substrate %q but its parent cluster %q runs on %s. A pool's substrate must match its cluster's: its machines would be owned by no infrastructure cluster and its workers would never join." $groupName (.Values.substrate | default "kubevirt") $clusterName $parentKind) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
