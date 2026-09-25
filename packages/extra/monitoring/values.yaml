@@ -108,8 +108,36 @@ logsStorages:
 ## @field {string} storageClassName="replicated" - StorageClass used to store the data.
 ## @field {string} [retentionDiskUsageBytes] - Optional disk-usage cap as a VictoriaMetrics BytesString (e.g. "8GB" or "8GiB"), bounding disk use on top of the age-based retentionPeriod. Uses byte-suffix grammar (kb/mb/gb/tb, KiB/MiB/GiB/TiB), NOT the Kubernetes-quantity grammar of the sibling storage field, so "8Gi" is rejected by the operator. In cluster mode the cap is per vtstorage replica (replicaCount 2), so the effective total is twice the value.
 
-## @param {[]TracingStorage} tracingStorages - Configuration of traces storage instances. Empty by default (tracing off): nothing writes spans until the trace collector ships, so no backend is provisioned. Add an entry to enable a VictoriaTraces backend.
+## @param {[]TracingStorage} tracingStorages - Configuration of traces storage instances. Empty by default (tracing off): no backend and no trace collector are rendered. Adding an entry provisions a VictoriaTraces backend and, while tracingCollector.enabled is true, deploys the OTLP collector in front of it.
 tracingStorages: []
+
+##
+## @section Traces collector configuration
+##
+
+## @typedef {struct} TracingCollector - Per-tenant OpenTelemetry Collector that fronts the traces backend. It is the app-facing OTLP ingest gateway and the point where sampling/redaction are enforced; tenant isolation itself comes from the tenant NetworkPolicies, not from this workload.
+## @field {bool} enabled=true - Deploy the OTLP collector. When disabled, applications must send OTLP straight to the traces backend (no central sampling/redaction). The collector fronts a single backend: while it is enabled, tracingStorages must hold at most one entry, and adding a second one fails the whole Monitoring render until the extra entry is removed or the collector is disabled.
+## @field {int} replicas=1 - Number of collector replicas. Head sampling is trace-id-deterministic, so replicas>1 are safe and remove the single-ingest-path SPOF.
+## @minimum 1
+## @field {int} samplingPercentage=10 - Head-sampling percentage applied at the collector before export.
+## @minimum 0
+## @maximum 100
+## @field {[]string} [redactAttributes] - Span attribute keys to drop before export (the PII/secret control point, e.g. db.statement).
+## @field {Resources} [resources] - Resource configuration for the collector.
+
+## @param {TracingCollector} tracingCollector - OpenTelemetry Collector for trace ingestion.
+tracingCollector:
+  enabled: true
+  replicas: 1
+  samplingPercentage: 10
+  redactAttributes: []
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
 
 ##
 ## @section Alerta configuration
