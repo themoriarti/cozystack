@@ -138,3 +138,21 @@
   echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/img:percall '
   echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/img:percall,'
 }
+
+@test "image-tags records every tag it pushes in PUSHED_TAGS_LOG, and nothing when unset or exporting" {
+  # The stitch moves exactly these tags onto the multi-arch index. A component
+  # version pushed under PUBLISH_VERSIONED=1 is named by no ref in the tree, so
+  # a tag missing here would stay on the amd64-only image.
+  tmp=$(mktemp -d)
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=v9.9.9-rc.1 PUBLISH_VERSIONED=1 BUILDER=b \
+    REGISTRY=reg.example/c PUSHED_TAGS_LOG="$tmp/log")
+  echo "$out" | grep -o -- '--tag [^ ]*' | awk '{ print $2 }' | sort >"$tmp/pushed"
+  [ "$(wc -l <"$tmp/pushed" | tr -d ' ')" -eq 2 ]
+  sort "$tmp/log" | diff "$tmp/pushed" -
+
+  make -n -C packages/system/cozystack-controller image IMAGE_TAG=v9.9.9-rc.1 PUBLISH_VERSIONED=1 BUILDER=b >/dev/null
+  make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc BUILDER=b \
+    OCI_EXPORT_DIR=/tmp/ocitest PUSHED_TAGS_LOG="$tmp/export-log" >/dev/null
+  [ ! -e "$tmp/export-log" ]
+  rm -rf "$tmp"
+}

@@ -111,8 +111,16 @@ oci-output = $(if $(strip $(OCI_EXPORT_DIR)), --output type=oci$(comma)dest=$(OC
 # index.json, and `skopeo copy oci-archive:<f>` then refuses it ("more than one
 # image in oci"). PUBLISH_* are 0 on fork PRs (the only export case today), so
 # this is belt-and-suspenders for that trap.
+#
+# PUSHED_TAGS_LOG=<file> appends every pushed <repo>:<tag> to <file>, one per
+# line. hack/stitch-multiarch.sh moves exactly those tags onto the multi-arch
+# index; no ref in the tree names a versioned tag, so this is how it learns
+# one was pushed. The append happens when the recipe is expanded, `make -n`
+# included, and is skipped under OCI_EXPORT_DIR, which pushes nothing.
+image-tag-refs = $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(strip $(OCI_EXPORT_DIR)),,$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), $(REGISTRY)/$(1):latest))
+
 define image-tags
---tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(strip $(OCI_EXPORT_DIR)),,$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest))$(call oci-output,$(1))
+$(foreach r,$(call image-tag-refs,$(1),$(2)),--tag $(r))$(call oci-output,$(1))$(if $(and $(strip $(PUSHED_TAGS_LOG)),$(if $(strip $(OCI_EXPORT_DIR)),,1)),$(shell printf '%s\n' $(call image-tag-refs,$(1),$(2)) >>'$(PUSHED_TAGS_LOG)'))
 endef
 
 # cache-args <image-name> [<cache-tag>]
