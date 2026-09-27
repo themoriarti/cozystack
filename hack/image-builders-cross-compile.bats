@@ -25,10 +25,11 @@
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
-# Outputs with no architecture: the console builds static JS; piraeus-server
-# builds Java .debs that linstor-server's debian/control declares
-# `Architecture: all`.
+# Outputs with no architecture: the console and the Harbor portal build static
+# JS; piraeus-server builds Java .debs that linstor-server's debian/control
+# declares `Architecture: all`.
 ARCH_NEUTRAL="packages/system/dashboard/images/console/Containerfile
+packages/system/harbor/images/harbor-portal/Dockerfile
 packages/system/linstor/images/piraeus-server/Dockerfile"
 
 # One line per stage: "<compiles 0|1> <targets 0|1> <FROM line>".
