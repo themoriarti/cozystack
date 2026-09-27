@@ -273,6 +273,108 @@ _make_world() {
   rm -rf "$tmp"
 }
 
+@test "prepare-release applies the amd64 build's tree, stitches, gates, then republishes before the commit" {
+  # The amd64 build pushed the artifact and chart pinned on amd64-only
+  # digests. The chart's values pin the operator image and the digest
+  # image-packages writes, so it must be packaged after that write, and the
+  # gate must see the stitched tree before anything is published from it.
+  wf=.github/workflows/tags.yaml
+  names=$(yq -r '.jobs.prepare-release.steps[].name' "$wf")
+  d=$(echo "$names" | grep -nx 'Download the amd64 build' | cut -d: -f1)
+  a=$(echo "$names" | grep -nx 'Apply the stamped tree' | cut -d: -f1)
+  st=$(echo "$names" | grep -nx 'Stitch multi-arch indexes and republish' | cut -d: -f1)
+  c=$(echo "$names" | grep -nx 'Commit release artifacts' | cut -d: -f1)
+  u=$(echo "$names" | grep -nx 'Upload assets' | cut -d: -f1)
+  [ -n "$d" ] && [ -n "$a" ] && [ -n "$st" ] && [ -n "$c" ] && [ -n "$u" ] \
+    && [ "$d" -lt "$a" ] && [ "$a" -lt "$st" ] && [ "$st" -lt "$c" ] && [ "$c" -lt "$u" ] \
+    || { echo "FAIL: prepare-release steps are out of order"; false; }
+  run=$(yq -r '.jobs.prepare-release.steps[] | select(.name == "Stitch multi-arch indexes and republish") | .run' "$wf")
+  s=$(echo "$run" | grep -n 'hack/stitch-multiarch.sh packages ' | cut -d: -f1)
+  v=$(echo "$run" | grep -n 'hack/verify-multiarch.sh packages$' | cut -d: -f1)
+  p=$(echo "$run" | grep -n 'make -C packages/core/installer image-packages chart$' | cut -d: -f1)
+  [ -n "$s" ] && [ -n "$v" ] && [ -n "$p" ] && [ "$s" -lt "$v" ] && [ "$v" -lt "$p" ] \
+    || { echo "FAIL: stitch, gate and republish are out of order"; false; }
+  out=$(make -n -C packages/core/installer image-packages chart COZYSTACK_VERSION=0)
+  ref=$(echo "$out" | grep -n 'platformSourceRef = ' | cut -d: -f1)
+  pkg=$(echo "$out" | grep -n 'helm package' | cut -d: -f1)
+  [ -n "$ref" ] && [ -n "$pkg" ] && [ "$ref" -lt "$pkg" ]
+  echo "$out" | grep -q 'helm push'
+}
+
+@test "the amd64 build hands its tree, tag log and assets to prepare-release, and a missing hand-off fails" {
+  wf=.github/workflows/tags.yaml
+  up='.jobs.build-amd64.steps[] | select(.uses // "" | test("actions/upload-artifact@"))'
+  down='.jobs.prepare-release.steps[] | select(.uses // "" | test("actions/download-artifact@"))'
+  [ "$(yq -r "[$up] | length" "$wf")" -ge 2 ]
+  [ "$(yq -r "[$up | select(.with.\"if-no-files-found\" != \"error\")] | length" "$wf")" -eq 0 ]
+  # Every artifact uploaded is downloaded under the same name.
+  [ "$(yq -r "$up | .with.name" "$wf" | sort)" = "$(yq -r "$down | .with.name" "$wf" | sort)" ]
+  # The tag log the Build step writes is the file the stitch reads, and it
+  # travels in an uploaded artifact that lands at that same path.
+  build_log=$(yq -r '.jobs.build-amd64.steps[] | select(.name == "Build") | .env.PUSHED_TAGS_LOG' "$wf")
+  stitch_log=$(yq -r '.jobs.prepare-release.steps[] | select(.name == "Stitch multi-arch indexes and republish") | .env.PUSHED_TAGS_LOG' "$wf")
+  [ -n "$build_log" ] && [ "$build_log" != null ] && [ "$build_log" = "$stitch_log" ]
+  dir="${build_log%/*}"
+  yq -r "$up | .with.path" "$wf" | grep -qxF "$dir/"
+  yq -r "$down | .with.path" "$wf" | grep -qxF "$dir"
+  # The stamped tree is captured after the build and applied before the stitch.
+  capture=$(yq -r '.jobs.build-amd64.steps[] | select(.name == "Capture the stamped tree") | .run' "$wf")
+  echo "$capture" | grep -q "git diff --cached --binary HEAD >\"$dir/stamped-tree.patch\""
+  yq -r '.jobs.prepare-release.steps[] | select(.name == "Apply the stamped tree") | .run' "$wf" \
+    | grep -q "git apply --binary \"$dir/stamped-tree.patch\""
+}
+
+@test "the amd64 and arm64 builds run side by side, prepare-release waits for both, and a stable tag runs without arm64" {
+  wf=.github/workflows/tags.yaml
+  [ "$(yq -r '.jobs.build-amd64.needs // "none"' "$wf")" = none ]
+  [ "$(yq -r '.jobs.build-arm64.needs // "none"' "$wf")" = none ]
+  [ "$(yq -r '.jobs.build-arm64.if' "$wf")" = "contains(github.ref_name, '-')" ]
+  # The amd64 job runs for every tag: it holds the release-exists no-op and the
+  # hand-pushed stable tag rejection.
+  [ "$(yq -r '.jobs.build-amd64.if // "none"' "$wf")" = none ]
+  amd_steps=$(yq -r '.jobs.build-amd64.steps[].name' "$wf")
+  echo "$amd_steps" | grep -qx 'Check if release already exists'
+  echo "$amd_steps" | grep -qx 'Reject hand-pushed stable tags'
+  [ "$(yq -r '.jobs.build-arm64.steps[] | select(.run // "" | test("build-matrix")) | .env.IMAGE_TAG' "$wf")" = '${{ github.ref_name }}-arm64' ]
+  [ "$(yq -r '.jobs.prepare-release.needs | sort | join(" ")' "$wf")" = 'build-amd64 build-arm64' ]
+  cond=$(yq -r '.jobs.prepare-release.if' "$wf")
+  echo "$cond" | grep -qF '!cancelled()'
+  echo "$cond" | grep -qF "needs.build-amd64.result == 'success'"
+  echo "$cond" | grep -qF "needs.build-arm64.result == 'success'"
+  echo "$cond" | grep -qF "needs.build-arm64.result == 'skipped'"
+  if echo "$cond" | grep -qE "always\(\)|'failure'"; then echo "FAIL: a failed build must not let the release through"; false; fi
+  # prepare-release no-ops exactly when the amd64 job found the release.
+  [ "$(yq -r '.jobs.prepare-release.outputs.release_exists' "$wf")" = '${{ needs.build-amd64.outputs.release_exists }}' ]
+  # A stable tag skips build-arm64, and a skipped ancestor makes the implicit
+  # success() false for every job below it, so each one needs a status
+  # function of its own or it silently never runs on a stable tag.
+  down=prepare-release
+  while :; do
+    more=$(yq -r '.jobs | keys | .[]' "$wf" | while read -r j; do
+      needs=$(yq -r "[.jobs.\"$j\".needs // []] | flatten | .[]" "$wf")
+      for d in $down; do
+        if echo "$needs" | grep -qxF "$d" && ! echo " $down " | grep -qF " $j "; then echo "$j"; break; fi
+      done
+    done | sort -u)
+    [ -n "$more" ] || break
+    down="$down $(echo "$more" | tr '\n' ' ')"
+  done
+  for j in $down; do
+    yq -r ".jobs.\"$j\".if // \"\"" "$wf" | grep -qE '!cancelled\(\)|always\(\)' \
+      || { echo "FAIL: $j runs below build-arm64 without a status function"; false; }
+  done
+  echo " $down " | grep -qF ' generate-changelog '
+  echo " $down " | grep -qF ' rc-e2e '
+  echo " $down " | grep -qF ' update-website-docs '
+  # A re-run of an rc whose release is already prepared rebuilds nothing.
+  [ "$(yq -r '.jobs.build-arm64.steps[] | select(.name == "Build arm64 images") | .if' "$wf")" = "steps.check_release.outputs.release_exists == 'false'" ]
+  [ "$(yq -r '.jobs.build-amd64.steps[] | select(.name == "Build") | .if' "$wf")" = "steps.check_release.outputs.release_exists == 'false'" ]
+  # The stitch and the gate need skopeo and mikefarah yq on the release runner.
+  tool=$(yq -r '.jobs.prepare-release.steps[] | select(.name == "Set up build toolchain") | .run' "$wf")
+  echo "$tool" | grep -q skopeo
+  echo "$tool" | grep -q 'yq --version | grep -q mikefarah'
+}
+
 @test "an arm64 tag that holds no arm64 image is skipped, not stitched" {
   # The talos and testing packages pin amd64, so a stray <tag>-arm64 of theirs
   # holds a second amd64 image. An index of two amd64 manifests would be wrong.
