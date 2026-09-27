@@ -260,3 +260,13 @@ _make_tree() {
   [ "$(grep -c 'inspect --raw' "$MOCK_REG/log")" -eq 1 ]
   rm -rf "$tmp"
 }
+
+@test "the nightly arm64 build reports main's refs before its build stamps the tree" {
+  wf=.github/workflows/build-arm64-nightly.yaml
+  names=$(yq -r '.jobs.build-arm64.steps[].name' "$wf")
+  r=$(echo "$names" | grep -nx 'Report refs that are not multi-arch' | cut -d: -f1)
+  b=$(echo "$names" | grep -nx 'Build arm64 images' | cut -d: -f1)
+  [ -n "$r" ] && [ -n "$b" ] && [ "$r" -lt "$b" ]
+  [ "$(yq -r '.jobs.build-arm64.steps[] | select(.name == "Report refs that are not multi-arch") | .run' "$wf")" = 'hack/verify-multiarch.sh --report packages' ]
+  [ "$(yq -r '.jobs.build-arm64.steps[] | select(.name == "Build arm64 images") | .env.WRITE_CACHE' "$wf")" = 1 ]
+}
