@@ -30,9 +30,13 @@ tests:
 
   - it: does not fail on an empty apex when a host override is set
     # Override present means the caller will not use the apex, so an empty apex
-    # is not a malformed-hostname risk and must not fail.
+    # is not a malformed-hostname risk and must not fail. _namespace is injected
+    # (empty host) so this case actually reaches the override check rather than
+    # passing through the absent-_namespace branch.
     set:
       host: custom.example.com
+      _namespace:
+        etcd: etcd-ns
     asserts:
       - equal: {path: 'data["host"]', value: ""}
 
