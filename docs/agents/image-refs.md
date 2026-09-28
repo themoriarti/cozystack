@@ -65,7 +65,7 @@ Two rows do not source the shared library, for opposite reasons. `hack/overlay-m
 
 ## Known gaps
 
-These are real, currently unfixed, and predate the shared enumeration. They are recorded here so nobody rediscovers them as surprises.
+These predate the shared enumeration. Each entry says whether the tree works around it today; they are recorded here so nobody rediscovers them as surprises.
 
 **The nightly host rewrite cannot reach a host split across two keys.** The primary pass is a literal `<src-registry>/` substring replace, so it only rewrites a reference whose host sits contiguously in front of the repository. Two layouts in the tree defeated it; one is handled by a second expression and the other was removed from the tree.
 
