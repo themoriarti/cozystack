@@ -1906,6 +1906,7 @@ type startingWatcher struct {
 	err     error
 	// onWatch runs when Watch is called, before the source starts.
 	onWatch func()
+	queue   workqueue.TypedRateLimitingInterface[reconcile.Request]
 }
 
 func (w *startingWatcher) Watch(src source.Source) error {
@@ -1916,14 +1917,33 @@ func (w *startingWatcher) Watch(src source.Source) error {
 		return w.err
 	}
 	w.sources = append(w.sources, src)
-	queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]())
-	return src.Start(context.Background(), queue)
+	if w.queue == nil {
+		w.queue = workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]())
+	}
+	return src.Start(context.Background(), w.queue)
 }
 
 func readerOf(r *WorkloadMonitorReconciler) client.Reader {
 	r.dataVolumeMu.RLock()
 	defer r.dataVolumeMu.RUnlock()
 	return r.DataVolumeReader
+}
+
+func watchReconciler() *WorkloadMonitorReconciler {
+	s := newTestScheme()
+	return &WorkloadMonitorReconciler{Client: fake.NewClientBuilder().WithScheme(s).Build(), Scheme: s}
+}
+
+// kindSources leaves out the source that queues the monitors once the reader
+// is installed.
+func (w *startingWatcher) kindSources() int {
+	n := 0
+	for _, src := range w.sources {
+		if _, ok := src.(source.Func); !ok {
+			n++
+		}
+	}
+	return n
 }
 
 func servedMapper() meta.RESTMapper {
@@ -1946,7 +1966,7 @@ func fakeDataVolumeInformer(t *testing.T, informers *informertest.FakeInformers)
 }
 
 func TestTryStartDataVolumeWatch_WaitsUntilTheKindIsServed(t *testing.T) {
-	r := &WorkloadMonitorReconciler{}
+	r := watchReconciler()
 	w := &startingWatcher{}
 	mapper := meta.NewDefaultRESTMapper(nil)
 	informers := &informertest.FakeInformers{}
@@ -1956,7 +1976,7 @@ func TestTryStartDataVolumeWatch_WaitsUntilTheKindIsServed(t *testing.T) {
 	if err != nil || done {
 		t.Fatalf("before CDI: done=%v err=%v, want false, nil", done, err)
 	}
-	if len(w.sources) != 0 || readerOf(r) != nil {
+	if w.kindSources() != 0 || readerOf(r) != nil {
 		t.Fatalf("before CDI: %d watches, reader %v; want none", len(w.sources), readerOf(r))
 	}
 
@@ -1965,7 +1985,7 @@ func TestTryStartDataVolumeWatch_WaitsUntilTheKindIsServed(t *testing.T) {
 	if err != nil || !done {
 		t.Fatalf("after CDI: done=%v err=%v, want true, nil", done, err)
 	}
-	if len(w.sources) != 1 || readerOf(r) == nil {
+	if w.kindSources() != 1 || readerOf(r) == nil {
 		t.Fatalf("after CDI: %d watches, reader %v; want one watch and a reader", len(w.sources), readerOf(r))
 	}
 }
@@ -2003,7 +2023,7 @@ func TestWatchDataVolumes_StartsOnTheFirstReconcile(t *testing.T) {
 }
 
 func TestTryStartDataVolumeWatch_UnsyncedSourceLeavesNoReaderAndRetries(t *testing.T) {
-	r := &WorkloadMonitorReconciler{}
+	r := watchReconciler()
 	w := &startingWatcher{}
 	informers := &informertest.FakeInformers{}
 	fi := fakeDataVolumeInformer(t, informers)
@@ -2026,14 +2046,14 @@ func TestTryStartDataVolumeWatch_UnsyncedSourceLeavesNoReaderAndRetries(t *testi
 	}
 	// Every started source adds an event handler to the informer for good, so
 	// a retry must wait on the source it already has.
-	if len(w.sources) != 1 {
+	if w.kindSources() != 1 {
 		t.Fatalf("got %d watches over four attempts, want the first source reused", len(w.sources))
 	}
 }
 
 // A stopping manager ends the sync wait, which says nothing about the informer.
 func TestTryStartDataVolumeWatch_StoppingManagerLeavesNoReader(t *testing.T) {
-	r := &WorkloadMonitorReconciler{}
+	r := watchReconciler()
 	informers := &informertest.FakeInformers{}
 	fakeDataVolumeInformer(t, informers).Synced = false
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2053,14 +2073,17 @@ func TestTryStartDataVolumeWatch_StoppingManagerLeavesNoReader(t *testing.T) {
 func TestTryStartDataVolumeWatch_ReconcileBeforeTheReaderIsRetried(t *testing.T) {
 	for _, synced := range []bool{true, false} {
 		t.Run(fmt.Sprintf("synced=%v", synced), func(t *testing.T) {
-			r := &WorkloadMonitorReconciler{}
+			r := watchReconciler()
 			informers := &informertest.FakeInformers{}
 			fakeDataVolumeInformer(t, informers).Synced = synced
 			monitor := &cozyv1alpha1.WorkloadMonitor{ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"}}
 			var errDuringWatch error
-			w := &startingWatcher{onWatch: func() {
-				_, _, _, errDuringWatch = r.dataVolumesMessage(context.Background(), monitor)
-			}}
+			w := &startingWatcher{}
+			w.onWatch = func() {
+				if len(w.sources) == 0 {
+					_, _, _, errDuringWatch = r.dataVolumesMessage(context.Background(), monitor)
+				}
+			}
 			_, _ = r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, 50*time.Millisecond)
 			if errDuringWatch == nil {
 				t.Error("reading DataVolumes while the watch syncs returned no error, want one so the reconcile is retried")
@@ -2071,6 +2094,101 @@ func TestTryStartDataVolumeWatch_ReconcileBeforeTheReaderIsRetried(t *testing.T)
 				t.Errorf("after a sync timeout: %v, want errDataVolumeWatchSyncing until the reader is installed", err)
 			}
 		})
+	}
+}
+
+// A reconcile before the watch starts sees no reader and keeps the stored
+// verdict, and the source's replay cannot deliver a DataVolume deleted while
+// the controller was down, so installing the reader must queue the monitors
+// that hold a verdict.
+func TestTryStartDataVolumeWatch_StoredVerdictIsRecomputedOnceTheReaderIsInstalled(t *testing.T) {
+	s := newTestScheme()
+	stuck := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "stuck", Namespace: "default"},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Selector:    map[string]string{"app.kubernetes.io/instance": "stuck"},
+			MinReplicas: ptr.To[int32](0),
+		},
+		Status: cozyv1alpha1.WorkloadMonitorStatus{
+			Operational: ptr.To(false),
+			Message:     "DataVolume stuck is ImportInProgress",
+			Reason:      cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady,
+		},
+	}
+	noVerdict := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-verdict", Namespace: "default"},
+		Spec:       cozyv1alpha1.WorkloadMonitorSpec{MinReplicas: ptr.To[int32](0)},
+		Status:     cozyv1alpha1.WorkloadMonitorStatus{Operational: ptr.To(true)},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(stuck, noVerdict).WithStatusSubresource(stuck, noVerdict).Build()
+	r := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "stuck", Namespace: "default"}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile before the watch: %v", err)
+	}
+
+	informers := &informertest.FakeInformers{}
+	fakeDataVolumeInformer(t, informers)
+	w := &startingWatcher{}
+	w.onWatch = func() {
+		if len(w.sources) == 1 && readerOf(r) == nil {
+			t.Error("monitors queued before the reader is installed would reconcile without it")
+		}
+	}
+	done, err := r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, time.Second)
+	if err != nil || !done {
+		t.Fatalf("done=%v err=%v, want the reader installed", done, err)
+	}
+	var queued []reconcile.Request
+	for w.queue.Len() > 0 {
+		item, _ := w.queue.Get()
+		queued = append(queued, item)
+		w.queue.Done(item)
+	}
+	if len(queued) != 1 || queued[0] != req {
+		t.Fatalf("queued %v, want only the monitor holding a DataVolume verdict", queued)
+	}
+	if _, err := r.Reconcile(context.Background(), queued[0]); err != nil {
+		t.Fatalf("Reconcile after the reader: %v", err)
+	}
+	got := &cozyv1alpha1.WorkloadMonitor{}
+	if err := fakeClient.Get(context.Background(), req.NamespacedName, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Operational == nil || !*got.Status.Operational || got.Status.Message != "" || got.Status.Reason != "" {
+		t.Errorf("Operational=%v Message=%q Reason=%q, want the verdict of the deleted DataVolume cleared", got.Status.Operational, got.Status.Message, got.Status.Reason)
+	}
+}
+
+func TestTryStartDataVolumeWatch_FailedMonitorListIsRetried(t *testing.T) {
+	s := newTestScheme()
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"},
+		Status:     cozyv1alpha1.WorkloadMonitorStatus{Message: "DataVolume m is Failed"},
+	}
+	listFails := true
+	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(monitor).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if listFails {
+				return fmt.Errorf("apiserver unavailable")
+			}
+			return c.List(ctx, list, opts...)
+		},
+	}).Build()
+	r := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	informers := &informertest.FakeInformers{}
+	fakeDataVolumeInformer(t, informers)
+	w := &startingWatcher{}
+	done, err := r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, time.Second)
+	if err == nil || done {
+		t.Fatalf("done=%v err=%v, want an error and a retry: a monitor left unqueued keeps a stale verdict", done, err)
+	}
+
+	listFails = false
+	done, err = r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, time.Second)
+	if err != nil || !done || w.kindSources() != 1 || w.queue.Len() != 1 {
+		t.Fatalf("retry: done=%v err=%v kind sources=%d queued=%d, want done, the source reused and the monitor queued", done, err, w.kindSources(), w.queue.Len())
 	}
 }
 

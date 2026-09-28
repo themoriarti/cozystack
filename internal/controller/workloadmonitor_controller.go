@@ -27,6 +27,7 @@ import (
 	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -234,12 +235,31 @@ func (r *WorkloadMonitorReconciler) tryStartDataVolumeWatch(ctx context.Context,
 		return false, fmt.Errorf("waiting for the DataVolume informer to sync: %w", err)
 	}
 	r.dataVolumeMu.Lock()
-	defer r.dataVolumeMu.Unlock()
 	// The manager's client reads unstructured objects straight from the API
 	// server; the cache shares the informer the watch above starts.
 	r.DataVolumeReader = informers
 	r.dataVolumeWatchSyncing = false
+	r.dataVolumeMu.Unlock()
+	// A reconcile that ran before the watch started kept its stored verdict and
+	// was not requeued, and the source's replay cannot deliver a DataVolume
+	// deleted while the controller was down.
+	if err := c.Watch(source.Func(r.enqueueMonitorsWithDataVolumeVerdict)); err != nil {
+		return false, fmt.Errorf("queueing monitors with a DataVolume verdict: %w", err)
+	}
 	return true, nil
+}
+
+func (r *WorkloadMonitorReconciler) enqueueMonitorsWithDataVolumeVerdict(ctx context.Context, queue workqueue.TypedRateLimitingInterface[reconcile.Request]) error {
+	var monitors cozyv1alpha1.WorkloadMonitorList
+	if err := r.List(ctx, &monitors); err != nil {
+		return err
+	}
+	for i := range monitors.Items {
+		if monitors.Items[i].Status.Message != "" {
+			queue.Add(reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&monitors.Items[i])})
+		}
+	}
+	return nil
 }
 
 // watchDataVolumes adds the DataVolume watch once the first reconcile has run
