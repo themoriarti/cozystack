@@ -1,11 +1,13 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 14 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Unit tests for hack/build-matrix.sh — the CI build-matrix selector.
 #
 # Run via hack/cozytest.sh from the repo root (make bats-unit-tests); the
 # relative `hack/build-matrix.sh` calls below resolve against that cwd. A bats
 # setup() hook would be dead here — cozytest never invokes it — so the
 # repo-root cwd is supplied by the runner rather than a setup() cd.
+#
+# Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
+# Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
 
 @test "no argument emits the full matrix" {
   out=$(hack/build-matrix.sh)
@@ -25,17 +27,19 @@
 }
 
 @test "talos-only diff selects nothing (handled by the dedicated leg)" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "packages/core/talos/images/matchbox/Dockerfile" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '[]' ]
+  rm -f "$tmp"
 }
 
 @test "installer-only diff selects nothing (handled by finalize)" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "packages/core/installer/images/cozystack-operator/Dockerfile" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '[]' ]
+  rm -f "$tmp"
 }
 
 @test "FULL sentinel emits the full matrix" {
@@ -44,10 +48,11 @@
 }
 
 @test "single-package diff selects only that unit" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "packages/apps/mariadb/values.yaml" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '["packages/apps/mariadb"]' ]
+  rm -f "$tmp"
 }
 
 @test "kubeovn source patch selects the kubeovn image build" {
@@ -59,84 +64,95 @@
 }
 
 @test "two-package diff selects both units" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   printf 'packages/apps/mariadb/values.yaml\npackages/system/dashboard/values.yaml\n' > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   echo "$out" | grep -q '"packages/apps/mariadb"'
   echo "$out" | grep -q '"packages/system/dashboard"'
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -eq 2 ]
+  rm -f "$tmp"
 }
 
 @test "docs-only diff selects nothing" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "docs/agents/overview.md" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '[]' ]
+  rm -f "$tmp"
 }
 
 @test "a package with no image target selects nothing" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   # postgres ships no in-repo image build, so it is not a build unit.
   echo "packages/apps/postgres/values.yaml" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '[]' ]
+  rm -f "$tmp"
 }
 
 @test "seaweedfs change fans out to objectstorage-controller" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "packages/system/seaweedfs/values.yaml" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '["packages/system/objectstorage-controller"]' ]
+  rm -f "$tmp"
 }
 
 @test "seaweedfs change does not duplicate an already-selected objectstorage-controller" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   printf 'packages/system/seaweedfs/values.yaml\npackages/system/objectstorage-controller/values.yaml\n' > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '["packages/system/objectstorage-controller"]' ]
+  rm -f "$tmp"
 }
 
 @test "cozy-lib change forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "packages/library/cozy-lib/templates/_helpers.tpl" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   echo "$out" | grep -q '"packages/core/platform"'
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "common-envs.mk change forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "hack/common-envs.mk" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "go.mod change forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "go.mod" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "build workflow change forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo ".github/workflows/pull-requests.yaml" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "root Go source change (api/) forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "api/apps/v1alpha1/kubernetes/types.go" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "root Go source change (pkg/) forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "pkg/cluster/reconciler.go" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "emitted JSON is parseable and matches make build's unit list" {

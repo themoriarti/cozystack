@@ -1,5 +1,4 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 5 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Tests for hack/nightly-mirror.sh — the OCIR->GHCR nightly image-mirror selector.
 #
 # Guards the ref selection and host rewrite: only cozystack-owned component
@@ -15,6 +14,9 @@
 # non-zero exit aborts the test (that is the exit-0 assertion). A test that
 # expects a non-zero exit must capture it with `|| rc=$?`. mikefarah yq is
 # assumed present (provided by the test toolchain).
+#
+# Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
+# Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
 #
 # Run with: hack/cozytest.sh hack/nightly-mirror_test.bats
 
@@ -144,7 +146,6 @@ _make_tree() {
 
 @test "dry-run mirrors only cozystack-owned component images to the dest registry" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_tree "$tmp/tree"
 
   rc=0
@@ -192,12 +193,15 @@ _make_tree() {
   # scalar. The message must not name `sed -i` -- the path no longer uses it.
   grep -Fq "rewrite image host iad.ocir.io/idyksih5sir9/cozystack/ -> ghcr.io/cozystack/cozystack/" "$tmp/out"
   grep -Fq "bare iad.ocir.io/idyksih5sir9/cozystack host scalar -> ghcr.io/cozystack/cozystack" "$tmp/out"
-  ! grep -q 'sed -i' "$tmp/out"
+  if grep -q 'sed -i' "$tmp/out"; then
+    echo "FAIL: dry-run still names sed -i" >&2
+    false
+  fi
+  rm -rf "$tmp"
 }
 
 @test "empty selection (wrong source registry) exits non-zero with a diagnostic" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_tree "$tmp/tree"
 
   # No images live under example.com/nope, so nothing is selected and the script
@@ -208,6 +212,7 @@ _make_tree() {
 
   [ "$rc" -ne 0 ]
   grep -q 'No cozystack-owned digest-pinned image refs found' "$tmp/err"
+  rm -rf "$tmp"
 }
 
 @test "mirrors refs stored in .tag files and declared templates" {
@@ -217,7 +222,6 @@ _make_tree() {
   # registry. Both shapes below were invisible while this scanned the depth-2
   # values.yaml alone.
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_tree "$tmp/tree"
 
   hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree" --dry-run \
@@ -225,6 +229,7 @@ _make_tree() {
 
   grep -q 'docker://ghcr.io/cozystack/cozystack/tagfile:0.0.0-nightly.test' "$tmp/out"
   grep -q 'docker://ghcr.io/cozystack/cozystack/multus-cni:0.0.0-nightly.test' "$tmp/out"
+  rm -rf "$tmp"
 }
 
 @test "the host rewrite and the mirror walk the same file list" {
@@ -239,7 +244,6 @@ _make_tree() {
   # shape (kubeovn) and keycloak-operator's empty `registry` are covered by
   # the dedicated tests below.
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_tree "$tmp/tree"
 
   . hack/lib/image-refs.sh
@@ -248,6 +252,7 @@ _make_tree() {
   echo "$files" | grep -q '/system/foo/values.yaml$'
   echo "$files" | grep -q '/system/tagfile/images/thing.tag$'
   echo "$files" | grep -q '/system/multus/templates/multus-daemonset-thick.yml$'
+  rm -rf "$tmp"
 }
 
 @test "the host rewrite reaches a host that is the whole scalar value" {
@@ -260,7 +265,6 @@ _make_tree() {
   # Needs a skopeo stub because the sed only runs outside --dry-run. Scope: this
   # covers the whole-value shape only.
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_tree "$tmp/tree"
 
   # The stub must answer `inspect` with the source digest: the script verifies
@@ -287,6 +291,7 @@ _make_tree() {
 
   # third-party hosts are left alone
   grep -q 'docker.io/clastix/kubectl' "$tmp/tree/system/third/values.yaml"
+  rm -rf "$tmp"
 }
 
 @test "the host rewrite reaches a host kept in repository beside an empty registry" {
