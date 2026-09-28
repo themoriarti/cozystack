@@ -71,7 +71,7 @@ spec:
   # <release>-ca, which holds the CA private key next to ca.crt.
   certificates:
     serverAltDNSNames:
-      - {{ printf "%s.%s" .Release.Name .Values._namespace.host }}
+      - {{ printf "%s.%s" .Release.Name (include "cozy-lib.ns-host-required" .) }}
   {{- end }}
   {{/*
     s3Credentials points at the operator-supplied Secret when
