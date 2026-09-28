@@ -43,3 +43,21 @@ tests:
     asserts:
       - isNull:
           path: spec.certificates
+
+  - it: renders the external cert SAN from the apex when it is set
+    set:
+      external: true
+      tls:
+        enabled: true
+      _namespace:
+        host: example.org
+      _cluster:
+        scheduling: {}
+        cluster-domain: cozy.local
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.certificates.serverAltDNSNames[0]
+          value: pg-test.example.org
