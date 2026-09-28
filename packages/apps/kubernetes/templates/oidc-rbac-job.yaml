@@ -47,7 +47,7 @@
 */}}
 {{- $clientId := include "kubernetes.oidc.clientId" . | trim }}
 {{- $issuer := include "kubernetes.oidc.systemIssuerURL" . | trim }}
-{{- $externalHost := .Values.host | default (printf "%s.%s" .Release.Name (include "cozy-lib.ns-host-required" .)) }}
+{{- $externalHost := .Values.host | default (printf "%s.%s" .Release.Name (.Values._namespace.host)) }}
 ---
 apiVersion: v1
 kind: ServiceAccount
