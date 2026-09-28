@@ -8,6 +8,8 @@
 # other than its name says. These checks pin the wiring that makes the run mean
 # "isp-hosted converged on a cluster that provides its own CNI and storage".
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 WORKFLOW="$REPO_ROOT/.github/workflows/e2e-isp-hosted.yaml"
 PACKAGE="$REPO_ROOT/hack/e2e-isp-hosted-package.yaml"

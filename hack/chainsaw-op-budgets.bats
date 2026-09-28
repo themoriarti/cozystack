@@ -17,12 +17,15 @@
 # op. Its failure messages are checked by running the step's script against a
 # stubbed kubectl.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
+# CI runs this file under Bats. It stays compatible with the legacy cozytest.sh
+# translator, whose awk parser recognizes only @test blocks and a bare `}` on its
 # own line; a `}` at column zero gets `return 0` inserted ahead of it, so the
 # helpers below report through stdout only.
 #
-# Run with: hack/cozytest.sh hack/chainsaw-op-budgets.bats
+# Run with: bats hack/chainsaw-op-budgets.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 GATEWAY_SUITE="hack/e2e-chainsaw/gateway/chainsaw-test.yaml"
 GATEWAY_STEP="parent-child-and-route-drive-listener-set"

@@ -77,6 +77,8 @@
 # it exists to ban, one level up.
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 # The directory to audit. Under the bats binary this file's own location; under
 # cozytest.sh, which sets no BATS_TEST_FILENAME, `$0` is the runner, and the
 # answer agrees only because the runner lives beside the files it runs. The

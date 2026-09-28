@@ -6,6 +6,8 @@
 # unpin one, which is why this scans every workflow instead of the steps that
 # happened to be fixed. Other downloaded tools are not covered here.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 WORKFLOWS="$REPO_ROOT/.github/workflows"
 

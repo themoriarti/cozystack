@@ -5,9 +5,12 @@
 # pulls the artifact by digest from the registry, so a build that pushes nothing
 # must leave the committed ref alone rather than stamp one that resolves nowhere.
 #
-# Run via hack/cozytest.sh (make bats-unit-tests). This is NOT real bats: no
-# run/$status/$output, and a `!`-negated pipeline is suppressed under set -e, so
-# negative checks use the `if grep -q ...; then ...; false; fi` idiom.
+# Run with: bats hack/installer-image-packages-push_test.bats. The bodies avoid
+# run/$status/$output so the legacy hack/cozytest.sh translator can still run
+# them, and a `!`-negated pipeline is suppressed under set -e, so negative checks
+# use the `if grep -q ...; then ...; false; fi` idiom.
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 

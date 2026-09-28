@@ -23,6 +23,8 @@
 #
 # Requires: awk, make, sed.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 RETRY="$REPO_ROOT/hack/go-mod-download.sh"
 WORKFLOWS="$REPO_ROOT/.github/workflows"
