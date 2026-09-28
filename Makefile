@@ -19,13 +19,16 @@ build: build-deps
 	make -C packages/system/backup-controller image
 	make -C packages/system/backupstrategy-controller image
 	make -C packages/system/lineage-controller-webhook image
+	make -C packages/system/migration-controller image
 	make -C packages/system/flux-shard-operator image
+	make -C packages/system/flux-plunger image
 	make -C packages/system/cilium image
 	make -C packages/system/linstor image
 	make -C packages/system/linstor-gui image
 	make -C packages/system/kubeovn image
 	make -C packages/system/kubeovn-webhook image
 	make -C packages/system/kubeovn-plunger image
+	make -C packages/system/kilo image
 	make -C packages/system/dashboard image
 	make -C packages/system/metallb image
 	make -C packages/system/talos-log-collector image
@@ -39,6 +42,7 @@ build: build-deps
 	make -C packages/system/grafana-operator image
 	make -C packages/system/redis-operator image
 	make -C packages/system/opensearch-operator image
+	make -C packages/system/keycloak-operator image
 	make -C packages/core/testing image
 	make -C packages/core/talos image
 	make -C packages/core/platform image

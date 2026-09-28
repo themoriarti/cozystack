@@ -154,11 +154,9 @@ else
   # `<src>/<repo>@<digest>` ref continues past the host and is left to the first
   # expression, so the two cannot both fire on one reference.
   #
-  # It deliberately does NOT fix keycloak-operator, whose host splits at a
-  # different boundary (`registry: iad.ocir.io` + `repository:
-  # idyksih5sir9/cozystack/<name>`): neither key holds SRC_REGISTRY as a whole,
-  # so rewriting it needs the structure-aware pass docs/agents/image-refs.md
-  # describes. That gap stays dormant while no CI path rebuilds the package.
+  # Neither expression reaches a host split at any other boundary (`registry:
+  # iad.ocir.io` + `repository: idyksih5sir9/cozystack/<name>`), where no key
+  # holds SRC_REGISTRY as a whole, so no package may stamp that layout.
   # In-place edit written portably: `sed -i` takes the next argument as the
   # backup suffix on BSD but as a flag on GNU, so `sed -i -e` diverges between
   # them. Route the output through a temp file and copy it back over the original

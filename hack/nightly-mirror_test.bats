@@ -77,7 +77,7 @@ _make_tree() {
     printf '    tag: main@sha256:%s\n' "$D"
   } > "$t/system/third/values.yaml"
   # shapes 2 and 3 with the host split into a sibling `registry` key instead of
-  # living inside `repository` — the layout keycloak-operator ships. Rejoining
+  # living inside `repository` — the layout keycloak-operator shipped. Rejoining
   # the two is what keeps the ref recognisable: emitting the bare `repository`
   # yields a host-less ref that the SRC_REGISTRY filter discards as third-party,
   # the same silent drop shape 3 exists to fix. Worse here than in promote-retag,
@@ -235,11 +235,9 @@ _make_tree() {
   #
   # Scope, so the name does not overclaim: this pins WHICH FILES the rewrite
   # visits, not that every ref inside them is successfully rewritten. The sed
-  # itself only runs outside --dry-run (it needs skopeo), so it still cannot
-  # rewrite a host split into a sibling `registry:` key (keycloak-operator).
-  # That is a known gap recorded in docs/agents/image-refs.md, not something
-  # this test covers; the whole-value shape (kubeovn) is covered by the
-  # dedicated test below.
+  # itself only runs outside --dry-run (it needs skopeo); the whole-value
+  # shape (kubeovn) and keycloak-operator's empty `registry` are covered by
+  # the dedicated tests below.
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   _make_tree "$tmp/tree"
@@ -260,9 +258,7 @@ _make_tree() {
   # image was built in cozystack/kubeovn-chart; live once it is built here.
   #
   # Needs a skopeo stub because the sed only runs outside --dry-run. Scope: this
-  # covers the whole-value shape only. keycloak-operator splits the host at a
-  # different boundary (`registry: iad.ocir.io`), where no single key holds
-  # SRC_REGISTRY, and is still unfixed — see docs/agents/image-refs.md.
+  # covers the whole-value shape only.
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   _make_tree "$tmp/tree"
@@ -291,4 +287,85 @@ _make_tree() {
 
   # third-party hosts are left alone
   grep -q 'docker.io/clastix/kubectl' "$tmp/tree/system/third/values.yaml"
+}
+
+@test "the host rewrite reaches a host kept in repository beside an empty registry" {
+  # keycloak-operator's layout: the upstream chart joins `registry` and
+  # `repository`, so the package sets `registry: ""` and keeps the whole host in
+  # `repository`, where the literal "<src>/" replace can reach it. The image
+  # must be both mirrored and rewritten, or the published tree points at an
+  # image the dest registry does not have or at the private CI registry.
+  tmp=$(mktemp -d)
+  _make_tree "$tmp/tree"
+  mkdir -p "$tmp/tree/system/emptyreg"
+  {
+    echo 'image:'
+    echo '  registry: ""'
+    echo '  repository: iad.ocir.io/idyksih5sir9/cozystack/emptyreg'
+    printf '  tag: main@sha256:%s\n' "$D"
+  } > "$tmp/tree/system/emptyreg/values.yaml"
+
+  mkdir -p "$tmp/bin"
+  {
+    echo '#!/bin/sh'
+    echo 'case "$1" in'
+    printf '  inspect) echo "sha256:%s" ;;\n' "$D"
+    echo '  *) exit 0 ;;'
+    echo 'esac'
+  } > "$tmp/bin/skopeo"
+  chmod +x "$tmp/bin/skopeo"
+
+  hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree" --dry-run >"$tmp/out"
+  grep -q 'docker://ghcr.io/cozystack/cozystack/emptyreg:0.0.0-nightly.test' "$tmp/out"
+
+  PATH="$tmp/bin:$PATH" hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree"
+  grep -q '^  repository: ghcr.io/cozystack/cozystack/emptyreg$' "$tmp/tree/system/emptyreg/values.yaml"
+  grep -q '^  registry: ""$' "$tmp/tree/system/emptyreg/values.yaml"
+  rm -rf "$tmp"
+}
+
+@test "keycloak-operator's stamped image reaches the nightly mirror and its host rewrite" {
+  # Runs the package's real `image:` recipe against the CI build registry and
+  # then the mirror over the result, so a regression in either the values
+  # layout or the Makefile stamp fails here. The chart joins `registry` and
+  # `repository`; if the host moves back into `registry`, or the recipe stops
+  # stamping `repository`, the stamped ref no longer carries the build host
+  # contiguously and is either never mirrored or left pointing at it.
+  D="$(printf 'c%.0s' $(seq 1 64))"
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/repo/packages/system" "$tmp/bin"
+  cp -R packages/system/keycloak-operator "$tmp/repo/packages/system/"
+  ln -s "$PWD/hack" "$tmp/repo/hack"
+
+  # docker stub: only writes the buildx metadata file the recipe reads.
+  {
+    echo '#!/bin/sh'
+    echo 'while [ $# -gt 0 ]; do'
+    echo '  if [ "$1" = --metadata-file ]; then'
+    printf '    printf %s > "$2"\n' "'{\"containerimage.digest\":\"sha256:$D\"}'"
+    echo '  fi'
+    echo '  shift'
+    echo 'done'
+  } > "$tmp/bin/docker"
+  {
+    echo '#!/bin/sh'
+    echo 'case "$1" in'
+    printf '  inspect) echo "sha256:%s" ;;\n' "$D"
+    echo '  *) exit 0 ;;'
+    echo 'esac'
+  } > "$tmp/bin/skopeo"
+  chmod +x "$tmp/bin/docker" "$tmp/bin/skopeo"
+
+  PATH="$tmp/bin:$PATH" make --no-print-directory -s -C "$tmp/repo/packages/system/keycloak-operator" image \
+    REGISTRY=iad.ocir.io/idyksih5sir9/cozystack IMAGE_TAG=main COZYSTACK_VERSION=0.0.0 >/dev/null
+
+  hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/repo/packages" --dry-run >"$tmp/out"
+  grep -q 'docker://ghcr.io/cozystack/cozystack/keycloak-operator:0.0.0-nightly.test' "$tmp/out"
+
+  PATH="$tmp/bin:$PATH" hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/repo/packages"
+  if grep -q 'iad.ocir.io' "$tmp/repo/packages/system/keycloak-operator/values.yaml"; then
+    echo "the build registry host survived the nightly rewrite" >&2
+    false
+  fi
+  rm -rf "$tmp"
 }
