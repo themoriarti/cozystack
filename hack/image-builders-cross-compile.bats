@@ -27,11 +27,12 @@ REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
 # Outputs with no architecture, one entry per line: a whole file, or
 # "<file>:<stage>" when only that stage is neutral and the file's other
-# stages still have to target TARGETARCH. The console and shadowbox's webpack
-# stage build static JS; piraeus-server builds Java .debs that
-# linstor-server's debian/control declares `Architecture: all`.
+# stages still have to target TARGETARCH. The console, the Harbor portal and
+# shadowbox's webpack stage build static JS; piraeus-server builds Java .debs
+# that linstor-server's debian/control declares `Architecture: all`.
 ARCH_NEUTRAL="packages/apps/vpn/images/shadowbox/Dockerfile:app
 packages/system/dashboard/images/console/Containerfile
+packages/system/harbor/images/harbor-portal/Dockerfile
 packages/system/linstor/images/piraeus-server/Dockerfile"
 
 # is_neutral <file> <stage> <list>: 1 when the list names the file or that stage of it.
