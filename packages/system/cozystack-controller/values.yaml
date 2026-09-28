@@ -12,4 +12,6 @@ cozystackController:
   # Lease and runs the reconcilers. With the default of 1 the extra Lease is
   # the only difference from the previous hardcoded value.
   replicas: 1
+  # Empty by default: no resources block is rendered, so requests and limits are
+  # opt-in. Idle usage (measured) is ~69Mi — keep a limit above that.
   resources: {}
