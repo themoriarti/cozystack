@@ -20,9 +20,20 @@ tests:
           value: vm-default-images
       - equal:
           path: spec.variants[0].components[0].install.healthCheckExprs
-          value:
+          value: &exprs
             - apiVersion: cdi.kubevirt.io/v1beta1
               kind: DataVolume
               failed: "has(status.phase) && status.phase == 'Failed'"
               current: "has(status.phase) && status.phase == 'Succeeded'"
 
+  - it: gates the kubernetes-worker-image component on DataVolume Succeeded
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubernetes-worker-image
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].name
+          value: kubernetes-worker-image
+      - equal:
+          path: spec.variants[0].components[0].install.healthCheckExprs
+          value: *exprs

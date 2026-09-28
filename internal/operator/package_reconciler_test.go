@@ -295,7 +295,7 @@ func TestGoldenImageHelmReleasesWaitForImport(t *testing.T) {
 			Current: "has(status.phase) && status.phase == 'Succeeded'",
 		},
 	}}
-	for _, component := range []string{"vm-default-images"} {
+	for _, component := range []string{"vm-default-images", "kubernetes-worker-image"} {
 		t.Run(component, func(t *testing.T) {
 			path := filepath.Join("..", "..", "packages", "core", "platform", "sources", component+".yaml")
 			data, err := os.ReadFile(path)
