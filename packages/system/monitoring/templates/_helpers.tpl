@@ -34,7 +34,7 @@
 {{- end -}}
 
 {{- define "monitoring.oidc.grafanaHost" -}}
-{{- $namespaceHost := .Values._namespace.host -}}
+{{- $namespaceHost := include "cozy-lib.ns-host-required" . -}}
 {{- printf "grafana.%s" (.Values.host | default $namespaceHost) -}}
 {{- end -}}
 
