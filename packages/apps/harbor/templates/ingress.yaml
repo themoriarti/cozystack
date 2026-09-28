@@ -1,6 +1,6 @@
 {{- $ingress := .Values._namespace.ingress }}
 {{- $gateway := .Values._namespace.gateway | default "" }}
-{{- $host := .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}

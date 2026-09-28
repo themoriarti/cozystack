@@ -94,7 +94,7 @@
 
 {{- if not (eq .Values.topology "Client") }}
 {{- $ingress := .Values._namespace.ingress }}
-{{- $host := .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
