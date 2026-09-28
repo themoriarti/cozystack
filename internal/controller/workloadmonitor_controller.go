@@ -80,8 +80,8 @@ type WorkloadMonitorReconciler struct {
 	// namespace.cozystack.io/monitoring label. Used when SeaweedFS and the
 	// stack that scrapes it run outside this cluster.
 	SeaweedfsMetricsEndpoint string
-	// DataVolumeReader reads CDI DataVolumes. Nil until the DataVolume kind is
-	// served, and until then DataVolumes do not count towards Operational.
+	// DataVolumeReader reads CDI DataVolumes. Nil until the DataVolume informer
+	// has synced; until then a monitor keeps its stored DataVolume verdict.
 	DataVolumeReader client.Reader
 	dataVolumeMu     sync.RWMutex
 	// dataVolumeWatchSyncing is set while the DataVolume watch is started and
