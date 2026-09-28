@@ -11,7 +11,7 @@ templates:
 # Rules under test (see _helpers.tpl::tenant.gatewayEffective):
 #   - gateway unset                     → OFF own (inherit from parent)
 #   - gateway=true  explicit            → ON  own (LB IP / cert burned)
-#   - gateway=false explicit            → OFF own (parked, no inherit)
+#   - gateway=false explicit            → OFF own (same as unset, still inherits)
 #
 # The inheritance propagation itself happens in namespace.yaml:
 # $gateway := $parentNamespace.gateway | default ""
