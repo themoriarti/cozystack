@@ -176,11 +176,22 @@ func TestSettleIsIdempotent(t *testing.T) {
 // handoff; restoring Delete in any of them is the data loss Retain exists for.
 func TestSettleKeepsRetainWhileTheHandoffIsOpen(t *testing.T) {
 	cases := []struct {
-		name     string
-		mutate   func(pv *corev1.PersistentVolume, claim *corev1.PersistentVolumeClaim) []client.Object
-		skipDV   bool
-		skipDisk bool
+		name       string
+		mutate     func(pv *corev1.PersistentVolume, claim *corev1.PersistentVolumeClaim) []client.Object
+		mutateDisk func(disk *unstructured.Unstructured)
+		skipDV     bool
+		skipDisk   bool
 	}{
+		{
+			// A claim of the right name that this import did not create is a
+			// tenant's disk; its volume's policy is not this controller's to
+			// rewrite, whatever state the rest of the handoff is in.
+			name: "replacement claim not created by this import",
+			mutate: func(_ *corev1.PersistentVolume, claim *corev1.PersistentVolumeClaim) []client.Object {
+				claim.Labels = outputMarkers(task("other", settleNS, "vcenter", "replicated"), "vm-1")
+				return nil
+			},
+		},
 		{
 			name: "replacement claim not bound yet",
 			mutate: func(_ *corev1.PersistentVolume, claim *corev1.PersistentVolumeClaim) []client.Object {
@@ -202,6 +213,15 @@ func TestSettleKeepsRetainWhileTheHandoffIsOpen(t *testing.T) {
 			mutate: func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) []client.Object {
 				pv.Spec.ClaimRef.Name = "forklift-claim"
 				pv.Spec.ClaimRef.UID = "forklift-claim-uid"
+				return nil
+			},
+		},
+		{
+			// The name alone proves nothing: a claim deleted and recreated
+			// under the same name is a different claim to the PV controller.
+			name: "claimRef names the replacement claim with a stale UID",
+			mutate: func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) []client.Object {
+				pv.Spec.ClaimRef.UID = "a-previous-claim-uid"
 				return nil
 			},
 		},
@@ -233,6 +253,16 @@ func TestSettleKeepsRetainWhileTheHandoffIsOpen(t *testing.T) {
 			},
 		},
 		{
+			// A plain owner reference does not make the DataVolume the claim's
+			// controller, so CDI has not adopted it.
+			name: "DataVolume owns the claim without controlling it",
+			mutate: func(_ *corev1.PersistentVolume, claim *corev1.PersistentVolumeClaim) []client.Object {
+				notController := false
+				claim.OwnerReferences[0].Controller = &notController
+				return nil
+			},
+		},
+		{
 			name: "owner reference points at a previous DataVolume",
 			mutate: func(_ *corev1.PersistentVolume, claim *corev1.PersistentVolumeClaim) []client.Object {
 				claim.OwnerReferences[0].UID = "an-older-dv-uid"
@@ -249,6 +279,15 @@ func TestSettleKeepsRetainWhileTheHandoffIsOpen(t *testing.T) {
 			mutate:   func(*corev1.PersistentVolume, *corev1.PersistentVolumeClaim) []client.Object { return nil },
 			skipDisk: true,
 		},
+		{
+			// A VMDisk of the right name that another import or the tenant
+			// created is not the release this volume was handed to.
+			name:   "VMDisk not created by this import",
+			mutate: func(*corev1.PersistentVolume, *corev1.PersistentVolumeClaim) []client.Object { return nil },
+			mutateDisk: func(disk *unstructured.Unstructured) {
+				disk.SetLabels(outputMarkers(task("other", settleNS, "vcenter", "replicated"), "vm-1"))
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -256,6 +295,9 @@ func TestSettleKeepsRetainWhileTheHandoffIsOpen(t *testing.T) {
 			tk := task("import", settleNS, "vcenter", "replicated")
 			pv, claim, dv, disk := settledHandoff(tk)
 			extra := tc.mutate(pv, claim)
+			if tc.mutateDisk != nil {
+				tc.mutateDisk(disk)
+			}
 			deletePolicy := corev1.PersistentVolumeReclaimDelete
 			objs := []client.Object{tk, pv, claim, classWithPolicy("replicated", &deletePolicy)}
 			if !tc.skipDV {
@@ -398,5 +440,66 @@ func TestFulfillRestoresTheReclaimPolicyBeforeFinishing(t *testing.T) {
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: settleNS, Name: "test-vm"}, newObject(virtualMachineGVK)); !apierrors.IsNotFound(err) {
 		t.Errorf("the scaffolding VM survived a finished import (err %v)", err)
+	}
+}
+
+// The recovery path: a controller predating settlement deleted the scaffolding
+// VM and died before writing the status, so fulfill finds no VM and no status
+// entry, only this task's marked VMInstance and VMDisk. Those volumes may still
+// be on the swap's Retain, and recovering the outputs must settle them first,
+// or the import is recorded as finished with the leak it was meant to close.
+func TestFulfillSettlesReclaimedOutputs(t *testing.T) {
+	cases := []struct {
+		name       string
+		open       bool
+		wantOut    bool
+		wantPolicy corev1.PersistentVolumeReclaimPolicy
+	}{
+		{"handoff still open", true, false, corev1.PersistentVolumeReclaimRetain},
+		{"handoff finished", false, true, corev1.PersistentVolumeReclaimDelete},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := testScheme(t)
+			req := migrationv1alpha1.VMImportRequest{ID: "vm-1", Name: "web-01"}
+			tk := task("import", settleNS, "vcenter", "replicated", req)
+			// Status knows nothing and no Plan or VM is left to find.
+			tk.Status.VMs = nil
+
+			pv, claim, dv, disk := settledHandoff(tk)
+			if tc.open {
+				// CDI has not adopted the claim yet.
+				claim.OwnerReferences = nil
+			}
+			instance := newObject(vmInstanceGVK)
+			instance.SetName("web-01")
+			instance.SetNamespace(settleNS)
+			stampOutput(instance, tk, "vm-1")
+
+			deletePolicy := corev1.PersistentVolumeReclaimDelete
+			c := clientfake.NewClientBuilder().WithScheme(s).
+				WithObjects(tk, pv, claim, dv, disk, instance, classWithPolicy("replicated", &deletePolicy)).Build()
+			r := &VMImportTaskReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+			out, err := r.fulfill(ctx, tk, &req)
+			if err != nil {
+				t.Fatalf("fulfill: %v", err)
+			}
+			if !tc.wantOut && out != nil {
+				t.Errorf("recovered outputs %+v while their volume is still on the swap's Retain", out)
+			}
+			if tc.wantOut {
+				if out == nil {
+					t.Fatal("recovered nothing from a finished handoff; the task would never complete")
+				}
+				if out.VMInstance != "web-01" || len(out.Disks) != 1 || out.Disks[0] != settleDisk {
+					t.Errorf("outputs = %+v, want web-01 over %s", out, settleDisk)
+				}
+			}
+			if got := reclaimPolicyOf(t, c); got != tc.wantPolicy {
+				t.Errorf("reclaim policy = %q, want %q", got, tc.wantPolicy)
+			}
+		})
 	}
 }
