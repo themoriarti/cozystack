@@ -40,7 +40,7 @@ type ConfigSpec struct {
 	// PostgreSQL major version to deploy
 	// +kubebuilder:default:="v18"
 	Version Version `json:"version"`
-	// PostgreSQL image flavor, fixed when the cluster is created. `postgresql` uses the CloudNativePG PostgreSQL image. `postgis` uses the CloudNativePG PostGIS image, which adds postgis, postgis_raster, postgis_topology, postgis_sfcgal, postgis_tiger_geocoder and address_standardizer; enable them per database in `databases.<name>.extensions`. Changing the flavor of an existing cluster is refused: create a new cluster and migrate the data.
+	// PostgreSQL image flavor, fixed when the cluster is created. `postgresql` uses the CloudNativePG PostgreSQL image. `postgis` uses the CloudNativePG PostGIS image, which adds postgis, postgis_raster, postgis_topology, postgis_sfcgal, postgis_tiger_geocoder and address_standardizer; enable them per database in `databases.<name>.extensions`. Changing the flavor of an existing cluster is refused, and a backup restores only into a cluster of the flavor it was taken from: to change flavor, create a new cluster and move the data with a logical dump (pg_dump / pg_restore).
 	// +kubebuilder:default:="postgresql"
 	Flavor Flavor `json:"flavor"`
 	// TLS configuration for server connections.

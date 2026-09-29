@@ -35,14 +35,29 @@ ghcr.io/cloudnative-pg/postgresql:{{ include "postgres.versionMap" . | trim | tr
   either change out as an ordinary image update, so refuse it here, before
   the Cluster is patched. Only the image name is compared: a minor bump or
   a registry mirror rewriting the host must keep passing.
+
+  A physical recovery carries the same data directory across, so it is held
+  to the same rule. With no live Cluster of its own yet, the release is
+  checked against its recovery source while that Cluster still exists; once
+  the source is gone the chart has nothing to compare against, and the
+  backup-controller's RestoreJob, which records the flavor on every Backup,
+  is the path that enforces it.
 */}}
 {{- define "postgres.flavorGuard" -}}
+{{- $wantName := regexReplaceAll "[:@].*$" (last (splitList "/" (include "postgres.imageName" .))) "" -}}
 {{- $live := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace .Release.Name -}}
 {{- if and $live $live.spec $live.spec.imageName -}}
 {{- $liveName := regexReplaceAll "[:@].*$" (last (splitList "/" $live.spec.imageName)) "" -}}
-{{- $wantName := regexReplaceAll "[:@].*$" (last (splitList "/" (include "postgres.imageName" .))) "" -}}
 {{- if ne $liveName $wantName -}}
-{{- fail (printf "postgres: flavor cannot change on an existing cluster (running %s, requested %s). The image families use different glibc versions, which would corrupt text indexes. Create a new Postgres with the wanted flavor and migrate the data, or restore a backup into it with bootstrap.enabled." $liveName $wantName) -}}
+{{- fail (printf "postgres: flavor cannot change on an existing cluster (running %s, requested %s). The image families use different glibc versions, which would corrupt text indexes. Create a new Postgres with the wanted flavor and move the data with a logical dump (pg_dump / pg_restore); restoring a backup keeps the flavor it was taken from." $liveName $wantName) -}}
+{{- end -}}
+{{- else if and .Values.bootstrap.enabled .Values.bootstrap.oldName -}}
+{{- $source := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace .Values.bootstrap.oldName -}}
+{{- if and $source $source.spec $source.spec.imageName -}}
+{{- $sourceName := regexReplaceAll "[:@].*$" (last (splitList "/" $source.spec.imageName)) "" -}}
+{{- if ne $sourceName $wantName -}}
+{{- fail (printf "postgres: cannot recover a %s backup of %s into the %s flavor. A physical restore keeps the source's glibc and libraries, which would corrupt text indexes. Set flavor to match the source, or create the new Postgres empty and move the data with a logical dump (pg_dump / pg_restore)." $sourceName .Values.bootstrap.oldName $wantName) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
