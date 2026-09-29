@@ -205,23 +205,42 @@ stringData:
       count as undeclared and be dropped on every run. REASSIGN OWNED and DROP OWNED
       act only on the database they run in, so run them in every connectable
       database: an object the user owns elsewhere would otherwise fail DROP USER
-      and wedge every later run. Identifiers are quoted because the username
-      charset admits "-", "." and uppercase.
+      and wedge every later run. The objects go to "cozystack:orphaned", a role
+      that cannot log in and that the chart grants nothing: what a tenant role
+      created must not become superuser-owned. Every dropped role's objects share
+      that one owner, so its memberships are revoked and, after both drop passes,
+      functions it owns are switched to SECURITY INVOKER and, from PostgreSQL 15,
+      its views to security_invoker. A materialized view, a rule, and a view on
+      an older server have no such switch and keep reading as that owner. Grants
+      and memberships of the dropped role do not carry over, so a view or function
+      it owned can lose access it had through them. The ":" is outside the
+      username and database charsets, so no declared user or <db>_admin role can
+      take the name. In the user and role drop passes, names read from the
+      catalog reach SQL only as psql variables.
     */}}
     MANAGED_USERS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT r.rolname FROM pg_roles r JOIN pg_shdescription s ON s.objoid = r.oid AND s.classoid = 'pg_authid'::regclass WHERE s.description = 'user managed by helm'")
     DEFINED_USERS="{{ $defined := list }}{{ range $user, $u := .Values.users }}{{ $defined = append $defined (trunc 63 $user) }}{{ end }}{{ join " " $defined }}"
     DELETE_USERS=$(for user in $MANAGED_USERS; do case " $DEFINED_USERS " in *" $user "*) :;; *) echo $user;; esac; done)
     ALL_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate")
 
+    psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
+    SELECT 'CREATE ROLE "cozystack:orphaned" NOLOGIN NOINHERIT'
+    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'cozystack:orphaned')\gexec
+    SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname) FROM pg_auth_members am JOIN pg_roles m ON am.member = m.oid JOIN pg_roles r ON am.roleid = r.oid WHERE 'cozystack:orphaned' IN (r.rolname, m.rolname)\gexec
+    ALTER ROLE "cozystack:orphaned" NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+    EOT
+
     echo "users to delete: $DELETE_USERS"
     for user in $DELETE_USERS; do
     for db in $ALL_DBS; do
-    psql -v ON_ERROR_STOP=1 --echo-all --dbname "$db" <<EOT
-    REASSIGN OWNED BY "$user" TO postgres;
-    DROP OWNED BY "$user";
+    psql -v ON_ERROR_STOP=1 --echo-queries --dbname "$db" -v user="$user" <<\EOT
+    REASSIGN OWNED BY :"user" TO "cozystack:orphaned";
+    DROP OWNED BY :"user";
     EOT
     done
-    psql -v ON_ERROR_STOP=1 --echo-all -c "DROP USER \"$user\";"
+    psql -v ON_ERROR_STOP=1 --echo-queries -v user="$user" <<\EOT
+    DROP USER :"user";
+    EOT
     done
 
     echo "== delete databases"
@@ -264,20 +283,33 @@ stringData:
     DEFINED_ROLES="{{ range $database, $d := .Values.databases }}{{ $database }}_admin {{ $database }}_readonly {{ end }}"
     DELETE_ROLES=$(for role in $MANAGED_ROLES; do case " $DEFINED_ROLES " in *" $role "*) :;; *) echo $role;; esac; done)
 
+    {{- /*
+      Same per-database REASSIGN/DROP OWNED as the user pass, for the same reason.
+      The database list is read again because the pass above may have dropped
+      some of the databases the first read returned.
+    */}}
+    ALL_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate")
+
     echo "roles to delete: $DELETE_ROLES"
     for role in $DELETE_ROLES; do
-    psql -v ON_ERROR_STOP=1 --echo-all <<EOT
-    DO \$\$
-    DECLARE
-        member record;
-    BEGIN
-        FOR member IN SELECT m.rolname FROM pg_auth_members am JOIN pg_roles m ON am.member = m.oid JOIN pg_roles r ON am.roleid = r.oid WHERE r.rolname = '$role' LOOP
-            EXECUTE format('REVOKE %I FROM %I', '$role', member.rolname);
-        END LOOP;
-    END\$\$;
-    REASSIGN OWNED BY "$role" TO postgres;
-    DROP OWNED BY "$role";
-    DROP ROLE IF EXISTS "$role";
+    psql -v ON_ERROR_STOP=1 --echo-queries -v role="$role" <<\EOT
+    SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname) FROM pg_auth_members am JOIN pg_roles m ON am.member = m.oid JOIN pg_roles r ON am.roleid = r.oid WHERE r.rolname = :'role'\gexec
+    EOT
+    for db in $ALL_DBS; do
+    psql -v ON_ERROR_STOP=1 --echo-queries --dbname "$db" -v role="$role" <<\EOT
+    REASSIGN OWNED BY :"role" TO "cozystack:orphaned";
+    DROP OWNED BY :"role";
+    EOT
+    done
+    psql -v ON_ERROR_STOP=1 --echo-queries -v role="$role" <<\EOT
+    DROP ROLE IF EXISTS :"role";
+    EOT
+    done
+
+    for db in $ALL_DBS; do
+    psql -v ON_ERROR_STOP=1 --echo-queries --dbname "$db" <<\EOT
+    SELECT format('ALTER %s %s SECURITY INVOKER', CASE p.prokind WHEN 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END, p.oid::regprocedure) FROM pg_proc p WHERE p.proowner = '"cozystack:orphaned"'::regrole AND p.prosecdef\gexec
+    SELECT format('ALTER VIEW %s SET (security_invoker = true)', c.oid::regclass) FROM pg_class c WHERE c.relowner = '"cozystack:orphaned"'::regrole AND c.relkind = 'v' AND current_setting('server_version_num')::int >= 150000 AND NOT coalesce('security_invoker=true' = ANY (c.reloptions), false)\gexec
     EOT
     done
 
