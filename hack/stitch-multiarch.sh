@@ -14,7 +14,8 @@
 # the tree, whatever tag <t> it carries, with <tag> the <image-tag>:
 #
 #   1. B is the digest of <repo>:<tag>-arm64. No such image is not an error:
-#      talos and testing are amd64 only and have no arm64 build, so the ref is
+#      matchbox is built for both arches by the amd64 job and the e2e
+#      sandbox for amd64 only, so neither has an arm64 twin; the ref is
 #      skipped and named in the summary.
 #   2. Every tag this build pushed for <repo> is moved to an index of A and B
 #      if it points at A, so none is left naming the amd64 half alone: <tag>,

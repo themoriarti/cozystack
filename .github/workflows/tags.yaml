@@ -22,8 +22,9 @@ jobs:
   # <tag>-arm64, beside build-amd64, for prepare-release to stitch the two. A
   # stable tag is never built (promotion copies the rc's indexes), so it skips
   # this job. The packages artifact and the installer chart carry no
-  # architecture and are published by prepare-release alone; talos and the e2e
-  # sandbox are amd64 only.
+  # architecture and are published by prepare-release alone. The talos
+  # installer and matchbox are built for both arches in build-amd64, and the
+  # e2e sandbox is amd64 only, so none of them has an arm64 half here.
   build-arm64:
     name: Build arm64 images
     if: contains(github.ref_name, '-')

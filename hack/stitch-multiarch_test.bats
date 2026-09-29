@@ -375,9 +375,30 @@ _make_world() {
   echo "$tool" | grep -q 'yq --version | grep -q mikefarah'
 }
 
+@test "the amd64 release job rebuilds matchbox as a two-arch index before it captures the tree" {
+  # matchbox has no arm64 twin to stitch, so this rebuild is the only thing
+  # that makes the ref the gate checks an index. It needs a builder that can
+  # push an index while make build stays on the default docker driver.
+  wf=.github/workflows/tags.yaml
+  steps=$(yq -r '.jobs.build-amd64.steps[].name' "$wf")
+  pos() { echo "$steps" | grep -nxF "$1" | cut -d: -f1; }
+  bx=$(pos 'Set up Buildx for matchbox (docker-container driver)')
+  build=$(pos 'Build')
+  capture=$(pos 'Capture the stamped tree')
+  [ -n "$bx" ] && [ -n "$build" ] && [ -n "$capture" ]
+  [ "$bx" -lt "$build" ] && [ "$build" -lt "$capture" ]
+  sel='.jobs.build-amd64.steps[] | select(.id == "matchbox_buildx")'
+  [ "$(yq -r "$sel | .with.driver" "$wf")" = docker-container ]
+  [ "$(yq -r "$sel | .with.use" "$wf")" = false ]
+  run_=$(yq -r '.jobs.build-amd64.steps[] | select(.name == "Build") | .run' "$wf")
+  echo "$run_" | grep -qxE '[[:space:]]*make -C packages/core/talos image-matchbox PLATFORM=linux/amd64,linux/arm64 BUILDER="\$MATCHBOX_BUILDER"'
+  [ "$(yq -r '.jobs.build-amd64.steps[] | select(.name == "Build") | .env.MATCHBOX_BUILDER' "$wf")" = '${{ steps.matchbox_buildx.outputs.name }}' ]
+}
+
 @test "an arm64 tag that holds no arm64 image is skipped, not stitched" {
-  # The talos and testing packages pin amd64, so a stray <tag>-arm64 of theirs
-  # holds a second amd64 image. An index of two amd64 manifests would be wrong.
+  # The testing package pins amd64 (an x86 KVM sandbox), so a stray
+  # <tag>-arm64 of it holds a second amd64 image. An index of two amd64
+  # manifests would be wrong.
   tmp=$(mktemp -d)
   _stub_registry "$tmp/reg"
   _make_world "$tmp"
