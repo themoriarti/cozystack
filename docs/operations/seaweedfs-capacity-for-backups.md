@@ -28,7 +28,7 @@ The generic `KubePersistentVolumeFillingUp` alert does not cover this. It pages 
 
 - `SeaweedFSVolumeServerDiskLow` (warning): a volume server has less than 10% of its disk left before the `minFreeSpacePercent` reserve.
 - `SeaweedFSVolumeServerFull` (warning): a volume server cannot host another volume, because it is at the reserve, where all its volumes are read-only, or has no slot left, where buckets whose volumes on it are full stop taking writes.
-- `SeaweedFSWritesFailing` (critical): the master has failed to place writes continuously for 15 minutes. S3 uploads are failing now.
+- `SeaweedFSWritesFailing` (critical): the master has failed to place a write in every 5-minute window for 15 minutes. Other writes may still succeed in between. The usual cause is a bucket with no writable volume left that the master cannot grow, whose uploads all fail; a steady stream of newly created buckets, each failing a few picks while its first volumes grow, looks the same.
 
 On the Postgres side, `LastFailedArchiveTime` fires while WAL archiving keeps failing, and `KubePersistentVolumeFillingUp` fires as the WAL backlog fills the Postgres volume.
 

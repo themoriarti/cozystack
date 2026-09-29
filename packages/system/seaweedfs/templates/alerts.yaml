@@ -44,8 +44,8 @@ spec:
         severity: warning
     - alert: SeaweedFSWritesFailing
       annotations:
-        summary: SeaweedFS cannot place new writes.
-        description: {{`The SeaweedFS master in Namespace {{ $labels.namespace }} has failed to assign a volume for writes continuously for 15 minutes. Uploads to the affected buckets are failing.`}}
+        summary: SeaweedFS keeps failing to place writes.
+        description: {{`The SeaweedFS master in Namespace {{ $labels.namespace }} has failed to assign a volume for a write in every 5-minute window for 15 minutes. Writes may still land in between. The usual cause is a bucket with no writable volume left that the master cannot grow, whose uploads all fail; a steady stream of newly created buckets looks the same.`}}
       expr: |-
         sum by (namespace) (increase(SeaweedFS_master_pick_for_write_error{namespace="{{ $ns }}"}[5m])) > 0
       for: 15m
