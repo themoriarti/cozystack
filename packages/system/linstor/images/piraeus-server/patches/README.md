@@ -25,3 +25,6 @@ Custom patches for piraeus-server (linstor-server) v1.33.3.
 - **fix-min-io-probe-device-wait.diff** — Wait for temporary probe devices before reading pool I/O properties; retry failures and fall back to a probe when ZFS volumes have no usable device path.
   - Source PR: [#528](https://github.com/LINBIT/linstor-server/pull/528), fixes [#527](https://github.com/LINBIT/linstor-server/issues/527)
   - Adapted for v1.33.3; inactive LVM volumes retain the existing no-probe behavior.
+
+- **native-protoc.diff** — Download the protoc build for the build host's architecture instead of always `linux-x86_64`. The builder stage runs on `$BUILDPLATFORM`, so on a native arm64 builder the x86_64 protoc cannot execute and `./gradlew generateJava` fails with `Syntax error: ")" unexpected`.
+  - Not proposed upstream yet.
