@@ -2593,6 +2593,29 @@ tests:
           pattern: 'name: view'
         documentIndex: 3
 
+  - it: mode=System aborts the Job instead of leaving the OIDC kubeconfig Secret as the install-time placeholder when the tenant CA is missing
+    # A placeholder kubeconfig cannot authenticate, so the release must not go Ready with it.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-rbac-job.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      oidc.users:
+        - email: alice@example.org
+          role: admin
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'WARNING:.*leaving OIDC kubeconfig Secret as the install-time placeholder'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if \[ -z "\$CA_DATA" \]; then\n\s+echo "tenant admin kubeconfig has no certificate-authority-data; refusing to leave the OIDC kubeconfig Secret as the install-time placeholder" >&2\n\s+exit 1\n\s+fi'
+        documentIndex: 3
+
   ###############################################
   # mode: CustomConfig                          #
   ###############################################
