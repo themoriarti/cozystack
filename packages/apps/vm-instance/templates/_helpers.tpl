@@ -108,7 +108,7 @@ never in the exponent form a large float64 takes under %v.
     {{- $isNumber := or (kindIs "int" $count) (kindIs "int64" $count) (kindIs "float64" $count) -}}
     {{- $whole := and $isNumber (gt (float64 $count) 0.0) (le (float64 $count) 4294967295.0) (eq (floor $count) (float64 $count)) -}}
     {{- if or (not $whole) (regexMatch "^\\+?0[0-9]" $raw) -}}
-      {{- fail (printf "resources.%s (%s) must be a positive whole number, such as 2. It becomes the VM's domain.cpu.%s, which KubeVirt declares as an unsigned integer, so a millicore, suffixed, fractional, zero, out-of-range or leading-zero quantity cannot size the guest. Set a whole number, or remove the field." $field (include "virtual-machine.resourceAsWritten" $value) (ternary "cores" "sockets" (eq $field "cpu"))) -}}
+      {{- fail (printf "resources.%s (%s) must be a positive whole number, such as 2. It becomes the VM's domain.cpu.%s, which KubeVirt declares as an unsigned integer, so a millicore or other unit-suffixed, fractional, zero, negative, out-of-range or leading-zero quantity cannot size the guest. Set a whole number, or remove the field." $field (include "virtual-machine.resourceAsWritten" $value) (ternary "cores" "sockets" (eq $field "cpu"))) -}}
     {{- end -}}
     {{- $_ := set $counts $field ($count | int64) -}}
   {{- end -}}

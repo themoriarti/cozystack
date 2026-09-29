@@ -97,11 +97,11 @@ type Network struct {
 }
 
 type Resources struct {
-	// Number of CPU cores allocated, as a positive whole number such as `2`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.cores`.
+	// Number of CPU cores allocated, as a positive whole number such as `2`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.cores`.
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Amount of memory allocated, as a positive quantity such as `8Gi`.
 	Memory resource.Quantity `json:"memory,omitempty"`
-	// Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.sockets`.
+	// Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.sockets`.
 	Sockets resource.Quantity `json:"sockets,omitempty"`
 }
 
