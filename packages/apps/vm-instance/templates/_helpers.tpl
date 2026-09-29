@@ -83,7 +83,20 @@ zero is refused outright, because YAML decodes 010 as octal 8. Presence
 rather than truth, so that a 0 is refused instead of read as unset. Memory
 stays a quantity, which KubeVirt accepts as such, but a zero or negative
 amount sizes nothing.
+
+A number the operator left unquoted reaches the chart already decoded, and
+its spelling is gone, so the error labels it as read rather than written. The
+schema admits a number only as an integer, so it prints as whole digits,
+never in the exponent form a large float64 takes under %v.
 */}}
+{{- define "virtual-machine.resourceAsWritten" -}}
+{{- if kindIs "string" . -}}
+  {{- . -}}
+{{- else -}}
+  {{- printf "read as %.0f" (float64 .) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "virtual-machine.domainResources" -}}
 {{- $resources := .Values.resources | default dict -}}
 {{- $counts := dict -}}
@@ -95,7 +108,7 @@ amount sizes nothing.
     {{- $isNumber := or (kindIs "int" $count) (kindIs "int64" $count) (kindIs "float64" $count) -}}
     {{- $whole := and $isNumber (gt (float64 $count) 0.0) (le (float64 $count) 4294967295.0) (eq (floor $count) (float64 $count)) -}}
     {{- if or (not $whole) (regexMatch "^\\+?0[0-9]" $raw) -}}
-      {{- fail (printf "resources.%s (%s) must be a positive whole number, such as 2. It becomes the VM's domain.cpu.%s, which KubeVirt declares as an unsigned integer, so a millicore, suffixed, fractional, zero, out-of-range or leading-zero quantity cannot size the guest. Set a whole number, or remove the field." $field $raw (ternary "cores" "sockets" (eq $field "cpu"))) -}}
+      {{- fail (printf "resources.%s (%s) must be a positive whole number, such as 2. It becomes the VM's domain.cpu.%s, which KubeVirt declares as an unsigned integer, so a millicore, suffixed, fractional, zero, out-of-range or leading-zero quantity cannot size the guest. Set a whole number, or remove the field." $field (include "virtual-machine.resourceAsWritten" $value) (ternary "cores" "sockets" (eq $field "cpu"))) -}}
     {{- end -}}
     {{- $_ := set $counts $field ($count | int64) -}}
   {{- end -}}
@@ -104,7 +117,7 @@ amount sizes nothing.
 {{- if not (kindIs "invalid" $memory) -}}
   {{- $rawMemory := printf "%v" $memory -}}
   {{- if not (gt (regexFind "^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)" $rawMemory | float64) 0.0) -}}
-    {{- fail (printf "resources.memory (%s) must be a positive quantity, such as 8Gi. A zero or negative amount cannot size the guest. Set an amount, or remove the field." $rawMemory) -}}
+    {{- fail (printf "resources.memory (%s) must be a positive quantity, such as 8Gi. A zero or negative amount cannot size the guest. Set an amount, or remove the field." (include "virtual-machine.resourceAsWritten" $memory)) -}}
   {{- end -}}
 {{- end -}}
 {{- $result := dict -}}

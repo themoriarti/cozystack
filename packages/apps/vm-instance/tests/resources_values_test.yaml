@@ -133,7 +133,7 @@ tests:
         memory: 8Gi
     asserts:
       - failedTemplate:
-          errorPattern: '^resources\.cpu \(0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+          errorPattern: '^resources\.cpu \(read as 0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
 
   - it: refuses a quoted zero cpu
     set:
@@ -236,7 +236,7 @@ tests:
         memory: 8Gi
     asserts:
       - failedTemplate:
-          errorPattern: '^resources\.sockets \(0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.sockets,'
+          errorPattern: '^resources\.sockets \(read as 0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.sockets,'
 
   - it: refuses a sockets with a leading zero
     set:
@@ -329,7 +329,7 @@ tests:
         memory: 0
     asserts:
       - failedTemplate:
-          errorPattern: '^resources\.memory \(0\) must be a positive quantity'
+          errorPattern: '^resources\.memory \(read as 0\) must be a positive quantity'
 
   - it: refuses a zero memory written with a suffix
     set:
@@ -350,6 +350,19 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: '^resources\.memory \(-1Gi\) must be a positive quantity'
+
+  # An unquoted number reaches the chart already decoded, so its spelling is
+  # gone. The error says so, and prints the number in plain digits rather than
+  # the exponent form a large float formats to.
+  - it: prints a large unquoted cpu in plain digits
+    set:
+      resources:
+        cpu: 4294967296
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(read as 4294967296\) must be a positive whole number'
 
   # A cpu or sockets on its own emits no domain.cpu, so beside an instance type
   # it used to be ignored whatever it held. A value that cannot be a count is
