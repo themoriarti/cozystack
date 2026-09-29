@@ -117,9 +117,28 @@ type PerconaServerMongoDBPITR struct {
 	Enabled bool `json:"enabled,omitempty"`
 }
 
+// PerconaServerMongoDBStatus carries the fields the driver reads to know the
+// operator has acted on the cluster's current spec: ObservedGeneration is
+// stamped at the end of every cluster reconcile, and the PBMReady condition
+// goes False while the operator pushes a changed spec.backup config into pbm
+// and True once pbm holds it. A PerconaServerMongoDBBackup minted before both
+// hold is resolved by the operator against whatever pbm still carries.
 type PerconaServerMongoDBStatus struct {
-	State string `json:"state,omitempty"`
+	State              string                          `json:"state,omitempty"`
+	ObservedGeneration int64                           `json:"observedGeneration,omitempty"`
+	Conditions         []PerconaServerMongoDBCondition `json:"conditions,omitempty"`
 }
+
+// PerconaServerMongoDBCondition mirrors the operator's ClusterCondition down
+// to the two fields the driver compares.
+type PerconaServerMongoDBCondition struct {
+	Type   string `json:"type"`
+	Status string `json:"status"`
+}
+
+// ConditionPBMReady is the cluster condition the operator sets around pushing
+// spec.backup into pbm's own config.
+const ConditionPBMReady = "PBMReady"
 
 // ---------------------------------------------------------------------------
 // PerconaServerMongoDBBackup (on-demand logical backup)

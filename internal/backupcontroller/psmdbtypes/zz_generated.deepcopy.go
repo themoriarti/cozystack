@@ -20,7 +20,24 @@ func (in *PerconaServerMongoDB) DeepCopyInto(out *PerconaServerMongoDB) {
 	out.TypeMeta = in.TypeMeta
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
 	in.Spec.DeepCopyInto(&out.Spec)
-	out.Status = in.Status
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *PerconaServerMongoDBStatus) DeepCopyInto(out *PerconaServerMongoDBStatus) {
+	*out = *in
+	if in.Conditions != nil {
+		out.Conditions = make([]PerconaServerMongoDBCondition, len(in.Conditions))
+		copy(out.Conditions, in.Conditions)
+	}
+}
+
+func (in *PerconaServerMongoDBStatus) DeepCopy() *PerconaServerMongoDBStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(PerconaServerMongoDBStatus)
+	in.DeepCopyInto(out)
+	return out
 }
 
 func (in *PerconaServerMongoDB) DeepCopy() *PerconaServerMongoDB {

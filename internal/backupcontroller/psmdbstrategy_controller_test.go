@@ -1170,6 +1170,7 @@ func TestReconcileMongoDB_InjectsSystemStorageBeforePrecondition(t *testing.T) {
 	cluster := &psmdbtypes.PerconaServerMongoDB{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-app1"},
 		Spec:       psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{Enabled: true}},
+		Status:     psmdbtypes.PerconaServerMongoDBStatus{Conditions: []psmdbtypes.PerconaServerMongoDBCondition{{Type: psmdbtypes.ConditionPBMReady, Status: "True"}}},
 	}
 
 	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
@@ -1279,6 +1280,7 @@ func mongodbInjectFixture(enabled bool) (*backupsv1alpha1.BackupJob, *strategyv1
 	cluster := &psmdbtypes.PerconaServerMongoDB{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-app1"},
 		Spec:       psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{Enabled: enabled}},
+		Status:     psmdbtypes.PerconaServerMongoDBStatus{Conditions: []psmdbtypes.PerconaServerMongoDBCondition{{Type: psmdbtypes.ConditionPBMReady, Status: "True"}}},
 	}
 	resolved := &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.MongoDBStrategyKind, Name: "cozy-default-mongodb"},
@@ -2044,7 +2046,7 @@ func TestReconcileMongoDB_StorageRaceErrorRetried(t *testing.T) {
 	// Storage already declared so the reconcile skips the first-injection requeue
 	// and reaches the state switch.
 	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups"}}`)},
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 	}
 	errored := &psmdbtypes.PerconaServerMongoDBBackup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2140,7 +2142,7 @@ func TestReconcileMongoDB_StorageRaceReMintsPastLingeringCR(t *testing.T) {
 	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
 	job.Status.StartedAt = &metav1.Time{Time: time.Now()} // within deadline
 	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups"}}`)},
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 	}
 	// An errored CR from a previous retry, still carrying the finalizer.
 	lingering := &psmdbtypes.PerconaServerMongoDBBackup{
@@ -2230,7 +2232,7 @@ func TestReconcileMongoDB_TimedOutCancelUsesLiveState(t *testing.T) {
 		// Past the deadline but inside the live-read grace.
 		job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-psmdbDefaultBackupDeadline - psmdbLiveReadGrace/2)}
 		cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-			"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups"}}`)},
+			"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 		}
 		// Cached CR reads a not-started state (waiting) past the deadline.
 		cached := &psmdbtypes.PerconaServerMongoDBBackup{
@@ -2631,7 +2633,7 @@ func TestReconcileMongoDBRestore_FailsNamedWhenCredentialsSecretMissing(t *testi
 			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mongodbNameForApp("app1")},
 			Spec: psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
 				Enabled:  true,
-				Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)}},
+				Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)}},
 			}},
 		}
 	}
@@ -2749,7 +2751,7 @@ func TestReconcileMongoDB_OptOutRefusesStalePlatformStorage(t *testing.T) {
 		job.Status.StartedAt = &metav1.Time{Time: startedAt}
 		// Live cluster still carries the entry the driver injected.
 		cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-			"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+			"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 		}
 		c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
 		return &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}, c, resolved, job
@@ -2873,7 +2875,7 @@ func TestRequeueMongoDBBackupWaiting_WritesStatusOnlyOnChange(t *testing.T) {
 	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
 	job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-4 * psmdbDefaultBackupDeadline)}
 	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups"}}`)},
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 	}
 	running := &psmdbtypes.PerconaServerMongoDBBackup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2945,7 +2947,7 @@ func TestReconcileMongoDB_ArtifactRecordsTheCRsFlowNotTheFlag(t *testing.T) {
 	app.Spec.Backup.UseSystemBucket = false // flipped after the mint
 	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
 	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 	}
 	ready := &psmdbtypes.PerconaServerMongoDBBackup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -3134,7 +3136,7 @@ func TestReconcileMongoDB_ForeignStorageIsNotOwned(t *testing.T) {
 			job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
 			job.Status.StartedAt = &metav1.Time{Time: time.Now()}
 			cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-				"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+				"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 			}
 			sch := runtime.NewScheme()
 			_ = scheme.AddToScheme(sch)
@@ -3399,7 +3401,7 @@ func TestReconcileMongoDB_NonStorageErrorIsTerminal(t *testing.T) {
 	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
 	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
 	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 	}
 	errored := &psmdbtypes.PerconaServerMongoDBBackup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -3443,7 +3445,7 @@ func TestReconcileMongoDB_StorageRaceRetryBudgetExhausted(t *testing.T) {
 	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
 	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
 	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 	}
 	first := &psmdbtypes.PerconaServerMongoDBBackup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -3551,7 +3553,7 @@ func TestReconcileMongoDB_ArtifactCreateFailureRetriesThenNamesTheCR(t *testing.
 		job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
 		job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-startedAgo)}
 		cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-			"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+			"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 		}
 		ready := &psmdbtypes.PerconaServerMongoDBBackup{
 			ObjectMeta: metav1.ObjectMeta{
@@ -3755,7 +3757,7 @@ func TestReconcileMongoDB_OptOutRefusalSurvivesStrategyWithoutS3(t *testing.T) {
 	strategy.Spec.Template.S3 = nil // platform dropped the coordinates after the opt-out
 	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
 	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)},
 	}
 	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
 	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
@@ -3775,5 +3777,191 @@ func TestReconcileMongoDB_OptOutRefusalSurvivesStrategyWithoutS3(t *testing.T) {
 	}
 	if cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready"); cond == nil || cond.Reason != "PerconaServerMongoDBStorageStale" {
 		t.Errorf("expected Ready=False PerconaServerMongoDBStorageStale, got %+v", cond)
+	}
+}
+
+// settledPlatformEntry is the storage entry exactly as the driver applies it
+// for mongodbInjectFixture's strategy, so a cluster seeded with it mints
+// without the settle wait.
+const settledPlatformEntry = `{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`
+
+// The entry on the spec is not the storage pbm writes to: the operator pushes
+// spec.backup into pbm's own config in the cluster reconcile, stamping
+// observedGeneration at its end and flipping PBMReady False then True around
+// the push. A CR minted before both hold is resolved against the previous
+// coordinates, so the mint must wait for both, bounded by the deadline.
+func TestReconcileMongoDB_MintWaitsForPBMConfig(t *testing.T) {
+	run := func(t *testing.T, shape func(c *psmdbtypes.PerconaServerMongoDB), startedAgo time.Duration) (ctrl.Result, int, *backupsv1alpha1.BackupJob) {
+		job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+		job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-startedAgo)}
+		cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(settledPlatformEntry)}}
+		shape(cluster)
+		c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
+		r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+		res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+		if err != nil {
+			t.Fatalf("reconcileMongoDB: %v", err)
+		}
+		list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+		if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		p := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, p); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		return res, len(list.Items), p
+	}
+	held := func(t *testing.T, res ctrl.Result, minted int, p *backupsv1alpha1.BackupJob) {
+		if res.RequeueAfter == 0 || minted != 0 {
+			t.Fatalf("the mint must wait for the operator, got res=%+v minted=%d", res, minted)
+		}
+		if cond := apimeta.FindStatusCondition(p.Status.Conditions, "Ready"); cond == nil || cond.Reason != "PerconaServerMongoDBPBMConfigPending" {
+			t.Errorf("expected Ready=False PerconaServerMongoDBPBMConfigPending, got %+v", cond)
+		}
+	}
+
+	t.Run("operator has not seen this generation: held", func(t *testing.T) {
+		res, minted, p := run(t, func(c *psmdbtypes.PerconaServerMongoDB) {
+			c.Generation = 5
+			c.Status.ObservedGeneration = 4
+		}, 0)
+		held(t, res, minted, p)
+	})
+	t.Run("PBMReady False while the config is pushed: held", func(t *testing.T) {
+		res, minted, p := run(t, func(c *psmdbtypes.PerconaServerMongoDB) {
+			c.Status.Conditions = []psmdbtypes.PerconaServerMongoDBCondition{{Type: psmdbtypes.ConditionPBMReady, Status: "False"}}
+		}, 0)
+		held(t, res, minted, p)
+	})
+	t.Run("PBMReady never set (cluster never had a backup config): held", func(t *testing.T) {
+		res, minted, p := run(t, func(c *psmdbtypes.PerconaServerMongoDB) { c.Status.Conditions = nil }, 0)
+		held(t, res, minted, p)
+	})
+	t.Run("generation observed and PBMReady True: mints", func(t *testing.T) {
+		_, minted, _ := run(t, func(c *psmdbtypes.PerconaServerMongoDB) {
+			c.Generation = 5
+			c.Status.ObservedGeneration = 5
+		}, 0)
+		if minted != 1 {
+			t.Errorf("with the config applied the CR must be minted, got %d", minted)
+		}
+	})
+	t.Run("never applied past the deadline: fails, nothing minted", func(t *testing.T) {
+		_, minted, p := run(t, func(c *psmdbtypes.PerconaServerMongoDB) { c.Status.Conditions = nil }, 2*psmdbDefaultBackupDeadline)
+		if minted != 0 || p.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed || !strings.Contains(p.Status.Message, "backup configuration applied") {
+			t.Errorf("an operator that never applies the config must fail the job at the deadline with nothing minted, got minted=%d phase=%q msg=%q", minted, p.Status.Phase, p.Status.Message)
+		}
+	})
+}
+
+// The reads the state switch still needs once a CR exists (strategy, app) are
+// bounded by the running ceiling, not the backup deadline: a strategy absent
+// for one reconcile 40 minutes into a streaming dump must not fail the job and
+// leave the finalized CR unreachable. Past the ceiling the failure names the CR.
+func TestReconcileMongoDB_ReadsBehindExistingCRDoNotFailAtDeadline(t *testing.T) {
+	build := func(t *testing.T, startedAgo time.Duration, withStrategy, withApp bool) (*BackupJobReconciler, client.Client, *ResolvedBackupConfig, *backupsv1alpha1.BackupJob) {
+		job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+		job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-startedAgo)}
+		running := &psmdbtypes.PerconaServerMongoDBBackup{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "tenant", Name: "op-running", Finalizers: []string{psmdbDeleteBackupFinalizer},
+				Labels: map[string]string{
+					backupsv1alpha1.OwningJobNameLabel:      job.Name,
+					backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+				},
+			},
+			Status: psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateRunning},
+		}
+		objs := []client.Object{job, cluster, running}
+		if withStrategy {
+			objs = append(objs, strategy)
+		}
+		if withApp {
+			objs = append(objs, app)
+		}
+		c := newMongoDBStrategyTestClient(t, objs...)
+		return &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}, c, resolved, job
+	}
+	getJob := func(t *testing.T, c client.Client, name string) *backupsv1alpha1.BackupJob {
+		p := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: name}, p); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		return p
+	}
+	crIntact := func(t *testing.T, c client.Client) {
+		cr := &psmdbtypes.PerconaServerMongoDBBackup{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-running"}, cr); err != nil || !cr.DeletionTimestamp.IsZero() {
+			t.Errorf("the running CR must be left alone, err=%v", err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name                  string
+		withStrategy, withApp bool
+		reason                string
+	}{
+		{"strategy absent", false, true, "MongoDBStrategyNotReady"},
+		{"app absent", true, false, "MongoDBApplicationNotReady"},
+	} {
+		t.Run(tc.name+" past the deadline: held, not failed", func(t *testing.T) {
+			r, c, resolved, job := build(t, 40*time.Minute, tc.withStrategy, tc.withApp)
+			res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+			if err != nil {
+				t.Fatalf("reconcileMongoDB: %v", err)
+			}
+			if res.RequeueAfter == 0 {
+				t.Fatalf("expected a named wait behind the running CR, got %+v", res)
+			}
+			p := getJob(t, c, job.Name)
+			if p.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("a job with a streaming CR must not fail on the backup deadline, got %q", p.Status.Message)
+			}
+			if cond := apimeta.FindStatusCondition(p.Status.Conditions, "Ready"); cond == nil || cond.Reason != tc.reason || !strings.Contains(cond.Message, "op-running") {
+				t.Errorf("expected Ready=False %s naming the CR, got %+v", tc.reason, cond)
+			}
+			crIntact(t, c)
+		})
+	}
+
+	t.Run("strategy absent past the ceiling: fails naming the CR left in place", func(t *testing.T) {
+		r, c, resolved, job := build(t, 2*psmdbRunningCeiling, false, true)
+		if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+			t.Fatalf("reconcileMongoDB: %v", err)
+		}
+		p := getJob(t, c, job.Name)
+		if p.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed || !strings.Contains(p.Status.Message, "op-running") || !strings.Contains(p.Status.Message, "left in place") {
+			t.Errorf("past the ceiling the job must fail naming the CR left in place, got phase=%q msg=%q", p.Status.Phase, p.Status.Message)
+		}
+		crIntact(t, c)
+	})
+}
+
+// The settle check compares the entry with what the apply writes, field by
+// field: a non-empty value the entry lacks is a change the apply adds, a
+// different type is a change, and a zero value the entry lacks is not.
+func TestPsmdbStorageEntrySettled(t *testing.T) {
+	s3 := &strategyv1alpha1.MongoDBStorageS3{Bucket: "cozy-backups", EndpointURL: "https://s3.example", Prefix: "tenant/app1", CredentialsSecret: "cozy-backups-creds"}
+	on := true
+	cases := []struct {
+		name string
+		live string
+		s3   *strategyv1alpha1.MongoDBStorageS3
+		want bool
+	}{
+		{"as applied", settledPlatformEntry, s3, true},
+		{"operator rewrote it without the empty region and the false flag", `{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds"}}`, s3, true},
+		{"entry lacks the endpoint the apply adds", `{"type":"s3","s3":{"bucket":"cozy-backups","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds"}}`, s3, false},
+		{"entry lacks forcePathStyle the strategy now sets", settledPlatformEntry, &strategyv1alpha1.MongoDBStorageS3{Bucket: "cozy-backups", EndpointURL: "https://s3.example", Prefix: "tenant/app1", CredentialsSecret: "cozy-backups-creds", ForcePathStyle: &on}, false},
+		{"entry carries forcePathStyle the strategy dropped", `{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","forcePathStyle":true}}`, s3, false},
+		{"bucket moved", `{"type":"s3","s3":{"bucket":"old","endpointUrl":"https://s3.example","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds"}}`, s3, false},
+		{"different storage type", `{"type":"azure","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds"}}`, s3, false},
+		{"absent", ``, s3, false},
+	}
+	for _, tc := range cases {
+		if got := psmdbStorageEntrySettled(runtime.RawExtension{Raw: []byte(tc.live)}, tc.s3); got != tc.want {
+			t.Errorf("%s: settled=%v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

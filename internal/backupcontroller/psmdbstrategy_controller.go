@@ -235,10 +235,31 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 	}
 
+	// The job's operator CR, if a previous reconcile minted one, resolved before
+	// anything else is read. Everything up to the mint (the strategy, app and
+	// cluster reads, the legacy-render and no-coordinates holds, the storage
+	// injection, the precondition, the ownership decision) is bounded by the
+	// backup deadline and runs in full only while there is no CR: once one
+	// exists the dump is under way against the storage it names, and the state
+	// switch below handles it off its own finalizer, so a flag flipped, a
+	// strategy edited or removed, or backups disabled mid-dump cannot fail or
+	// redirect it here. The reads the state switch still needs (the strategy
+	// and app, for the artifact) are then bounded by the running ceiling
+	// instead, and past it the job fails naming the CR left in place, the same
+	// way a dump that never finishes does.
+	existing, err := r.findMongoDBBackupForJob(ctx, j)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	strategy := &strategyv1alpha1.MongoDB{}
 	if err := r.Get(ctx, client.ObjectKey{Name: resolved.StrategyRef.Name}, strategy); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.requeueStrategyNotReady(ctx, j, resolved.StrategyRef.Name)
+			if existing == nil {
+				return r.requeueStrategyNotReady(ctx, j, resolved.StrategyRef.Name)
+			}
+			return r.requeueMongoDBBackupBehindCR(ctx, j, existing, "MongoDBStrategyNotReady",
+				fmt.Sprintf("waiting for MongoDB strategy %s to exist", resolved.StrategyRef.Name))
 		}
 		return ctrl.Result{}, err
 	}
@@ -252,6 +273,10 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			// grace the psmdb-CR existence gate below uses, instead of failing
 			// terminally on a transient ordering race. StartedAt was persisted
 			// above, so the deadline clock is already running.
+			if existing != nil {
+				return r.requeueMongoDBBackupBehindCR(ctx, j, existing, "MongoDBApplicationNotReady",
+					fmt.Sprintf("waiting for MongoDB application %s/%s to exist", j.Namespace, j.Spec.ApplicationRef.Name))
+			}
 			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
 					"MongoDB application %s/%s not found within %s",
@@ -267,63 +292,48 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 
 	rendered, err := renderMongoDBTemplate(strategy.Spec.Template, app, resolved.Parameters)
 	if err != nil {
+		if existing != nil {
+			return r.requeueMongoDBBackupBehindCR(ctx, j, existing, "MongoDBStrategyNotReady",
+				fmt.Sprintf("failed to template MongoDB strategy: %v", err))
+		}
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to template MongoDB strategy: %v", err))
 	}
 	storageName := psmdbStorageNameOrDefault(rendered.StorageName)
-
-	// The operator-side PerconaServerMongoDB CR carries the prefixed release
-	// name. Verify it exists and has backups wired up before we ask the
-	// operator to snapshot it. psmdb only services PerconaServerMongoDBBackup
-	// CRs when spec.backup.enabled=true and the named storage is declared;
-	// without that the Backup would sit in waiting/error forever, so surface a
-	// precise precondition instead. Bounded by psmdbDefaultBackupDeadline —
-	// StartedAt was persisted above, so the clock is already running.
 	psmdbName := mongodbNameForApp(j.Spec.ApplicationRef.Name)
-	cluster := &psmdbtypes.PerconaServerMongoDB{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: j.Namespace, Name: psmdbName}, cluster); err != nil {
-		if apierrors.IsNotFound(err) {
-			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"psmdb.percona.com/PerconaServerMongoDB %s/%s never reached existence within %s",
-					j.Namespace, psmdbName, psmdbDefaultBackupDeadline))
-			}
-			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBNotReady",
-				fmt.Sprintf("waiting for psmdb.percona.com/PerconaServerMongoDB %s/%s to exist", j.Namespace, psmdbName))
-		}
-		return ctrl.Result{}, err
-	}
-	// The job's operator CR, if a previous reconcile minted one. Everything up
-	// to the mint (the legacy-render and no-coordinates holds, the storage
-	// injection, the precondition, the ownership decision) runs only while
-	// there is none: once a CR exists the dump is under way against the storage
-	// it names, and the state switch below handles it off its own finalizer, so
-	// a flag flipped, a strategy edited or backups disabled mid-dump cannot fail
-	// or redirect it here. The deadline that bounds those holds would otherwise
-	// fail a streaming dump at 30 minutes, bypassing the running ceiling and
-	// leaving a finalized CR that no Backup object reaches.
-	existing, err := r.findMongoDBBackupForJob(ctx, j)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
 
 	var (
 		mdbBackup       *psmdbtypes.PerconaServerMongoDBBackup
 		platformStorage bool
 	)
 	if existing == nil {
+		// The operator-side PerconaServerMongoDB CR carries the prefixed release
+		// name. Verify it exists and has backups wired up before we ask the
+		// operator to snapshot it. psmdb only services PerconaServerMongoDBBackup
+		// CRs when spec.backup.enabled=true and the named storage is declared;
+		// without that the Backup would sit in waiting/error forever, so surface
+		// a precise precondition instead. Bounded by psmdbDefaultBackupDeadline —
+		// StartedAt was persisted above, so the clock is already running.
+		//
 		// The mint-time decisions below read the cluster's render (tasks, pitr,
-		// the storage entry), and a cached read can lag a re-render by one
-		// reconcile: a flag already true with the tasks not yet visible is a
-		// consistent pre-flip view that would let the apply force-own an entry
-		// the tenant's restored tasks name. Decide from the apiserver instead,
-		// the way the deadline cancel reads the operator CR live. Without a
-		// dynamic client (tests) the cached object stands.
-		if r.Interface != nil {
-			live, lerr := r.psmdbClusterLive(ctx, j.Namespace, psmdbName)
-			if lerr != nil {
-				return ctrl.Result{}, lerr
+		// the storage entry) and the operator's view of it, and a cached read
+		// can lag a re-render by one reconcile: a flag already true with the
+		// tasks not yet visible is a consistent pre-flip view that would let the
+		// apply force-own an entry the tenant's restored tasks name. Read from
+		// the apiserver when a dynamic client is present, the way the deadline
+		// cancel reads the operator CR live; without one (tests) the cached
+		// object stands.
+		cluster, err := r.psmdbClusterForMint(ctx, j.Namespace, psmdbName)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+					return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+						"psmdb.percona.com/PerconaServerMongoDB %s/%s never reached existence within %s",
+						j.Namespace, psmdbName, psmdbDefaultBackupDeadline))
+				}
+				return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBNotReady",
+					fmt.Sprintf("waiting for psmdb.percona.com/PerconaServerMongoDB %s/%s to exist", j.Namespace, psmdbName))
 			}
-			cluster = live
+			return ctrl.Result{}, err
 		}
 
 		// The app flag is the tenant's desired value: the app CR is projected
@@ -345,7 +355,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 				// a dump the platform does not own.
 				if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 					return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-						"the MongoDB strategy %s still carried no s3 coordinates to inject %s after the job started; set spec.template.s3 on it",
+						"the MongoDB strategy %s still carries no s3 coordinates to inject (%s after the job started); set spec.template.s3 on it",
 						resolved.StrategyRef.Name, psmdbDefaultBackupDeadline))
 				}
 				return r.requeueMongoDBBackupWaiting(ctx, j, "MongoDBStrategyHasNoS3",
@@ -354,7 +364,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			if legacyRender {
 				if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 					return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-						"psmdb.percona.com/PerconaServerMongoDB %s/%s still carries the chart's scheduled tasks/pitr from a render without backup.useSystemBucket %s after the job started; the release has not rendered the flag (check the HelmRelease), and the driver does not inject over a legacy storage",
+						"psmdb.percona.com/PerconaServerMongoDB %s/%s still carries the chart's scheduled tasks/pitr from a render without backup.useSystemBucket (%s after the job started); the release has not rendered the flag (check the HelmRelease), and the driver does not inject over a legacy storage",
 						j.Namespace, psmdbName, psmdbDefaultBackupDeadline))
 				}
 				return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBLegacyRender",
@@ -426,6 +436,26 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 				return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageInjected",
 					fmt.Sprintf("injected storage %q; waiting for the cluster to reflect it before starting the backup", storageName))
 			}
+			// The entry is on the spec; whether pbm holds it is the operator's to
+			// say. At the pinned version the backup reconciler hands pbm only a
+			// storage name and records status.s3 from the spec entry it read,
+			// while the storage pbm writes to is what the cluster reconciler last
+			// pushed into pbm's own config (reconcilePBM: PBMReady goes False, the
+			// config is set, then True; observedGeneration is stamped when that
+			// reconcile ends). A CR minted between the apply and that push dumps
+			// to the previous coordinates while its Backup records the new ones,
+			// so the mint waits for both signals. Bounded by the deadline like the
+			// other waits.
+			if !psmdbPBMConfigApplied(cluster) {
+				if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+					return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+						"psmdb.percona.com/PerconaServerMongoDB %s/%s did not report the backup configuration applied (observedGeneration %d of %d, %s %s) within %s",
+						j.Namespace, psmdbName, cluster.Status.ObservedGeneration, cluster.Generation, psmdbtypes.ConditionPBMReady, psmdbConditionStatus(cluster, psmdbtypes.ConditionPBMReady), psmdbDefaultBackupDeadline))
+				}
+				return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBPBMConfigPending",
+					fmt.Sprintf("waiting for the operator to push spec.backup into pbm (observedGeneration %d of %d, %s %s) before starting the backup",
+						cluster.Status.ObservedGeneration, cluster.Generation, psmdbtypes.ConditionPBMReady, psmdbConditionStatus(cluster, psmdbtypes.ConditionPBMReady)))
+			}
 		}
 		if msg := psmdbBackupPrecondition(cluster, storageName); msg != "" {
 			const hint = "set backup.enabled=true on the MongoDB application"
@@ -459,7 +489,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			// external bucket and drift when the platform bucket is re-provisioned.
 			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"psmdb.percona.com/PerconaServerMongoDB %s/%s storage %q is still the entry injected for the system bucket (credentialsSecret %q) while backup.useSystemBucket=false, %s after the job started; delete that storage entry from the PerconaServerMongoDB by hand or set backup.useSystemBucket=true again (see docs/operations/backup-classes.md)",
+					"psmdb.percona.com/PerconaServerMongoDB %s/%s storage %q is still the entry injected for the system bucket (credentialsSecret %q) while backup.useSystemBucket=false (%s after the job started); delete that storage entry from the PerconaServerMongoDB by hand or set backup.useSystemBucket=true again (see docs/operations/backup-classes.md)",
 					j.Namespace, psmdbName, storageName, cred, psmdbDefaultBackupDeadline))
 			}
 			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageStale",
@@ -471,7 +501,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			// against a bucket the platform does not own.
 			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"psmdb.percona.com/PerconaServerMongoDB %s/%s storage %q did not carry the system-bucket coordinates (bucket %q, credentialsSecret %q) %s after the job started; refusing to mint a platform-owned backup against bucket %q",
+					"psmdb.percona.com/PerconaServerMongoDB %s/%s storage %q did not carry the system-bucket coordinates (bucket %q, credentialsSecret %q) even %s after the job started; refusing to mint a platform-owned backup against bucket %q",
 					j.Namespace, psmdbName, storageName, rendered.S3.Bucket, psmdbInjectedCredentialsSecret(rendered.S3), psmdbDefaultBackupDeadline, bucket))
 			}
 			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageForeign",
@@ -973,10 +1003,12 @@ func psmdbArtifactWindow(b *psmdbtypes.PerconaServerMongoDBBackup, startedAt *me
 
 // psmdbStorageEntrySettled reports whether the live storage entry already says
 // what the driver is about to apply: present, and agreeing on every field the
-// driver writes (fields the server adds on its own are ignored). A false answer
-// means the apply that follows changes the entry, so the operator's cache has
-// something new to observe before a CR may be minted against it. An entry that
-// lacks a driver field was not written by the driver and is left to the apply.
+// driver writes. A false answer means the apply that follows changes the
+// entry, so the operator has something new to push into pbm before a CR may
+// be minted against it. A field the entry lacks counts as its zero value, so
+// an entry the operator rewrote without an empty region or a false flag is
+// still settled, while a non-empty value the entry lacks is a change the apply
+// adds. Fields the server adds on its own are ignored.
 func psmdbStorageEntrySettled(raw runtime.RawExtension, s3 *strategyv1alpha1.MongoDBStorageS3) bool {
 	if len(raw.Raw) == 0 {
 		return false
@@ -989,12 +1021,19 @@ func psmdbStorageEntrySettled(raw runtime.RawExtension, s3 *strategyv1alpha1.Mon
 		return false
 	}
 	desired := buildMongoDBSystemStorageEntry(s3)
-	if want, _ := desired["type"].(string); live.Type != "" && live.Type != want {
+	if want, _ := desired["type"].(string); live.Type != want {
 		return false
 	}
 	want := desired["s3"].(map[string]interface{})
 	for k, v := range want {
-		if got, ok := live.S3[k]; ok && got != v {
+		got, ok := live.S3[k]
+		if !ok {
+			if v != "" && v != false {
+				return false
+			}
+			continue
+		}
+		if got != v {
 			return false
 		}
 	}
@@ -1006,6 +1045,56 @@ func psmdbStorageEntrySettled(raw runtime.RawExtension, s3 *strategyv1alpha1.Mon
 		}
 	}
 	return true
+}
+
+// psmdbPBMConfigApplied reports whether the operator has acted on the
+// cluster's current spec.backup: its last reconcile saw this generation, and
+// the PBMReady condition says pbm holds the config that reconcile pushed. An
+// absent condition is not ready: at the pinned version the operator sets it
+// the first time a backup config reaches pbm, so a cluster that never had one
+// (the useSystemBucket render before its first injection) is exactly the case
+// to wait on.
+func psmdbPBMConfigApplied(cluster *psmdbtypes.PerconaServerMongoDB) bool {
+	return cluster.Status.ObservedGeneration >= cluster.Generation &&
+		psmdbConditionStatus(cluster, psmdbtypes.ConditionPBMReady) == "True"
+}
+
+// psmdbConditionStatus returns the status of the named cluster condition, or
+// "Unknown" when the operator has not set it.
+func psmdbConditionStatus(cluster *psmdbtypes.PerconaServerMongoDB, condType string) string {
+	for _, c := range cluster.Status.Conditions {
+		if c.Type == condType {
+			return c.Status
+		}
+	}
+	return "Unknown"
+}
+
+// psmdbClusterForMint reads the PerconaServerMongoDB the mint-time decisions
+// are made on: from the apiserver when a dynamic client is configured, from
+// the manager's cache otherwise.
+func (r *BackupJobReconciler) psmdbClusterForMint(ctx context.Context, namespace, name string) (*psmdbtypes.PerconaServerMongoDB, error) {
+	if r.Interface != nil {
+		return r.psmdbClusterLive(ctx, namespace, name)
+	}
+	cluster := &psmdbtypes.PerconaServerMongoDB{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, cluster); err != nil {
+		return nil, err
+	}
+	return cluster, nil
+}
+
+// requeueMongoDBBackupBehindCR names a wait on a job whose operator CR already
+// exists (a read the artifact needs is failing), bounded by the running
+// ceiling rather than the backup deadline: the dump is under way and nothing
+// here may cancel it. Past the ceiling the job fails naming the CR, which is
+// left in place as the handle to whatever pbm wrote.
+func (r *BackupJobReconciler) requeueMongoDBBackupBehindCR(ctx context.Context, j *backupsv1alpha1.BackupJob, cr *psmdbtypes.PerconaServerMongoDBBackup, reason, message string) (ctrl.Result, error) {
+	if j.Status.StartedAt != nil && time.Since(j.Status.StartedAt.Time) > psmdbRunningCeiling {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+			"%s for over %s after the job started; the operator backup %s is left in place, not cancelled", message, psmdbRunningCeiling, cr.Name))
+	}
+	return r.requeueMongoDBBackupWaiting(ctx, j, reason, fmt.Sprintf("%s (operator backup %s is under way and is left alone)", message, cr.Name))
 }
 
 // psmdbClusterGVR addresses PerconaServerMongoDB through the dynamic client for
