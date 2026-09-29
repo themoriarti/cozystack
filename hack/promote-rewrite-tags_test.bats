@@ -38,11 +38,9 @@
   # --exclude='*.md' keeps documentation examples (which carry placeholder or
   # historical versions) out of the fixture, matching the postcondition.
   # Match 'cozystack/cozystack' WITHOUT a host prefix or trailing slash. The
-  # host is not always contiguous with the repository: keycloak-operator splits
-  # it into a sibling `registry: ghcr.io` + `repository:
-  # cozystack/cozystack/keycloak-operator`, and kubeovn puts it in
+  # host is not always contiguous with the repository: kubeovn puts it in
   # `global.registry.address: ghcr.io/cozystack/cozystack` with `repository:
-  # kubeovn`. A 'ghcr\.io/cozystack/cozystack/' pattern silently skips both
+  # kubeovn`. A 'ghcr\.io/cozystack/cozystack/' pattern silently skips such
   # files, shrinking the fixture and under-testing the split shapes.
   for f in $(grep -rIl --exclude-dir=charts --exclude='*.md' 'cozystack/cozystack' packages/); do
     mkdir -p "$tmp/$(dirname "$f")"
@@ -261,7 +259,7 @@
   # Parsing every YAML under packages/ costs ~30s; this is the same file set
   # for the purpose of finding FIRST-PARTY refs (canon discards everything
   # else anyway) and runs in about a second. The marker covers the split forms
-  # too, so keycloak-operator and kubeovn are not filtered out.
+  # too, so kubeovn is not filtered out.
   grep -rIlE --exclude-dir=charts --exclude='*.md' \
     -e 'cozystack/cozystack' packages/ \
     | grep -E '\.(yaml|yml|tag)$' \

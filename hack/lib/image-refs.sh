@@ -97,7 +97,7 @@ image_ref_files() {
 #   1. single string  <repo>:<tag>@sha256:<digest>   (e.g. .cozystackAPI.image)
 #   2. split map      {[registry,] repository, tag, digest}   (e.g. .cilium.image)
 #   3. split map      {[registry,] repository, tag: <tag>@sha256:<digest>}
-#                     (e.g. .linstorCSI.image; .keycloak-operator.image adds registry)
+#                     (e.g. .linstorCSI.image)
 #   4. chart-global   global.registry.address + global.images.<n>.{repository, tag}
 #                     (kube-ovn's wrapper chart)
 #   5. OCI artifact   {platformSourceUrl: oci://<repo>, platformSourceRef: digest=sha256:<digest>}

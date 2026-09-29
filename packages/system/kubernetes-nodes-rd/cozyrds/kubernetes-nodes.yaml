@@ -6,13 +6,14 @@ metadata:
     # A worker pool's talos-reconcile Job waits (up to ~10m) for control-plane
     # objects owned by the parent kubernetes release (apiserver Service ClusterIP,
     # Talos CA, Kubernetes CA) before it can produce the pool's TalosConfigTemplate.
-    # Give the install/upgrade a budget above the default Flux wait so a pool
-    # created alongside (or slightly ahead of) its parent does not remediate.
+    # With readiness waiting disabled below, nothing in this chart's install or
+    # upgrade is bounded by this timeout: the Job is a plain resource that keeps
+    # running asynchronously, and the chart has no install or upgrade hooks.
+    # The 15m only takes effect if waiting is re-enabled or such a hook is added.
     release.cozystack.io/helm-install-timeout: "15m"
     # The pool cannot be Ready until its workers join, which cannot happen until
     # the parent control plane has emitted the Service/Secrets the reconcile Job
-    # waits on. Skip the readiness wait so the release settles; the Job runs to
-    # completion asynchronously.
+    # waits on. Skip the readiness wait so the release settles while the Job runs.
     release.cozystack.io/helm-install-disable-wait: "true"
 spec:
   application:

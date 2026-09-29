@@ -84,7 +84,6 @@
 {{- $podCIDR := "10.243.0.0/16" }}
 {{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $ingress := .Values._namespace.ingress }}
-{{- $host := .Values._namespace.host }}
 {{- if not $etcd }}
 ---
 apiVersion: v1
@@ -775,7 +774,7 @@ spec:
     ingress:
       extraAnnotations:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
-      hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name $host) }}:443
+      hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name (include "cozy-lib.ns-host-required" .)) }}:443
       className: "{{ $ingress }}"
     additionalServicePorts:
       - name: talos-trustd

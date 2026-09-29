@@ -169,3 +169,26 @@
   actual=$(echo "$out" | jq 'length')
   [ "$expected" -eq "$actual" ]
 }
+
+@test "every package that builds an image is in the build list" {
+  # The build list is maintained by hand, and a package missing from it is
+  # rebuilt by no CI path: its Dockerfile and patches keep changing while the
+  # pinned image stays whatever was last pushed by hand. Derive the set from
+  # the package Makefiles so a new image target cannot be forgotten.
+  listed=$(sed -n '/^build:/,/^[^[:space:]]/p' Makefile \
+    | grep -oE 'make -C packages/[A-Za-z0-9._/-]+ image' \
+    | sed -E 's/^make -C (packages[^ ]+) image$/\1/')
+  missing=""
+  checked=0
+  for m in packages/*/*/Makefile; do
+    grep -q 'docker buildx build' "$m" || continue
+    checked=$((checked + 1))
+    d=${m%/Makefile}
+    printf '%s\n' "$listed" | grep -qx "$d" || missing="$missing $d"
+  done
+  [ "$checked" -gt 0 ]
+  if [ -n "$missing" ]; then
+    echo "image-building packages missing from the root Makefile build: list:$missing" >&2
+    false
+  fi
+}
