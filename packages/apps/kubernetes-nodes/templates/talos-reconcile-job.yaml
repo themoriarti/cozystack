@@ -344,6 +344,15 @@ spec:
                         nodeLabels:
                           gpu: "on"
                         {{- end }}
+                        {{- /* Emitted only when the pool resolves to a non-empty list, so a
+                               pool without modules renders the machine config it rendered
+                               before this field existed. */}}
+                        {{- $kernelModules := include "kubernetes-nodes.kernelModules" . }}
+                        {{- if $kernelModules }}
+                        kernel:
+                          modules:
+                            {{- $kernelModules | nindent 28 }}
+                        {{- end }}
                         kubelet:
                           image: ghcr.io/siderolabs/kubelet:{{ .kubeletVersion }}
                           extraConfig:
@@ -429,12 +438,18 @@ spec:
 {{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $dnsDomain := include "kubernetes.tenantClusterDomain" $ }}
 {{- $mgmtClusterDomain := (index (.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
+{{- /* kernelModules carries no entry in values.yaml, so the key is absent here
+       unless the operator set it, and `dict` keeps it nil — which
+       kubernetes-nodes.kernelModules reads as "unset", as opposed to an explicit
+       empty list that opts the pool out. Defaulting it to `list` here would
+       collapse the two. */}}
 {{- $group := dict
       "instanceType" .Values.instanceType
       "resources" .Values.resources
       "gpus" .Values.gpus
       "kubelet" .Values.kubelet
       "osImage" .Values.osImage
+      "kernelModules" .Values.kernelModules
 }}
 {{- /* Mirror the kubelet-reservation computation from nodegroup.yaml so the
        worker machineconfig this Job applies carries the same numbers the
