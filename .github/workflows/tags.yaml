@@ -291,6 +291,19 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
+      # Only for the matchbox rebuild below: the default docker driver cannot
+      # build an index, and `use: false` keeps make build on that driver.
+      - name: Set up Buildx for matchbox (docker-container driver)
+        if: steps.check_release.outputs.release_exists == 'false'
+        id: matchbox_buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+          use: false
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
       # Build project artifacts
       - name: Build
         if: steps.check_release.outputs.release_exists == 'false'
@@ -300,7 +313,12 @@ jobs:
           # The arm64 assets published below install this image, and building
           # its arm64 half needs no QEMU, so it is pushed again as both arches.
           make -C packages/core/talos image-talos PLATFORM=linux/amd64,linux/arm64
+          # The arm64 leg skips the talos package, so matchbox gets no arm64
+          # half to stitch. Its Dockerfile only copies files, so both arches
+          # build here without QEMU and the stamped ref pins the index.
+          make -C packages/core/talos image-matchbox PLATFORM=linux/amd64,linux/arm64 BUILDER="$MATCHBOX_BUILDER"
         env:
+          MATCHBOX_BUILDER: ${{ steps.matchbox_buildx.outputs.name }}
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           # Cache manifests are registry-portable (oci-mediatypes=true) — read
           # them from OCIR while pushing images to GHCR. A missing :buildcache
