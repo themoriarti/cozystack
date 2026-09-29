@@ -81,8 +81,11 @@ whole count within uint32 gets past this point. The raw spelling is decoded
 as YAML, so +2, 2.0 or 1e1 pass as the integers they decode to; a leading
 zero is refused outright, because YAML decodes 010 as octal 8. Presence
 rather than truth, so that a 0 is refused instead of read as unset. Memory
-stays a quantity, which KubeVirt accepts as such, but a zero or negative
-amount sizes nothing.
+stays a quantity, which KubeVirt accepts as such, but KubeVirt v1.9.0
+admission refuses a non-zero amount below 1M
+(validateMemoryRequestsNegativeOrNull in
+pkg/virt-api/webhooks/validating-webhook/admitters/vmi-create-admitter.go),
+and a zero or negative amount sizes nothing, so the render refuses both.
 
 A number the operator left unquoted reaches the chart already decoded, and
 its spelling is gone, so the error labels it as read rather than written. The
@@ -115,9 +118,8 @@ never in the exponent form a large float64 takes under %v.
 {{- end -}}
 {{- $memory := index $resources "memory" -}}
 {{- if not (kindIs "invalid" $memory) -}}
-  {{- $rawMemory := printf "%v" $memory -}}
-  {{- if not (gt (regexFind "^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)" $rawMemory | float64) 0.0) -}}
-    {{- fail (printf "resources.memory (%s) must be a positive quantity, such as 8Gi. A zero or negative amount cannot size the guest. Set an amount, or remove the field." (include "virtual-machine.resourceAsWritten" $memory)) -}}
+  {{- if lt (include "cozy-lib.resources.toFloat" $memory | float64) 1e6 -}}
+    {{- fail (printf "resources.memory (%s) must be at least 1M, such as 8Gi. KubeVirt refuses a non-zero amount below 1M, and a zero or negative amount sizes nothing. Set a larger amount, or remove the field." (include "virtual-machine.resourceAsWritten" $memory)) -}}
   {{- end -}}
 {{- end -}}
 {{- $result := dict -}}
