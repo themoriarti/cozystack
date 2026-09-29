@@ -370,8 +370,8 @@ jobs:
           # needs both.
           retention-days: 7
 
-      # The installer tarball is what make build pushed as the talos image and
-      # is not a release asset.
+      # The installer tarballs, one per arch, are what the build pushed as the
+      # talos image and are not release assets.
       - name: Upload the assets
         if: steps.check_release.outputs.release_exists == 'false'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -379,7 +379,7 @@ jobs:
           name: release-assets
           path: |
             _out/assets/
-            !_out/assets/installer-amd64.tar
+            !_out/assets/installer-*.tar
           if-no-files-found: error
           # Long enough to re-run failed jobs; the assets are several GB.
           retention-days: 7
