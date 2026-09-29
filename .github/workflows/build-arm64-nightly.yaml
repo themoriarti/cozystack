@@ -51,8 +51,6 @@ jobs:
 
       - name: Set up build toolchain
         run: |
-          command -v flux >/dev/null \
-            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
           command -v skopeo >/dev/null \
             || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
           command -V docker jq yq skopeo
