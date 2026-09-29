@@ -22,7 +22,8 @@ jobs:
   # <tag>-arm64, beside build-amd64, for prepare-release to stitch the two. A
   # stable tag is never built (promotion copies the rc's indexes), so it skips
   # this job. The packages artifact and the installer chart carry no
-  # architecture and are published by prepare-release alone. The talos
+  # architecture, so this job builds neither; build-amd64 pushes them pinned
+  # on amd64 digests and prepare-release republishes them repinned. The talos
   # installer and matchbox are built for both arches in build-amd64, and the
   # e2e sandbox is amd64 only, so none of them has an arm64 half here.
   build-arm64:
@@ -132,9 +133,11 @@ jobs:
           PUBLISH_FLOATING: '0'
 
   # The amd64 half of a pre-release build, run beside build-arm64 rather than
-  # after it: the images, the stamped tree and the release assets. Everything
-  # that publishes happens in prepare-release once both halves are built, so
-  # the tree, the log of pushed tags and the assets travel there as artifacts.
+  # after it: the images, the stamped tree and the release assets. Its make
+  # build also pushes the packages artifact and the installer chart pinned on
+  # amd64 digests. The stitch, the gate, the republish of both and the release
+  # itself happen in prepare-release once both halves are built, so the tree,
+  # the log of pushed tags and the assets travel there as artifacts.
   # It runs for every tag, since the release-exists no-op and the rejection of
   # a hand-pushed stable tag live here.
   build-amd64:
