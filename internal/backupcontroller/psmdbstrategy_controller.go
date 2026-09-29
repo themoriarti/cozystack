@@ -75,11 +75,11 @@ const (
 	// psmdbDeleteBackupFinalizer is the psmdb-operator finalizer that removes the
 	// pbm archive from object storage when its PerconaServerMongoDBBackup CR is
 	// deleted. The driver stamps it onto the CRs it mints on the useSystemBucket
-	// flow so that pruning a Cozystack Backup (Plan retention or manual delete)
-	// also frees the object it wrote to the shared bucket. Without it a
-	// retention-pruned Plan would grow cozy-backups unboundedly for every tenant
-	// at once, since the system-bucket flow ships no psmdb task retention (the
-	// chart's tasks[].keep is gated out) to prune it.
+	// flow so that deleting a Cozystack Backup also frees the object it wrote
+	// to the shared bucket. Without it deleting the Backup would leave the
+	// object behind for every tenant at once, since the system-bucket flow
+	// ships no psmdb task retention (the chart's tasks[].keep is gated out) to
+	// prune it.
 	psmdbDeleteBackupFinalizer = "percona.com/delete-backup"
 
 	// psmdbSkipArtifactCleanupAnnotation, on a Cozystack Backup, releases it from
@@ -992,8 +992,16 @@ func psmdbStorageEntrySettled(raw runtime.RawExtension, s3 *strategyv1alpha1.Mon
 	if want, _ := desired["type"].(string); live.Type != "" && live.Type != want {
 		return false
 	}
-	for k, want := range desired["s3"].(map[string]interface{}) {
-		if got, ok := live.S3[k]; ok && got != want {
+	want := desired["s3"].(map[string]interface{})
+	for k, v := range want {
+		if got, ok := live.S3[k]; ok && got != v {
+			return false
+		}
+	}
+	// forcePathStyle is the one driver field the apply omits when the strategy
+	// leaves it unset; an entry still carrying it is about to lose it.
+	if _, live := live.S3["forcePathStyle"]; live {
+		if _, wanted := want["forcePathStyle"]; !wanted {
 			return false
 		}
 	}
@@ -1129,8 +1137,8 @@ func (r *BackupJobReconciler) ensureMongoDBBackup(ctx context.Context, j *backup
 	if ownArchive {
 		// Own the archive's lifecycle on the shared bucket: the operator's
 		// delete-backup finalizer prunes the pbm object from storage when this CR
-		// is deleted, which is how the cleanup path (Plan retention) reclaims
-		// cozy-backups. A legacy backup writes to the tenant's own bucket and is
+		// is deleted, which is how the cleanup path reclaims cozy-backups when a
+		// Backup is deleted. A legacy backup writes to the tenant's own bucket and is
 		// left unfinalized, so cleanup reads it as unowned. That finalizer check
 		// is only ever run against the one CR this function minted — cleanup
 		// resolves it by the backup-name recorded in driverMetadata, never by
@@ -1259,8 +1267,8 @@ func (r *BackupJobReconciler) createMongoDBBackupArtifact(
 }
 
 // cleanupMongoDBBackup prunes the pbm archive a system-bucket Backup wrote to
-// the shared cozy-backups bucket when that Backup is deleted (Plan retention or
-// manual). Ownership is read from the delete-backup finalizer on the ONE
+// the shared cozy-backups bucket when that Backup is deleted (by hand, or by
+// whatever retention lands on the platform). Ownership is read from the delete-backup finalizer on the ONE
 // operator CR named in driverMetadata (the one ensureMongoDBBackup minted for
 // this Backup) — resolved by name, never by label or scan, so a task-minted CR
 // the operator finalizes on the legacy flow is out of scope. ensureMongoDBBackup

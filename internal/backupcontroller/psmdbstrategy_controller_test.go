@@ -382,8 +382,8 @@ func TestEnsureMongoDBBackup_SystemBucketStampsDeleteFinalizer(t *testing.T) {
 		}
 	}
 	if !found {
-		// Without it, deleting the Backup on Plan retention would orphan the
-		// object in the shared cozy-backups bucket forever.
+		// Without it, deleting the Backup would orphan the object in the shared
+		// cozy-backups bucket forever.
 		t.Errorf("system-bucket backup must carry %q finalizer so its archive is pruned on delete; got %v", psmdbDeleteBackupFinalizer, got.Finalizers)
 	}
 }
@@ -3310,6 +3310,15 @@ func TestReconcileMongoDB_CoordinateChangeRequeuesBeforeMinting(t *testing.T) {
 		_, minted, reason := mint(t, asApplied)
 		if minted != 1 {
 			t.Errorf("an entry already carrying the current coordinates must mint without waiting, got %d CRs (reason=%q)", minted, reason)
+		}
+	})
+	// forcePathStyle is omitted from the apply when the strategy leaves it
+	// unset, so an entry still carrying it is about to change too.
+	t.Run("strategy dropped forcePathStyle since the last injection: waits a poll first", func(t *testing.T) {
+		withPathStyle := `{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false,"forcePathStyle":true}}`
+		res, minted, reason := mint(t, withPathStyle)
+		if res.RequeueAfter == 0 || minted != 0 || reason != "PerconaServerMongoDBStorageInjected" {
+			t.Errorf("an entry about to lose forcePathStyle must wait a poll, got res=%+v minted=%d reason=%q", res, minted, reason)
 		}
 	})
 	t.Run("bucket moved since the last injection: waits a poll first", func(t *testing.T) {
