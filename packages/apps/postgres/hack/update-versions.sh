@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POSTGRES_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VALUES_FILE="${POSTGRES_DIR}/values.yaml"
 VERSIONS_FILE="${POSTGRES_DIR}/files/versions.yaml"
+POSTGIS_VERSIONS_FILE="${POSTGRES_DIR}/files/postgis-versions.yaml"
 
 # Get supported major versions from GitHub README
 echo "Fetching supported major versions from GitHub..."
@@ -81,6 +82,27 @@ echo "Updating $VERSIONS_FILE..."
 } > "$VERSIONS_FILE"
 
 echo "Successfully updated $VERSIONS_FILE"
+
+# The postgis flavor must stay on the same PostgreSQL minor as the default
+# flavor, so each major is pinned to the newest postgis build of the minor
+# chosen above. standard-trixie: backups go through the barman-cloud plugin,
+# so the operand does not need the deprecated system variant.
+echo "Fetching available postgis image tags from registry..."
+POSTGIS_TAGS=$(skopeo list-tags docker://ghcr.io/cloudnative-pg/postgis | jq -r '.Tags[] | select(test("^[0-9]+\\.[0-9]+-[0-9]+\\.[0-9]+\\.[0-9]+-standard-trixie$"))' | sort -V)
+
+{
+    for major_ver in "${MAJOR_VERSIONS[@]}"; do
+        minor="${VERSION_MAP[$major_ver]#v}"
+        postgis_tag=$(echo "$POSTGIS_TAGS" | grep "^${minor//./\\.}-" | tail -n1 || true)
+        if [ -z "$postgis_tag" ]; then
+            echo "Warning: no postgis image for PostgreSQL ${minor}, ${major_ver} left out of the postgis flavor" >&2
+            continue
+        fi
+        echo "\"${major_ver}\": \"${postgis_tag}\""
+    done
+} > "$POSTGIS_VERSIONS_FILE"
+
+echo "Successfully updated $POSTGIS_VERSIONS_FILE"
 
 # Update values.yaml - enum with major versions only
 TEMP_FILE=$(mktemp)
