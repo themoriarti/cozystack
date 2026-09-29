@@ -30,7 +30,9 @@
 #               Assert the refusal. This covers talos.schematicID and
 #               talos.version, which also land in the worker DataVolume name and
 #               the image URL, where an unquoted YAML scalar makes escaping the
-#               wrong tool. templates/nodegroup.yaml pattern-checks them.
+#               wrong tool. templates/nodegroup.yaml pattern-checks them. It also
+#               covers kernelModules, whose names and parameters
+#               templates/_helpers.tpl checks before rebuilding the list.
 #
 # A field that is in neither arm is the regression this file exists to catch.
 #
@@ -249,5 +251,81 @@ VALS
     out=$(sh "$work/heredoc.sh" 2>"$work/err") || { echo "proxmox heredoc shell exited non-zero" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
     printf '%s' "$out" | grep -qF -e '- "10.0.0.1"' || { echo "IPv4 nameserver missing from the emitted config" >&2; rm -rf "$work"; exit 1; }
     printf '%s' "$out" | grep -qF -e '- "2001:4860:4860::8888"' || { echo "IPv6 nameserver missing from the emitted config" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+# kernelModules is in the validated arm: its names and parameters are refused at
+# render, and the list is rebuilt from those two fields so no other key reaches
+# the heredoc. The refusal and the one character class it deliberately lets
+# through are pinned separately, because a guard that grows to reject `;` breaks
+# NVIDIA's documented multi-value parameter while every refusal still passes.
+@test "kubernetes-nodes refuses a hostile kernelModules name or parameter at render" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+VALS
+    cat > "$work/name.yaml" <<'VALS'
+kernelModules:
+  - name: nvidia$(id)`q`z
+VALS
+    cat > "$work/param.yaml" <<'VALS'
+kernelModules:
+  - name: nvidia
+    parameters: ["opt=$(id)`q`z"]
+VALS
+    for f in name param; do
+        if helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" -f "$work/$f.yaml" \
+            --show-only templates/talos-reconcile-job.yaml >/dev/null 2>"$work/err"; then
+            echo "render accepted a hostile kernelModules $f, so the value reaches the heredoc" >&2
+            rm -rf "$work"; exit 1
+        fi
+        grep -qF "invalid kernelModules $f" "$work/err" \
+            || { echo "render failed on kernelModules $f for some other reason:" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    done
+    rm -rf "$work"
+}
+
+@test "kubernetes-nodes worker TalosConfigTemplate heredoc keeps a semicolon kernelModules parameter literal" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+kernelModules:
+  - name: nvidia
+    parameters: ["NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222"]
+VALS
+    helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
+        --show-only templates/talos-reconcile-job.yaml \
+        | yq 'select(.kind == "Job") | .spec.template.spec.containers[0].command[2]' \
+        > "$work/cmd.sh"
+    [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
+    awk '
+      /^cat <<EOF \| kubectl apply/ { print "cat <<EOF"; inblock=1; next }
+      inblock && /^EOF$/            { print "EOF"; inblock=0; next }
+      inblock                       { print }
+    ' "$work/cmd.sh" > "$work/heredoc.sh"
+    grep -q '^cat <<EOF$' "$work/heredoc.sh" || { echo "could not extract the kubernetes-nodes heredoc" >&2; rm -rf "$work"; exit 1; }
+    out=$(sh "$work/heredoc.sh" 2>"$work/err") || { echo "kubernetes-nodes heredoc shell exited non-zero" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    printf '%s' "$out" | grep -qF -e '- NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222' \
+        || { echo "kernelModules parameter was not preserved literally" >&2; printf '%s\n' "$out" | grep -A6 'kernel:' >&2; rm -rf "$work"; exit 1; }
     rm -rf "$work"
 }

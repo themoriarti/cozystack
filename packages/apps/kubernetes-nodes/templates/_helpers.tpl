@@ -47,6 +47,118 @@ cluster.local
 {{- end }}
 
 {{/*
+Effective Talos `machine.kernel.modules` list for this worker pool.
+
+Takes a context carrying .group and .groupName, returns a YAML list (empty
+output when there is nothing to load, so the caller can gate the whole
+`kernel:` block on it).
+
+A Talos system extension ships a kernel module but does not load it — that is
+`machine.kernel.modules`' job. The NVIDIA extensions are the case that made
+this surface necessary: without the modules the driver never initialises, and
+the failure is silent all the way down (the VM has the PCI device, the node
+advertises no GPU, nothing logs an error).
+
+Three-state contract on the pool's `kernelModules`:
+
+  unset      the chart decides. A pool holding at least one `nvidia.com/*`
+             GPU gets the NVIDIA set below; anything else gets nothing.
+  non-empty  taken verbatim, replacing whatever the chart would have picked.
+  []         explicit opt-out — emit no `kernel` block even on a GPU pool.
+
+The `[]` state is why the field has no entry in values.yaml at all: a default
+of `[]` there would collapse "unset" into "opted out" on every pool and make
+the automatic NVIDIA set unreachable, and a bare `kernelModules:` (null) fails
+values.schema.json validation under helm-unittest, which sees the null before
+Helm's coalescing drops it.
+
+`NVreg_NvLinkDisable=1` on the `nvidia` module mirrors what the platform already
+does for tenant clusters through the gpu-operator driver container, which
+writes exactly that one line into the `nvidia-kernel-module-params` ConfigMap
+(packages/system/gpu-operator, kernelModuleConfig.content). Cozystack passes
+individual GPUs into worker VMs WITHOUT the NVSwitches, so the driver would
+otherwise wait forever for an NVLink fabric that can never come up, leaving
+Fabric State "In Progress" and failing every CUDA call with "system not yet
+initialized". On Talos the driver comes from a system extension instead, and the
+operator's driver container has to be turned off or the two clash. Once it is
+off, nothing mounts that ConfigMap and the machine config is the only place left
+to carry the parameter. A no-op on a PCIe card with no NVLink.
+
+Module order is the order Talos' own NVIDIA documentation prescribes and the
+order validated against a production GB202 passthrough node: `nvidia` first
+(the others depend on it), then `nvidia_uvm` (CUDA unified memory, needed by
+any workload using the CUDA runtime), then `nvidia_drm` and `nvidia_modeset`.
+Talos loads them in list order, so this is not cosmetic.
+
+This only covers loading a module the OS already carries. Which extension
+supplies it is the pool's schematic (kubernetes-nodes.resolveOsImage) and is
+not derivable from the pool — on Blackwell (GB202) specifically it has to be
+the open-kernel-modules extension, since the proprietary one loads, creates
+`/dev/nvidia0`, and then finds no devices.
+*/}}
+{{- define "kubernetes-nodes.kernelModules" -}}
+{{- $group := .group -}}
+{{- $groupName := .groupName -}}
+{{- $modules := list -}}
+{{- if kindIs "slice" $group.kernelModules -}}
+{{- /* The emitted list is REBUILT from validated fields rather than passed through
+         from the user's dict. Validating `.name` and `.parameters` and then emitting
+         the raw item would let any other key ride along: `- {name: dummy, evil: "$(...)"}`
+         reached the heredoc verbatim, because `toYaml` copies whatever is there and
+         nothing upstream prunes it — `items` in values.schema.json carries no
+         `additionalProperties: false`, and the aggregated apiserver wires that schema
+         into defaulting only (pkg/registry/apps/application/rest_defaulting.go), with
+         no pruning or validation on Create/Update. Allowlisting by construction closes
+         that whole class instead of enumerating the fields it happens to know about.
+
+         Why any of this is needed: the machine config is written through the reconcile
+         Job's `cat <<EOF` heredoc with an UNQUOTED delimiter, which the script needs so
+         ${RELEASE} and friends expand, and which therefore expands everything else in
+         the block too. A module name of `nvidia$(id)` would run `id` inside the
+         talos-reconcile pod, whose ServiceAccount can write TalosConfigTemplates and
+         read Talos secrets. The values come from a tenant-facing CR, so this render is
+         the last gate.
+
+         Only the USER-SUPPLIED list is checked; the automatic NVIDIA set below is valid
+         by construction. */}}
+{{-   range $group.kernelModules -}}
+{{-     $name := .name | default "" | toString -}}
+{{-     if not (regexMatch `^[a-z0-9_-]+$` $name) -}}
+{{-       fail (printf "nodeGroup %q: invalid kernelModules name %q — must be a kernel module name matching ^[a-z0-9_-]+$ (e.g. nvidia_uvm)" $groupName $name) -}}
+{{-     end -}}
+{{-     $params := list -}}
+{{-     range .parameters | default list -}}
+{{-       $param := . | toString -}}
+{{- /* Two checks, because RE2's `\s` and `[:cntrl:]` are ASCII-only: a deny class
+         built from them lets U+2028 and U+2029 through, `toYaml` writes either raw,
+         and Helm's YAML parser reads it as a line break that ends the Job's
+         `command` block scalar early. `[:graph:]` pins the parameter to printable
+         ASCII, which closes every non-ASCII break at once; the second check then
+         removes what the heredoc would expand. */ -}}
+{{-       if not (and (regexMatch `^[[:graph:]]+$` $param) (regexMatch `^[^$\x60\\'\"]+$` $param)) -}}
+{{-         fail (printf "nodeGroup %q: invalid kernelModules parameter %q on module %q — must be printable ASCII with no whitespace, and must not contain $, a backtick, a backslash or quotes (e.g. NVreg_EnableGpuFirmware=1, or the semicolon-separated NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222)" $groupName $param $name) -}}
+{{-       end -}}
+{{-       $params = append $params $param -}}
+{{-     end -}}
+{{-     $module := dict "name" $name -}}
+{{-     if $params -}}
+{{-       $_ := set $module "parameters" $params -}}
+{{-     end -}}
+{{-     $modules = append $modules $module -}}
+{{-   end -}}
+{{- else -}}
+{{-   range $group.gpus | default list -}}
+{{-     if hasPrefix "nvidia.com/" (.name | default "") -}}
+{{-       $modules = list (dict "name" "nvidia" "parameters" (list "NVreg_NvLinkDisable=1")) (dict "name" "nvidia_uvm") (dict "name" "nvidia_drm") (dict "name" "nvidia_modeset") -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- if $modules -}}
+{{ toYaml $modules }}
+{{- end -}}
+{{- end }}
+
+{{/*
 Reconstruct the parent CAPI cluster name from the linkage value.
 
 The pool attaches to the parent Kubernetes CR named .Values.cluster, whose

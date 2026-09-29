@@ -51,6 +51,8 @@ type ConfigSpec struct {
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 	// +kubebuilder:default:={}
 	Gpus []GPU `json:"gpus,omitempty"`
+	// Kernel modules loaded on every worker in this pool, emitted as Talos `machine.kernel.modules`. A Talos system extension installs a module but does not load it, so an extension-provided driver needs its modules declared here. Leave unset to let the chart decide: a pool holding at least one `nvidia.com/*` GPU gets `nvidia` (with `NVreg_NvLinkDisable=1`, which the gpu-operator driver container applies on non-Talos workers; on Talos that container has to be turned off or it clashes with the system extension, and nothing then mounts the ConfigMap carrying the parameter), `nvidia_uvm`, `nvidia_drm`, `nvidia_modeset` (that order — Talos loads the list in sequence and the last three depend on the first), and any other pool gets nothing. Set a non-empty list to replace the chart's choice entirely, or `[]` to opt out and emit no modules even on a GPU pool. The field carries no default, and unset is not the same value as `[]`: a generated parameter table that shows `[]` in its Default column is printing what it prints for any array with no default, not the effective value — leaving the field out selects the automatic set, writing `[]` disables it. The module still has to be in the image, and which extensions the image carries is the pool's schematic: a GPU pool points `osImage.factory.schematicID` (or `osImage.builtin.schematicID`) at a schematic with the NVIDIA extensions, and on Blackwell (GB202) that must be the open-kernel-modules extension. The automatic set keys on the `nvidia.com/` resource prefix alone and nothing cross-checks it against that schematic; on Talos v1.13 a declared module the image does not ship leaves its controller retrying rather than failing the boot, so the symptom is a missing driver, not a dead node. How a change reaches a pool that already has workers depends on how its `TalosConfigTemplate` is named. Today the name is fixed and the template spec is immutable, so the reconcile Job's apply of a changed list is refused (cozystack/cozystack#3515): running workers keep the machine config they booted with, and new ones boot with the old list too. Once the template is named by its content, a changed list renames it and CAPI rolls the pool. The automatic set is itself such a change, on the upgrade that introduces this field, for every existing pool that holds an `nvidia.com/*` GPU and leaves the field unset: today that pool's apply is refused the same way, and once the template is content-named that pool rolls.
+	KernelModules []KernelModule `json:"kernelModules,omitempty"`
 	// Kubelet resource reservations for this pool.
 	// +kubebuilder:default:={}
 	Kubelet Kubelet `json:"kubelet,omitempty"`
@@ -102,6 +104,13 @@ type Images struct {
 	// Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag.
 	// +kubebuilder:default:=""
 	Kubectl string `json:"kubectl,omitempty"`
+}
+
+type KernelModule struct {
+	// Module name as `modprobe` takes it, e.g. `nvidia_uvm`.
+	Name string `json:"name"`
+	// Module parameters, each as a bare `key=value` string.
+	Parameters []string `json:"parameters,omitempty"`
 }
 
 type Kubelet struct {
