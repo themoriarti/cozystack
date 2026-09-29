@@ -111,8 +111,16 @@ oci-output = $(if $(strip $(OCI_EXPORT_DIR)), --output type=oci$(comma)dest=$(OC
 # index.json, and `skopeo copy oci-archive:<f>` then refuses it ("more than one
 # image in oci"). PUBLISH_* are 0 on fork PRs (the only export case today), so
 # this is belt-and-suspenders for that trap.
+#
+# PUSHED_TAGS_LOG=<file> appends every pushed <repo>:<tag> to <file>, one per
+# line. hack/stitch-multiarch.sh moves exactly those tags onto the multi-arch
+# index; no ref in the tree names a versioned tag, so this is how it learns
+# one was pushed. The append happens when the recipe is expanded, `make -n`
+# included, and is skipped under OCI_EXPORT_DIR, which pushes nothing.
+image-tag-refs = $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(strip $(OCI_EXPORT_DIR)),,$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), $(REGISTRY)/$(1):latest))
+
 define image-tags
---tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(strip $(OCI_EXPORT_DIR)),,$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest))$(call oci-output,$(1))
+$(foreach r,$(call image-tag-refs,$(1),$(2)),--tag $(r))$(call oci-output,$(1))$(if $(and $(strip $(PUSHED_TAGS_LOG)),$(if $(strip $(OCI_EXPORT_DIR)),,1)),$(shell printf '%s\n' $(call image-tag-refs,$(1),$(2)) >>'$(PUSHED_TAGS_LOG)'))
 endef
 
 # cache-args <image-name> [<cache-tag>]
@@ -122,11 +130,14 @@ endef
 #     so ALL stages are cached -- including the multistage `builder` layers that
 #     `--cache-to type=inline` could never export. oci-mediatypes + image-manifest
 #     keep the cache manifest portable across registries (OCIR/ghcr/ECR).
-# <cache-tag> defaults to `buildcache`; pass an explicit tag for images that build
+# <cache-tag> defaults to $(CACHE_TAG); pass an explicit tag for images that build
 # a distinct artifact per loop iteration (e.g. ubuntu-container-disk per k8s ver).
+# CACHE_TAG lets a build for another platform keep a cache of its own
+# (buildcache-arm64) instead of overwriting the amd64 one with every write.
 # $(comma) (defined above) escapes the literal commas in the --cache-to value so
 # make does not mis-parse them as $(if ...) argument separators.
-cache-args = --cache-from type=registry,ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),buildcache)$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),buildcache)$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true)
+CACHE_TAG ?= buildcache
+cache-args = --cache-from type=registry,ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),$(CACHE_TAG))$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),$(CACHE_TAG))$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true)
 
 ifeq ($(COZYSTACK_VERSION),)
     $(shell git remote add upstream https://github.com/cozystack/cozystack.git || true)

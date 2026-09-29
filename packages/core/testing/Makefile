@@ -182,6 +182,7 @@ collect-images: ## Collect the list of images used in the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/collect-images.sh'
 	mkdir -p ../../../_out
 	docker cp "${SANDBOX_NAME}":/workspace/images.txt ../../../_out/images.txt
+	docker cp "${SANDBOX_NAME}":/workspace/image-refs.txt ../../../_out/image-refs.txt
 
 delete: ## Remove sandbox from existing Kubernetes cluster.
 	docker rm -f "${SANDBOX_NAME}" || true

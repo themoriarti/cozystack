@@ -142,6 +142,30 @@ _make_tree() {
   } > "$t/core/installer/values.yaml"
 }
 
+# _stub_registry <bin-dir> — skopeo and sha256sum stubs for a registry whose
+# dest tags hold a multi-arch index. `inspect --raw` returns the index bytes
+# ($MOCK_RAW, default "index-manifest"), which sha256sum maps to $D, the digest
+# the tree pins. A plain `inspect` reports a different digest, the one skopeo
+# picks for the host platform's child manifest, so a verification that reads
+# it instead of hashing the raw index fails. Call after _make_tree sets $D.
+_stub_registry() {
+  mkdir -p "$1"
+  {
+    echo '#!/bin/sh'
+    echo 'case "$1" in'
+    echo '  inspect)'
+    echo '    for a in "$@"; do [ "$a" = --raw ] && { printf "%s" "${MOCK_RAW:-index-manifest}"; exit 0; }; done'
+    printf '    echo "sha256:%s" ;;\n' "$(printf 'b%.0s' $(seq 1 64))"
+    echo '  *) exit 0 ;;'
+    echo 'esac'
+  } > "$1/skopeo"
+  {
+    echo '#!/bin/sh'
+    printf '[ "$(cat)" = index-manifest ] && echo "%s  -" || echo "%s  -"\n' "$D" "$(printf 'c%.0s' $(seq 1 64))"
+  } > "$1/sha256sum"
+  chmod +x "$1/skopeo" "$1/sha256sum"
+}
+
 @test "dry-run mirrors only cozystack-owned component images to the dest registry" {
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
@@ -263,17 +287,9 @@ _make_tree() {
   trap 'rm -rf "$tmp"' EXIT
   _make_tree "$tmp/tree"
 
-  # The stub must answer `inspect` with the source digest: the script verifies
-  # every dest tag resolves to it and aborts before the rewrite otherwise.
-  mkdir -p "$tmp/bin"
-  {
-    echo '#!/bin/sh'
-    echo 'case "$1" in'
-    printf '  inspect) echo "sha256:%s" ;;\n' "$D"
-    echo '  *) exit 0 ;;'
-    echo 'esac'
-  } > "$tmp/bin/skopeo"
-  chmod +x "$tmp/bin/skopeo"
+  # The script verifies every dest tag resolves to the source digest and aborts
+  # before the rewrite otherwise, so the registry stub has to answer with it.
+  _stub_registry "$tmp/bin"
 
   PATH="$tmp/bin:$PATH" hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree"
 
@@ -287,6 +303,26 @@ _make_tree() {
 
   # third-party hosts are left alone
   grep -q 'docker.io/clastix/kubectl' "$tmp/tree/system/third/values.yaml"
+}
+
+@test "the dest tag is verified against the index digest, not the host platform's child" {
+  # Once main publishes multi-arch indexes, the tree pins index digests. Plain
+  # `skopeo inspect` reports the digest of the child manifest for the host
+  # platform, which never equals the index digest, so every mirror would fail
+  # its own verification. The stub reports that child digest for a plain inspect.
+  tmp=$(mktemp -d)
+  _make_tree "$tmp/tree"
+  _stub_registry "$tmp/bin"
+
+  PATH="$tmp/bin:$PATH" hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree"
+
+  # A dest tag holding different bytes still fails the verification.
+  _make_tree "$tmp/tree2"
+  rc=0
+  PATH="$tmp/bin:$PATH" MOCK_RAW=something-else hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree2" 2>"$tmp/err" || rc=$?
+  [ "$rc" -ne 0 ]
+  grep -q "expected 'sha256:$D'" "$tmp/err"
+  rm -rf "$tmp"
 }
 
 @test "the host rewrite reaches a host kept in repository beside an empty registry" {
@@ -305,15 +341,7 @@ _make_tree() {
     printf '  tag: main@sha256:%s\n' "$D"
   } > "$tmp/tree/system/emptyreg/values.yaml"
 
-  mkdir -p "$tmp/bin"
-  {
-    echo '#!/bin/sh'
-    echo 'case "$1" in'
-    printf '  inspect) echo "sha256:%s" ;;\n' "$D"
-    echo '  *) exit 0 ;;'
-    echo 'esac'
-  } > "$tmp/bin/skopeo"
-  chmod +x "$tmp/bin/skopeo"
+  _stub_registry "$tmp/bin"
 
   hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree" --dry-run >"$tmp/out"
   grep -q 'docker://ghcr.io/cozystack/cozystack/emptyreg:0.0.0-nightly.test' "$tmp/out"
@@ -347,14 +375,8 @@ _make_tree() {
     echo '  shift'
     echo 'done'
   } > "$tmp/bin/docker"
-  {
-    echo '#!/bin/sh'
-    echo 'case "$1" in'
-    printf '  inspect) echo "sha256:%s" ;;\n' "$D"
-    echo '  *) exit 0 ;;'
-    echo 'esac'
-  } > "$tmp/bin/skopeo"
-  chmod +x "$tmp/bin/docker" "$tmp/bin/skopeo"
+  chmod +x "$tmp/bin/docker"
+  _stub_registry "$tmp/bin"
 
   PATH="$tmp/bin:$PATH" make --no-print-directory -s -C "$tmp/repo/packages/system/keycloak-operator" image \
     REGISTRY=iad.ocir.io/idyksih5sir9/cozystack IMAGE_TAG=main COZYSTACK_VERSION=0.0.0 >/dev/null
