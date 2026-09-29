@@ -75,6 +75,8 @@ func (h *LineageControllerWebhook) SetupWithManagerAsWebhook(mgr ctrl.Manager) e
 		return err
 	}
 
+	h.ownerCache = lineage.NewObjectCache(ownerCacheTTL)
+
 	h.initConfig()
 	// Register HTTP path -> handler.
 	mgr.GetWebhookServer().Register("/mutate-lineage", &admission.Webhook{Handler: h})
@@ -101,6 +103,14 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 	obj := &unstructured.Unstructured{}
 	if err := h.decodeUnstructured(req, obj); err != nil {
 		return admission.Errored(400, fmt.Errorf("decode object: %w", err))
+	}
+
+	// The objectSelector skips objects carrying the managed label, but on UPDATE
+	// it matches if either the old or the new object does. Pods go on, since
+	// every Pod admission also needs applySchedulingClass.
+	if obj.GetKind() != "Pod" && hasAllLineageLabels(obj) {
+		logger.V(1).Info("object already carries lineage labels, skipping owner walk")
+		return admission.Allowed("lineage labels already present")
 	}
 
 	owner, err := h.getOwner(ctx, obj)
@@ -135,11 +145,11 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 }
 
 func (h *LineageControllerWebhook) getOwner(ctx context.Context, o *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	owners := lineage.WalkOwnershipGraph(ctx, h.dynClient, h.mapper, h, o)
+	owners := lineage.WalkOwnershipGraphWithCache(ctx, h.dynClient, h.mapper, h, h.ownerCache, o)
 	if len(owners) == 0 {
 		return nil, NoAncestors
 	}
-	obj, err := owners[0].GetUnstructured(ctx, h.dynClient, h.mapper)
+	obj, err := owners[0].GetUnstructuredCached(ctx, h.dynClient, h.mapper, h.ownerCache)
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +209,25 @@ func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, lab
 	}
 	maps.Copy(existing, labels)
 	o.SetLabels(existing)
+}
+
+// hasAllLineageLabels needs every key computeLabels writes, not just
+// ManagedObjectKey: an UPDATE can carry a partial set written by another client,
+// and the tenantsecret registry filters on TenantResourceLabelKey.
+func hasAllLineageLabels(o *unstructured.Unstructured) bool {
+	labels := o.GetLabels()
+	if labels == nil {
+		return false
+	}
+	if labels[ManagedObjectKey] != "true" {
+		return false
+	}
+	for _, k := range []string{ManagerGroupKey, ManagerKindKey, ManagerNameKey, corev1alpha1.TenantResourceLabelKey} {
+		if _, ok := labels[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // applySchedulingClass injects schedulerName and scheduling-class annotation

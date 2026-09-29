@@ -2,10 +2,14 @@ package lineagecontrollerwebhook
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
+	"strings"
 	"testing"
 
 	schedulerapi "github.com/cozystack/cozystack-scheduler/pkg/apis/v1alpha1"
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -139,5 +143,133 @@ func TestHandle_PatchTouchesOnlyLineageAndScheduling(t *testing.T) {
 		if _, ok := want[p.Operation+" "+p.Path]; !ok {
 			t.Errorf("unexpected patch operation %s %s = %#v", p.Operation, p.Path, p.Value)
 		}
+	}
+}
+
+// TestHandle_ReadmissionShortCircuit pins which UPDATEs skip the owner walk.
+// Every object points at the harbor-demo HelmRelease but names a stale
+// application, so an object that goes through the walk gets its labels
+// rewritten, and one that skips it gets no patch at all.
+func TestHandle_ReadmissionShortCircuit(t *testing.T) {
+	fullLabels := func() map[string]string {
+		return map[string]string{
+			"helm.toolkit.fluxcd.io/name":       "harbor-demo",
+			ManagedObjectKey:                    "true",
+			ManagerGroupKey:                     "apps.cozystack.io",
+			ManagerKindKey:                      "Harbor",
+			ManagerNameKey:                      "stale",
+			corev1alpha1.TenantResourceLabelKey: "false",
+		}
+	}
+	escape := func(k string) string {
+		return "/metadata/labels/" + strings.ReplaceAll(k, "/", "~1")
+	}
+
+	tests := []struct {
+		name   string
+		kind   string
+		labels func() map[string]string
+		// wantPatches lists "op path" entries that must appear; nil means the
+		// response must carry no patch at all.
+		wantPatches []string
+	}{
+		{
+			name:   "secret with every lineage label skips the walk",
+			kind:   "Secret",
+			labels: fullLabels,
+		},
+		{
+			name:        "pod with every lineage label still gets the scheduling fields",
+			kind:        "Pod",
+			labels:      fullLabels,
+			wantPatches: []string{"add /spec/schedulerName", "replace " + escape(ManagerNameKey)},
+		},
+		{
+			name: "secret marked unmanaged goes through the walk",
+			kind: "Secret",
+			labels: func() map[string]string {
+				l := fullLabels()
+				l[ManagedObjectKey] = "false"
+				return l
+			},
+			wantPatches: []string{"replace " + escape(ManagedObjectKey), "replace " + escape(ManagerNameKey)},
+		},
+		{
+			name: "secret missing the application kind goes through the walk",
+			kind: "Secret",
+			labels: func() map[string]string {
+				l := fullLabels()
+				delete(l, ManagerKindKey)
+				return l
+			},
+			wantPatches: []string{"add " + escape(ManagerKindKey), "replace " + escape(ManagerNameKey)},
+		},
+		{
+			name: "secret missing the tenantresource label goes through the walk",
+			kind: "Secret",
+			labels: func() map[string]string {
+				l := fullLabels()
+				delete(l, corev1alpha1.TenantResourceLabelKey)
+				return l
+			},
+			wantPatches: []string{"add " + escape(corev1alpha1.TenantResourceLabelKey), "replace " + escape(ManagerNameKey)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := newHandleTestWebhook(t)
+			w.config.Store(&runtimeConfig{appCRDMap: map[appRef]*cozyv1alpha1.ApplicationDefinition{
+				{"apps.cozystack.io", "Harbor"}: {Spec: cozyv1alpha1.ApplicationDefinitionSpec{
+					Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "Harbor"},
+				}},
+			}})
+
+			obj := &unstructured.Unstructured{}
+			obj.SetAPIVersion("v1")
+			obj.SetKind(tt.kind)
+			obj.SetNamespace("tenant-demo")
+			obj.SetName("harbor-demo-core")
+			obj.SetLabels(tt.labels())
+			if tt.kind == "Pod" {
+				obj.Object["spec"] = map[string]any{"containers": []any{map[string]any{"name": "core", "image": "core"}}}
+			}
+			raw, err := json.Marshal(obj)
+			if err != nil {
+				t.Fatalf("marshal object: %v", err)
+			}
+
+			resp := w.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+				Kind:      metav1.GroupVersionKind{Version: "v1", Kind: tt.kind},
+				Namespace: "tenant-demo",
+				Name:      "harbor-demo-core",
+				Operation: admissionv1.Update,
+				Object:    runtime.RawExtension{Raw: raw},
+				OldObject: runtime.RawExtension{Raw: raw},
+			}})
+			if !resp.Allowed {
+				t.Fatalf("expected allowed response, got %+v", resp.Result)
+			}
+
+			got := map[string]bool{}
+			var keys []string
+			for _, p := range resp.Patches {
+				k := p.Operation + " " + p.Path
+				got[k] = true
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			if tt.wantPatches == nil {
+				if len(resp.Patches) != 0 {
+					t.Errorf("expected no patch, got %v", keys)
+				}
+				return
+			}
+			for _, k := range tt.wantPatches {
+				if !got[k] {
+					t.Errorf("missing patch %q, got %v", k, keys)
+				}
+			}
+		})
 	}
 }
