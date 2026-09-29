@@ -129,8 +129,14 @@ the open-kernel-modules extension, since the proprietary one loads, creates
 {{-     $params := list -}}
 {{-     range .parameters | default list -}}
 {{-       $param := . | toString -}}
-{{-       if not (regexMatch `^[^[:cntrl:]\s$\x60\\'\"]+$` $param) -}}
-{{-         fail (printf "nodeGroup %q: invalid kernelModules parameter %q on module %q — must not contain $, a backtick, a backslash, quotes, whitespace or control characters (e.g. NVreg_EnableGpuFirmware=1, or the semicolon-separated NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222)" $groupName $param $name) -}}
+{{- /* Two checks, because RE2's `\s` and `[:cntrl:]` are ASCII-only: a deny class
+         built from them lets U+2028 and U+2029 through, `toYaml` writes either raw,
+         and Helm's YAML parser reads it as a line break that ends the Job's
+         `command` block scalar early. `[:graph:]` pins the parameter to printable
+         ASCII, which closes every non-ASCII break at once; the second check then
+         removes what the heredoc would expand. */ -}}
+{{-       if not (and (regexMatch `^[[:graph:]]+$` $param) (regexMatch `^[^$\x60\\'\"]+$` $param)) -}}
+{{-         fail (printf "nodeGroup %q: invalid kernelModules parameter %q on module %q — must be printable ASCII with no whitespace, and must not contain $, a backtick, a backslash or quotes (e.g. NVreg_EnableGpuFirmware=1, or the semicolon-separated NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222)" $groupName $param $name) -}}
 {{-       end -}}
 {{-       $params = append $params $param -}}
 {{-     end -}}
