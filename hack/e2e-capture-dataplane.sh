@@ -9,7 +9,7 @@
 # snapshot dir so the output lands in the uploaded cozyreport artifact, and both
 # wrap this script in a wall-clock backstop -- but not the same one (600s and
 # 300s respectively). The script therefore keeps its own wall-clock budget,
-# sized under the smaller of the two: see DP_BUDGET below.
+# sized under each caller's backstop: see DP_BUDGET below.
 #
 # Why this exists: a recurrent install failure is a CNI host->local-pod
 # data-plane transient -- kubelet on a node reaches a *local* pod's
@@ -422,7 +422,8 @@ DP_READ_GRACE=2
 # dp_run cuts every call's bound down to what is left of the budget instead
 # and starts nothing once it is spent, so no call ends later than the budget
 # plus one kill grace, whatever the cluster looks like. 270s leaves that grace and
-# the script's own bookkeeping inside the 300s backstop.
+# the script's own bookkeeping inside the 300s backstop; hack/cozytest.sh,
+# whose backstop is 600s, passes a budget of its own to match.
 #
 # The reserve exists because the pod section runs first: without it a
 # degraded cluster spends the whole budget there, and the LB capture -- which

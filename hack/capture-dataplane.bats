@@ -2156,8 +2156,9 @@ STUB
 }
 
 @test "a run stops starting reads when its wall-clock budget is spent" {
-  # The fan-out caps count pods and LBs, the callers' backstops count seconds,
-  # and one affected pod's worst case already ran past the smaller backstop. So
+  # The fan-out caps count pods and LBs while the callers' backstops count
+  # seconds, and under the caps alone one affected pod's worst case ran past
+  # the 300s one. So
   # this runs a cluster where both lists answer and every other read hangs,
   # under per-read bounds of 20s: bounded only per read, the walk takes minutes
   # and the outer 60s below stands in for the caller's backstop killing it.
@@ -2402,22 +2403,33 @@ STUB
 
 @test "the wall-clock budget fits inside the backstop of each caller" {
   # dp_run ends no call later than the budget plus one kill grace, so that sum
-  # has to sit under both callers' backstops or the backstop is what fires and
-  # the notes explaining the cut never reach the artifact. Read from the script
-  # and from both call sites, so raising the budget or lowering a backstop
-  # turns this red.
-  budget=$(sed -n 's/^DP_BUDGET="${COZY_DATAPLANE_BUDGET:-\([0-9]*\)}"$/\1/p' "$SCRIPT")
+  # has to sit under each caller's backstop or the backstop is what fires and
+  # the notes explaining the cut never reach the artifact. It also has to use
+  # that backstop: a caller with a wider one that runs on the default budget
+  # gives up the time it has. So each caller's budget -- the override on its
+  # call line, or the script's default -- must end inside the backstop and no
+  # further from it than the backstop's own kill grace. Read from the script
+  # and from both call sites, so moving either side alone turns this red.
+  default=$(sed -n 's/^DP_BUDGET="${COZY_DATAPLANE_BUDGET:-\([0-9]*\)}"$/\1/p' "$SCRIPT")
   reserve=$(sed -n 's/^DP_LB_RESERVE="${COZY_DATAPLANE_LB_RESERVE:-\([0-9]*\)}"$/\1/p' "$SCRIPT")
   grace=$(sed -n 's/^DP_READ_GRACE=\([0-9]*\)$/\1/p' "$SCRIPT")
-  [ -n "$budget" ] && [ -n "$reserve" ] && [ -n "$grace" ]
-  # The reserve is carved out of the budget; one at least as large leaves the
-  # pod section nothing.
-  [ "$reserve" -lt "$budget" ]
+  [ -n "$default" ] && [ -n "$reserve" ] && [ -n "$grace" ]
   for caller in "$HACK_DIR/cozytest.sh" "$HACK_DIR/e2e-chainsaw/.chainsaw.yaml"; do
-    backstop=$(sed -n 's/.*timeout -k [0-9]* \([0-9]*\) .*e2e-capture-dataplane\.sh.*/\1/p' "$caller" | head -n 1)
-    [ -n "$backstop" ] || { echo "no backstop found around the collector in $caller"; exit 1; }
+    line=$(grep 'timeout -k [0-9]* [0-9]* .*e2e-capture-dataplane\.sh' "$caller" | head -n 1)
+    [ -n "$line" ] || { echo "no backstop found around the collector in $caller"; exit 1; }
+    kill=$(printf '%s\n' "$line" | sed 's/.*timeout -k \([0-9]*\) [0-9]* .*/\1/')
+    backstop=$(printf '%s\n' "$line" | sed 's/.*timeout -k [0-9]* \([0-9]*\) .*/\1/')
+    budget=$(printf '%s\n' "$line" | sed -n 's/.*COZY_DATAPLANE_BUDGET=\([0-9]*\) .*/\1/p')
+    budget=${budget:-$default}
+    # The reserve is carved out of the budget; one at least as large leaves the
+    # pod section nothing.
+    [ "$reserve" -lt "$budget" ] || { echo "reserve ${reserve}s leaves nothing of ${budget}s in $caller"; exit 1; }
     if [ $((budget + grace)) -ge "$backstop" ]; then
       echo "budget ${budget}s + grace ${grace}s does not fit the ${backstop}s backstop in $caller"
+      exit 1
+    fi
+    if [ $((backstop - budget - grace)) -gt "$kill" ]; then
+      echo "budget ${budget}s leaves $((backstop - budget - grace))s of the ${backstop}s backstop in $caller unused"
       exit 1
     fi
   done
