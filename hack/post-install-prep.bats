@@ -97,6 +97,7 @@ case "$*" in 'wait '*--timeout=*) bounded=1 ;; esac
 [ -n "$bounded" ] || printf 'UNBOUNDED %s\n' "$*" >> "$STUB_CALLS"
 case "$*" in
   'wait helmrelease/linstor '*)
+    if [ -n "${STUB_WAIT_ERR:-}" ]; then echo "$STUB_WAIT_ERR" >&2; fi
     [ "$STUB_HR_READY_AT" != never ] && [ "$now" -ge "$STUB_HR_READY_AT" ] ;;
   'wait deployment/linstor-controller '*)
     [ "$STUB_DEPLOY_READY_AT" != never ] && [ "$now" -ge "$STUB_DEPLOY_READY_AT" ] ;;
@@ -305,4 +306,38 @@ run_prep() {
     done < "$tmp/reads"
     rm -rf "$tmp"
   done
+}
+
+@test "a client error in the wait loop reaches the log instead of a bare timeout" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  # Exits non-zero at once, like NotFound, so by status alone the loop cannot
+  # tell it from an object that is not created yet. Without the text the
+  # timeout names the HelmRelease while the cause sits in the client.
+  export STUB_WAIT_ERR='error: You must be logged in to the server (Unauthorized)'
+  run_prep "$tmp" never 0
+  unset STUB_WAIT_ERR
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  grep -q 'linstor HelmRelease to be Ready' "$tmp/err"
+  grep -q 'Unauthorized' "$tmp/err"
+  rm -rf "$tmp"
+}
+
+@test "a NotFound repeated on every attempt is printed once, not every poll" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  export STUB_WAIT_ERR='Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io "linstor" not found'
+  run_prep "$tmp" never 0
+  unset STUB_WAIT_ERR
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  # The timeout line repeats the last error; outside it, one line in ~180
+  # attempts. Printing every attempt would bury the rest of the log.
+  n=$(grep -v 'timed out' "$tmp/err" | grep -c 'not found' || true)
+  [ "$n" -eq 1 ]
+  grep 'timed out' "$tmp/err" | grep -q 'not found'
+  rm -rf "$tmp"
 }

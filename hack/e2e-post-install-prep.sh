@@ -161,15 +161,21 @@ LINK_BUDGET=900
 # so the loop tolerates "not created yet" without the set -e cliff that a bare
 # `kubectl wait` would trigger on a NotFound. The per-attempt timeout shrinks
 # to the budget remaining, so the final attempt can consume the rest of it.
+# An expired credential or an RBAC denial exits the same way, and only the
+# text tells them apart, so stderr is kept and printed whenever it changes:
+# once for a NotFound repeated every poll, and again when the cause changes.
+# It is printed rather than matched to fail fast, because apiserver restarts
+# during install produce the same connection and auth errors transiently.
 wait_for_linstor() {
   desc=$1
   shift
   echo "[post-install-prep] waiting for ${desc}"
   deadline=$(( $(date +%s) + LINK_BUDGET ))
+  last_err=
   while :; do
     remaining=$(( deadline - $(date +%s) ))
     if [ "$remaining" -le 0 ]; then
-      echo "[post-install-prep] timed out after ${LINK_BUDGET}s waiting for ${desc}" >&2
+      echo "[post-install-prep] timed out after ${LINK_BUDGET}s waiting for ${desc}; last kubectl error: ${last_err:-none}" >&2
       # The description names the object waited on, not the link of the chain
       # that held it up, and those differ: the same "Deployment not Available"
       # has been reached with the controller pod crash-looping its migration
@@ -196,8 +202,12 @@ wait_for_linstor() {
         --request-timeout=10s 2>&1 | tail -n 30 >&2
       return 1
     fi
-    if kubectl wait "$@" --timeout="${remaining}s" 2>/dev/null; then
+    if { attempt_err=$(kubectl wait "$@" --timeout="${remaining}s" 2>&1 >&3); } 3>&1; then
       return 0
+    fi
+    if [ -n "$attempt_err" ] && [ "$attempt_err" != "$last_err" ]; then
+      printf '%s\n' "$attempt_err" >&2
+      last_err=$attempt_err
     fi
     sleep 5
   done
