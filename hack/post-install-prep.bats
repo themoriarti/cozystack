@@ -102,6 +102,9 @@ case "$*" in
   'wait deployment/linstor-controller '*)
     [ "$STUB_DEPLOY_READY_AT" != never ] && [ "$now" -ge "$STUB_DEPLOY_READY_AT" ] ;;
   'get endpoints '*) echo 192.0.2.11 ;;
+  'get hr -A '*)
+    echo "cozy-linstor linstor False dependency 'cozy-system/piraeus-operator' is not ready"
+    echo "STUB-HR cozy-kubeovn kubeovn False install retries exhausted" ;;
   'get pods '*)
     if [ -n "${STUB_PODS_FAIL:-}" ]; then
       echo "Error from server (Forbidden): pods is forbidden" >&2
@@ -339,5 +342,21 @@ run_prep() {
   n=$(grep -v 'timed out' "$tmp/err" | grep -c 'not found' || true)
   [ "$n" -eq 1 ]
   grep 'timed out' "$tmp/err" | grep -q 'not found'
+  rm -rf "$tmp"
+}
+
+@test "a linstor HelmRelease timeout names the upstream release that blocks it" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  run_prep "$tmp" never 0
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  grep -q 'linstor HelmRelease to be Ready' "$tmp/err"
+  # The linstor release is usually the victim of a dependency chain, not the
+  # cause, and the cozy-linstor pods say nothing about kubeovn. The release
+  # list carries every Ready message, so the blocking release is named in the
+  # same log that reports the timeout.
+  grep -q 'STUB-HR cozy-kubeovn kubeovn' "$tmp/err"
   rm -rf "$tmp"
 }

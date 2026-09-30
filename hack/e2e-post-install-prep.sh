@@ -189,13 +189,20 @@ wait_for_linstor() {
       # no --sort-by, so it cannot fail the whole read the way a sort key does
       # when it is absent from any single item; .lastTimestamp is unset on an
       # Event written through events.k8s.io/v1, and that failure prints nothing
-      # at all. Both reads keep their stderr, because a diagnostic that fails
+      # at all. Every read here keeps its stderr, because a diagnostic that fails
       # silently is indistinguishable from a namespace with nothing to report
-      # -- the very distinction being drawn here. Both are bounded, since the
+      # -- the very distinction being drawn here. Each is bounded, since the
       # caller is blocked in `wait` and a wedged apiserver would otherwise hold
       # the install open until the job's own timeout; the client budget is
       # strictly the smaller of the two, so kubectl gets to name the reason
       # before the outer kill takes it away.
+      # The release list comes first: a linstor HelmRelease that never goes
+      # Ready can be held by a dependency further up the chain rather than
+      # failing itself, and each release's Ready message names what it waits
+      # on, so the list points at the release that is actually stuck, which
+      # the cozy-linstor pods cannot.
+      timeout -k 5 30 kubectl get hr -A \
+        --request-timeout=10s 2>&1 | tail -n 300 >&2
       timeout -k 5 30 kubectl get pods -n cozy-linstor -o wide \
         --request-timeout=10s 2>&1 | tail -n 30 >&2
       timeout -k 5 30 kubectl events -n cozy-linstor \
