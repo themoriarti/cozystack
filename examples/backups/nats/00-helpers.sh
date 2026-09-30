@@ -72,19 +72,22 @@ nats_url() {
 # across the numbered demo scripts; a leftover in a terminal phase (Succeeded /
 # Failed) is replaced rather than waited on; and a same-named Pod this demo does
 # not own is refused rather than hijacked or deleted. cleanup.sh removes it.
+# Every step returns on failure explicitly: this runs as the left side of
+# `|| return 1`, and some callers also wrap it in $(...), so errexit never
+# applies inside it and a bare failure would carry on to the next step.
 nats_cli_pod() {
     local phase owner
-    phase=$(kubectl -n "$NAMESPACE" get pod "$NATS_CLI_POD" -o jsonpath='{.status.phase}' 2>/dev/null || true)
-    owner=$(kubectl -n "$NAMESPACE" get pod "$NATS_CLI_POD" -o jsonpath='{.metadata.labels.cozystack\.io/backup-demo}' 2>/dev/null || true)
+    phase=$(kubectl -n "$NAMESPACE" get pod "$NATS_CLI_POD" --ignore-not-found -o jsonpath='{.status.phase}') || return 1
+    owner=$(kubectl -n "$NAMESPACE" get pod "$NATS_CLI_POD" --ignore-not-found -o jsonpath='{.metadata.labels.cozystack\.io/backup-demo}') || return 1
     if [ -n "$phase" ] && [ "$owner" != "nats" ]; then
         log_error "Pod $NAMESPACE/$NATS_CLI_POD exists but this demo does not own it; refusing to use or delete it"
         return 1
     fi
     if [ "$phase" != "Running" ] && [ "$phase" != "Pending" ]; then
-        kubectl -n "$NAMESPACE" delete pod "$NATS_CLI_POD" --grace-period=1 --ignore-not-found >/dev/null
+        kubectl -n "$NAMESPACE" delete pod "$NATS_CLI_POD" --grace-period=1 --ignore-not-found >/dev/null || return 1
         kubectl -n "$NAMESPACE" run "$NATS_CLI_POD" --image="$NATS_BOX_IMAGE" \
             --labels=cozystack.io/backup-demo=nats \
-            --restart=Never --command -- sleep infinity >/dev/null
+            --restart=Never --command -- sleep infinity >/dev/null || return 1
     fi
     kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/$NATS_CLI_POD" \
         --timeout=5m >/dev/null
@@ -105,7 +108,7 @@ nats_cli_pod() {
 # reads NATS_PASSWORD from its environment.
 nats_cli() {
     local app="$1"; shift
-    nats_cli_pod
+    nats_cli_pod || return 1
     printf '%s\n' "$NATS_PASSWORD" | kubectl -n "$NAMESPACE" exec -i "$NATS_CLI_POD" -- sh -c '
             IFS= read -r NATS_PASSWORD || true
             export NATS_PASSWORD

@@ -22,6 +22,7 @@ make_stubs() {
 printf '%s\n' "$*" >> "$STUB_DIR/kubectl.argv"
 case "$1 $2 $3" in
 "-n tenant-root get")
+    [ -n "${STUB_GET_ERROR:-}" ] && { echo "Unable to connect to the server: i/o timeout" >&2; exit 1; }
     case "$*" in
     *"jsonpath={.status.phase}"*)          printf '%s' "${STUB_PHASE-Running}" ;;
     *"jsonpath={.metadata.labels"*)         printf '%s' "${STUB_OWNER-kafka-metadata}" ;;
@@ -59,11 +60,14 @@ EOF
 
 run_topic_meta() {
     STUB_DIR=$stub STUB_PHASE="${STUB_PHASE-Running}" STUB_OWNER="${STUB_OWNER-kafka-metadata}" \
-        STUB_EXEC_ERROR="${STUB_EXEC_ERROR:-}" PATH="$stub:$PATH" NAMESPACE=tenant-root \
+        STUB_EXEC_ERROR="${STUB_EXEC_ERROR:-}" STUB_GET_ERROR="${STUB_GET_ERROR:-}" PATH="$stub:$PATH" NAMESPACE=tenant-root \
         KAFKA_BIN=$stub TOPIC=orders bash -c '
         set -euo pipefail
         . examples/backups/kafka-metadata/00-helpers.sh
-        topic_meta demo
+        # Read the way the numbered scripts read it: inside a command
+        # substitution, where bash does not apply errexit.
+        got=$(topic_meta demo)
+        printf "%s\n" "$got"
     '
     }
 
@@ -93,6 +97,26 @@ run_topic_meta() {
         exit 1
     fi
     grep -q 'does not own it' "$err"
+    if grep -q ' exec ' "$stub/kubectl.argv"; then
+        echo "kafka_run exec'd into a Pod it refused to use" >&2
+        exit 1
+    fi
+}
+
+@test "kafka_run touches no Pod when it cannot read the CLI Pod's state" {
+    make_stubs
+    export STUB_GET_ERROR=1
+    err=$(mktemp)
+    if run_topic_meta 2>"$err"; then
+        echo "a failed Pod lookup read as a successful reply" >&2
+        exit 1
+    fi
+    grep -q 'Unable to connect to the server' "$err"
+    if grep -qE ' (delete|run|exec) ' "$stub/kubectl.argv"; then
+        echo "kafka_cli_pod acted on a Pod whose owner it could not read:" >&2
+        cat "$stub/kubectl.argv" >&2
+        exit 1
+    fi
 }
 
 @test "kafka_run fails with kubectl's own error when the exec fails" {
