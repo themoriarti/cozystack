@@ -1360,14 +1360,20 @@ capture_lb_datapath() {
       # Announcer node = node of the most recent serviceAnnounced for the IP.
       _annode=$(lb_announcer_node "$_lbip" < "${_speakerlog:-/dev/null}")
 
-      _of="$OUT/lb-$_ns-$_name.txt"
+      # Named and appended the way the per-pod files are, for the same two
+      # reasons: `_` fits in neither a namespace nor a Service name, and a
+      # second run into this directory keeps the first run's capture.
+      _of="$OUT/lb-${_ns}_${_name}.txt"
+      if [ -s "$_of" ]; then
+        printf -- '--- new capture run ---\n' >> "$_of" 2>/dev/null || true
+      fi
       {
         echo "################################################################"
         echo "# LB $_ns/$_name  ip=$_lbip port=$_lbport nodePort=${_np:-<none>} etp=${_etp:-<default>}"
         echo "# backend: ip=${_epip:-$_ep_absent} node=${_epnode:-$_ep_absent} pod=${_eptns:-$_ep_absent}/${_eptname:-$_ep_absent} targetPort=${_eptport:-$_eptport_absent}"
         echo "# announcer node: ${_annode:-<unknown>}"
         echo "################################################################"
-      } > "$_of" 2>&1 || true
+      } >> "$_of" 2>&1 || true
 
       # Gate: probe the LB IP from the announcer node's host netns (fall back to
       # the endpoint node if the announcer is unknown). Reachable -> record and
@@ -1490,16 +1496,21 @@ capture_lb_datapath() {
         echo "(endpoint node unknown -- endpoint-side tcpdump skipped)" >> "$_of" 2>&1 || true
       fi
 
-      _an_pcap="$OUT/lb-$_ns-$_name.tcpdump-announcer.txt"
-      _en_pcap="$OUT/lb-$_ns-$_name.tcpdump-endpoint.txt"
+      _an_pcap="$OUT/lb-${_ns}_${_name}.tcpdump-announcer.txt"
+      _en_pcap="$OUT/lb-${_ns}_${_name}.tcpdump-endpoint.txt"
       _an_td=""
       _en_td=""
+      for _pcap in "$_an_pcap" "$_en_pcap"; do
+        if [ -s "$_pcap" ]; then
+          printf -- '--- new capture run ---\n' >> "$_pcap" 2>/dev/null || true
+        fi
+      done
       if [ -n "$_an_cni" ]; then
         {
           echo "# ANNOUNCER tcpdump node=${_annode:-<none>} iface=$GENEVE_IFACE filter='host $_lbip or host ${_epip:-0.0.0.0}'"
           dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_an_cni" -c cni-server -- \
             sh -c "timeout 10 tcpdump -n -i '$GENEVE_IFACE' -c 60 'host $_lbip or host ${_epip:-0.0.0.0}' 2>&1 || true"
-        } > "$_an_pcap" 2>&1 &
+        } >> "$_an_pcap" 2>&1 &
         _an_td=$!
       fi
       if [ -n "$_en_cni" ]; then
@@ -1507,7 +1518,7 @@ capture_lb_datapath() {
           echo "# ENDPOINT tcpdump node=${_epnode:-<none>} iface=$_en_iface filter='host $_lbip or host ${_epip:-0.0.0.0} or port ${_np:-0}'"
           dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_en_cni" -c cni-server -- \
             sh -c "timeout 10 tcpdump -n -i '$_en_iface' -c 60 'host $_lbip or host ${_epip:-0.0.0.0} or port ${_np:-0}' 2>&1 || true"
-        } > "$_en_pcap" 2>&1 &
+        } >> "$_en_pcap" 2>&1 &
         _en_td=$!
       fi
 

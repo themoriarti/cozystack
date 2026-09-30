@@ -825,7 +825,7 @@ STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
   # The rows that did arrive are used, so the artifact names a backend ...
-  grep -q 'ip=10.0.0.1' "$d/out/lb-tenant-web.txt"
+  grep -q 'ip=10.0.0.1' "$d/out/lb-tenant_web.txt"
   # ... and the cut is on the record beside it.
   grep -q 'was cut off' "$d/out/capture-notes.txt"
   # Neither note may claim the value went in as unknown while the block above
@@ -833,13 +833,13 @@ STUB
   # elsewhere in this file, including on the announcer line of this very block.
   if grep 'endpointslices of tenant/web' "$d/out/capture-notes.txt" | grep -q 'unknown'; then
     echo "the note calls the backend unknown while the capture names it:"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     grep 'endpointslices of tenant/web' "$d/out/capture-notes.txt"
     exit 1
   fi
   if grep 'target port of tenant/web' "$d/out/capture-notes.txt" | grep -q 'unknown'; then
     echo "the note calls the target port unknown while the capture names one:"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     grep 'target port of tenant/web' "$d/out/capture-notes.txt"
     exit 1
   fi
@@ -1387,7 +1387,7 @@ STUB
   # capture_lb_node is the only consumer that reads this lookup from a memo
   # hit, and it runs only on the heavy-capture path. Pin that it ran, or stub
   # drift makes both assertions below vacuous without a word.
-  grep -q 'ENDPOINT node=node-a' "$d/out/lb-tenant-web.txt"
+  grep -q 'ENDPOINT node=node-a' "$d/out/lb-tenant_web.txt"
   if grep -rq 'ovs=<unknown>' "$d/out" 2>/dev/null; then
     echo "a lookup that answered was reported as unanswered after a memo hit:"
     grep -r 'ovs=' "$d/out" 2>/dev/null
@@ -1529,20 +1529,20 @@ STUB
   # own end, so the file checks below read a finished directory.
   grep -q 'LB tenant/web (192.0.2.10) not probed -- no probe could be attempted from node-a -- the cni-server lookup did not answer' "$d/log"
   grep -q 'LoadBalancer-datapath capture complete' "$d/log"
-  [ -f "$d/out/lb-tenant-web.txt" ]
+  [ -f "$d/out/lb-tenant_web.txt" ]
   # The specific claim, not the bare word: the honest line says "whether the LB
   # is reachable ... is unknown" and contains it too.
-  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"; then
+  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant_web.txt"; then
     echo "an LB that was never probed was recorded as reachable:"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     exit 1
   fi
-  grep -q 'is unknown' "$d/out/lb-tenant-web.txt"
+  grep -q 'is unknown' "$d/out/lb-tenant_web.txt"
   # And this is the branch that MAY name the lookup, because here it genuinely
   # did not answer. Pinning it positively is what keeps the two negative pins
   # in the empty-outcome tests below from going vacuous: the phrase has to stay
   # reachable somewhere for its absence elsewhere to mean anything.
-  grep -q 'the cni-server lookup did not answer' "$d/out/lb-tenant-web.txt"
+  grep -q 'the cni-server lookup did not answer' "$d/out/lb-tenant_web.txt"
   rm -rf "$d"
 }
 
@@ -1566,12 +1566,12 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  [ -f "$d/out/lb-tenant-web.txt" ]
-  grep -q 'ip=<unknown>' "$d/out/lb-tenant-web.txt"
-  grep -q 'targetPort=<unknown>' "$d/out/lb-tenant-web.txt"
-  if grep -q 'ip=<none>' "$d/out/lb-tenant-web.txt"; then
+  [ -f "$d/out/lb-tenant_web.txt" ]
+  grep -q 'ip=<unknown>' "$d/out/lb-tenant_web.txt"
+  grep -q 'targetPort=<unknown>' "$d/out/lb-tenant_web.txt"
+  if grep -q 'ip=<none>' "$d/out/lb-tenant_web.txt"; then
     echo "a read that never answered was recorded as an absent endpoint:"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     exit 1
   fi
   # And the reason ships beside the capture, not only in the job log.
@@ -1603,11 +1603,11 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  [ -f "$d/out/lb-tenant-web.txt" ]
-  grep -q 'targetPort=<none>' "$d/out/lb-tenant-web.txt"
-  if grep -q 'targetPort=<unknown>' "$d/out/lb-tenant-web.txt"; then
+  [ -f "$d/out/lb-tenant_web.txt" ]
+  grep -q 'targetPort=<none>' "$d/out/lb-tenant_web.txt"
+  if grep -q 'targetPort=<unknown>' "$d/out/lb-tenant_web.txt"; then
     echo "an empty endpointslice list was recorded as a read that never answered:"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     exit 1
   fi
   if grep -q 'endpointslices' "$d/out/capture-notes.txt"; then
@@ -1655,7 +1655,7 @@ STUB
   # Positive controls: the heavy capture ran, and it ran with no announcer --
   # no speaker logs were produced, so lb_announcer_node reported nothing.
   grep -q 'UNREACHABLE' "$d/log"
-  grep -q 'announcer node: <unknown>' "$d/out/lb-tenant-web.txt"
+  grep -q 'announcer node: <unknown>' "$d/out/lb-tenant_web.txt"
   # The lookup itself must not go out with an empty node. Trailing space, so this
   # does not also match the endpoint node's own `spec.nodeName=node-a` lookup.
   if grep -q -- '--field-selector spec.nodeName= ' "$d/calls"; then
@@ -1664,13 +1664,13 @@ STUB
     exit 1
   fi
   # And no ANNOUNCER tcpdump artifact may exist for a node nobody identified.
-  if [ -f "$d/out/lb-tenant-web.tcpdump-announcer.txt" ]; then
+  if [ -f "$d/out/lb-tenant_web.tcpdump-announcer.txt" ]; then
     echo "an announcer tcpdump ran with no announcer node:"
-    cat "$d/out/lb-tenant-web.tcpdump-announcer.txt"
+    cat "$d/out/lb-tenant_web.tcpdump-announcer.txt"
     exit 1
   fi
   # The skip is stated rather than silent: absence of a block is not a reason.
-  grep -q 'announcer node unknown' "$d/out/lb-tenant-web.txt"
+  grep -q 'announcer node unknown' "$d/out/lb-tenant_web.txt"
   rm -rf "$d"
 }
 
@@ -1715,18 +1715,18 @@ STUB
   # Positive controls: the heavy capture ran, the announcer side was identified
   # and did run, so what follows is about the endpoint side alone.
   grep -q 'UNREACHABLE' "$d/log"
-  [ -f "$d/out/lb-tenant-web.tcpdump-announcer.txt" ]
+  [ -f "$d/out/lb-tenant_web.tcpdump-announcer.txt" ]
   if grep -q -- '--field-selector spec.nodeName= ' "$d/calls"; then
     echo "an endpoint-side lookup was issued with an empty node selector:"
     grep -- 'spec.nodeName=' "$d/calls"
     exit 1
   fi
-  if [ -f "$d/out/lb-tenant-web.tcpdump-endpoint.txt" ]; then
+  if [ -f "$d/out/lb-tenant_web.tcpdump-endpoint.txt" ]; then
     echo "an endpoint tcpdump ran with no endpoint node:"
-    cat "$d/out/lb-tenant-web.tcpdump-endpoint.txt"
+    cat "$d/out/lb-tenant_web.tcpdump-endpoint.txt"
     exit 1
   fi
-  grep -q 'endpoint node unknown' "$d/out/lb-tenant-web.txt"
+  grep -q 'endpoint node unknown' "$d/out/lb-tenant_web.txt"
   rm -rf "$d"
 }
 
@@ -1755,8 +1755,8 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"
-  if [ -f "$d/out/lb-tenant-web.tcpdump-endpoint.txt" ]; then
+  grep -q -- '-- reachable, skipped' "$d/out/lb-tenant_web.txt"
+  if [ -f "$d/out/lb-tenant_web.tcpdump-endpoint.txt" ]; then
     echo "a reachable LB got the heavy capture anyway:"
     ls -1 "$d/out"
     exit 1
@@ -1792,20 +1792,20 @@ STUB
   PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
   # Positive control: the LB was enumerated and the probe leg was reached.
   grep -q 'probing 1 LoadBalancer service' "$d/log"
-  [ -f "$d/out/lb-tenant-web.txt" ]
-  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"; then
+  [ -f "$d/out/lb-tenant_web.txt" ]
+  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant_web.txt"; then
     echo "an LB no probe could be run against was recorded as reachable:"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     exit 1
   fi
   # The reason has to survive contact with what actually happened: the lookup
   # answered and named a pod, and the exec ran -- it found nothing to run. A
   # line blaming the lookup would be a cause this script never observed, the
   # same rule dp_read_outcome states for the reads.
-  grep -q 'no probe outcome from node-a' "$d/out/lb-tenant-web.txt"
-  if grep -q 'the cni-server lookup did not answer' "$d/out/lb-tenant-web.txt"; then
+  grep -q 'no probe outcome from node-a' "$d/out/lb-tenant_web.txt"
+  if grep -q 'the cni-server lookup did not answer' "$d/out/lb-tenant_web.txt"; then
     echo "the artifact blames a lookup that answered:"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     exit 1
   fi
   rm -rf "$d"
@@ -1837,16 +1837,16 @@ STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
   grep -q 'probing 1 LoadBalancer service' "$d/log"
-  [ -f "$d/out/lb-tenant-web.txt" ]
-  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"; then
+  [ -f "$d/out/lb-tenant_web.txt" ]
+  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant_web.txt"; then
     echo "an LB with no cni-server to probe from was recorded as reachable:"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     exit 1
   fi
-  grep -q 'no probe outcome from node-a' "$d/out/lb-tenant-web.txt"
-  if grep -q 'the cni-server lookup did not answer' "$d/out/lb-tenant-web.txt"; then
+  grep -q 'no probe outcome from node-a' "$d/out/lb-tenant_web.txt"
+  if grep -q 'the cni-server lookup did not answer' "$d/out/lb-tenant_web.txt"; then
     echo "the artifact blames a lookup that answered 'no such pod':"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     exit 1
   fi
   rm -rf "$d"
@@ -1873,13 +1873,13 @@ STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
   grep -q 'probing 1 LoadBalancer service' "$d/log"
-  [ -f "$d/out/lb-tenant-web.txt" ]
-  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"; then
+  [ -f "$d/out/lb-tenant_web.txt" ]
+  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant_web.txt"; then
     echo "an LB with nowhere to probe from was recorded as reachable:"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     exit 1
   fi
-  grep -q 'nowhere to probe from' "$d/out/lb-tenant-web.txt"
+  grep -q 'nowhere to probe from' "$d/out/lb-tenant_web.txt"
   rm -rf "$d"
 }
 
@@ -1905,13 +1905,13 @@ STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
   grep -q 'probing 1 LoadBalancer service' "$d/log"
-  [ -f "$d/out/lb-tenant-web.txt" ]
-  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-web.txt"; then
+  [ -f "$d/out/lb-tenant_web.txt" ]
+  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant_web.txt"; then
     echo "an LB with no port to probe was recorded as reachable:"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     exit 1
   fi
-  grep -q 'no port to probe' "$d/out/lb-tenant-web.txt"
+  grep -q 'no port to probe' "$d/out/lb-tenant_web.txt"
   rm -rf "$d"
 }
 
@@ -2023,6 +2023,46 @@ STUB
     exit 1
   fi
   grep -q -- '--- new capture run ---' "$f"
+  rm -rf "$d"
+}
+
+@test "two LoadBalancers whose joined names would collide get two capture files" {
+  # The per-LB files joined namespace and Service name the way the per-pod
+  # ones did, with the same collision, and truncated on every run while the
+  # notes beside them accumulate.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc)
+      echo 'a-b|c|LoadBalancer|192.0.2.10|80|30080|Cluster'
+      echo 'a|b-c|LoadBalancer|192.0.2.11|80|30081|Cluster'
+      exit 0 ;;
+    endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *'nc -z'*) echo ok; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >>"$d/log" 2>&1
+  first=$(grep -l '^# LB a-b/c ' "$d"/out/lb-*.txt || true)
+  second=$(grep -l '^# LB a/b-c ' "$d"/out/lb-*.txt || true)
+  if [ -z "$first" ] || [ -z "$second" ] || [ "$first" = "$second" ]; then
+    echo "the two LoadBalancers did not land in two files:"
+    grep -H '^# LB' "$d"/out/lb-*.txt
+    exit 1
+  fi
+  # Both runs are kept, with the separator the notes use.
+  [ "$(grep -c '^# LB a-b/c ' "$first")" -eq 2 ]
+  grep -q -- '--- new capture run ---' "$first"
   rm -rf "$d"
 }
 
@@ -2233,10 +2273,10 @@ STUB
   n=$(wc -l <"$d/calls" | tr -d ' ')
   if [ "$n" -lt 2 ]; then
     echo "the LB section reused a cutoff from a shortened bound (cilium lookups: $n):"
-    cat "$d/out/lb-tenant-web.txt"
+    cat "$d/out/lb-tenant_web.txt"
     exit 1
   fi
-  grep -q 'cilium=cilium-xyz' "$d/out/lb-tenant-web.txt"
+  grep -q 'cilium=cilium-xyz' "$d/out/lb-tenant_web.txt"
   rm -rf "$d"
 }
 
