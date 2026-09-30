@@ -18,7 +18,7 @@
 #                   the full-suite nor the inert list, OR a yq that failed to
 #                   build the dependency graph (conservative fallbacks)
 #   - nothing, and  the suite list itself is unavailable: find failed, or
-#     a non-zero    hack/e2e-chainsaw holds no chainsaw-test.yaml. Unlike the
+#     a non-zero    hack/e2e-chainsaw holds no suite file. Unlike the
 #     exit          yq case there is no fallback left to take — an empty list
 #                   silently corrupts both the escalations, which would print
 #                   it, and the backups rule, which membership-tests against
@@ -162,18 +162,20 @@ inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testda
 
 # All known Chainsaw suites: every dir under hack/e2e-chainsaw/ holding a
 # chainsaw-test.yaml (this excludes _lib/ and the top-level config files).
+# chainsaw-test.yml counts too, because Chainsaw loads it when the .yaml is
+# absent, and a suite that runs but is never listed is never selected.
 #
 # Captured before the sed/sort rather than piped straight into them: a pipeline
 # carries its LAST command's status, so `$(find ... | sed | sort)` would report
 # sort's success whatever find did — the same blindness handled for yq below,
 # and worse here, because this list is what every escalation prints. Errors go
 # to stderr rather than /dev/null for the same reason.
-if ! chainsaw_tests=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml); then
+if ! chainsaw_tests=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 \( -name chainsaw-test.yaml -o -name chainsaw-test.yml \)); then
   echo "select-e2e: find failed listing the Chainsaw suites under hack/e2e-chainsaw — nothing can be decided without that list" >&2
   exit 1
 fi
 all_apps=$(printf '%s\n' "$chainsaw_tests" \
-  | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' | sort)
+  | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' -e 's,/chainsaw-test\.yml$,,' | sort -u)
 
 # An empty list here is a broken enumeration — a moved directory, a wrong
 # working directory — not a project without tests, and it silently corrupts
@@ -195,7 +197,7 @@ all_apps=$(printf '%s\n' "$chainsaw_tests" \
 # Both lanes run this step under `bash -e`, so the non-zero exit fails the job
 # instead of falling through to the empty selection.
 if [ -z "$all_apps" ]; then
-  echo "select-e2e: found no chainsaw-test.yaml under hack/e2e-chainsaw — the suite enumeration is broken (wrong working directory?), refusing to decide anything from an empty suite list" >&2
+  echo "select-e2e: found no chainsaw-test.yaml or chainsaw-test.yml under hack/e2e-chainsaw — the suite enumeration is broken (wrong working directory?), refusing to decide anything from an empty suite list" >&2
   exit 1
 fi
 

@@ -31,8 +31,9 @@
 # expanded, but not which side is which, and reading a whole-tree diff off a trace
 # line is exactly the moment a test stops being worth having.
 full_suite_list() {
-    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml \
-      | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' | sort | paste -sd ' ' -
+    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 \( -name chainsaw-test.yaml -o -name chainsaw-test.yml \) \
+      | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' -e 's,/chainsaw-test\.yml$,,' \
+      | sort -u | paste -sd ' ' -
 }
 
 assert_selection() {
@@ -739,6 +740,28 @@ assert_full_suite() {
             exit 1
         fi
     done
+    rm -rf "$tmp"
+}
+
+@test "a suite written as chainsaw-test.yml is discovered" {
+    # Chainsaw loads chainsaw-test.yml when there is no chainsaw-test.yaml, so a
+    # suite spelled that way runs. Enumerated by the .yaml name alone it was
+    # absent from every escalation and unselectable by its own per-suite edits,
+    # and a suite that exists but is never selected reds nothing.
+    tmp=$(mktemp -d)
+    script="$PWD/hack/select-e2e.sh"
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/alpha" "$tmp/tree/hack/e2e-chainsaw/beta"
+    : > "$tmp/tree/hack/e2e-chainsaw/alpha/chainsaw-test.yaml"
+    : > "$tmp/tree/hack/e2e-chainsaw/beta/chainsaw-test.yml"
+    # A directory holding both spellings is still one suite.
+    : > "$tmp/tree/hack/e2e-chainsaw/alpha/chainsaw-test.yml"
+    echo go.mod > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    assert_selection "the full suite must include a .yml suite" "$output" "alpha beta"
+    echo hack/e2e-chainsaw/beta/step.yaml > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources")
+    assert_selection "a per-suite edit must select a .yml suite" "$output" "beta"
     rm -rf "$tmp"
 }
 

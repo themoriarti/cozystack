@@ -101,11 +101,13 @@ deps_of() {
   echo "$FORWARD" | awk -v s="$1" -F'\t' '$1==s {print $2}'
 }
 
-# all Chainsaw suite names under a suites-dir (dirs holding chainsaw-test.yaml),
-# discovered exactly like select-e2e.sh.
+# all Chainsaw suite names under a suites-dir (dirs holding chainsaw-test.yaml
+# or chainsaw-test.yml), discovered exactly like select-e2e.sh. find is
+# captured on its own because a pipeline reports sort's status, and a failed
+# listing must not read as an empty suites dir.
 discover_suites() {
-  find "$1" -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml 2>/dev/null \
-    | sed -e 's,/chainsaw-test\.yaml$,,' -e 's,.*/,,' | sort
+  found=$(find "$1" -mindepth 2 -maxdepth 2 \( -name chainsaw-test.yaml -o -name chainsaw-test.yml \)) || return 1
+  printf '%s\n' "$found" | sed -e 's,/chainsaw-test\.yaml$,,' -e 's,/chainsaw-test\.yml$,,' -e 's,.*/,,' -e '/^$/d' | sort -u
 }
 
 if [ "$MODE" = "validate" ]; then
@@ -152,8 +154,11 @@ if [ "$MODE" = "validate" ]; then
   if [ ! -d "$SUITES_DIR" ]; then
     echo "select-install: suites dir '$SUITES_DIR' does not exist" >&2
     rc=1
+  elif ! suites=$(discover_suites "$SUITES_DIR"); then
+    echo "select-install: find failed listing the suites under '$SUITES_DIR'" >&2
+    rc=1
   else
-    for suite in $(discover_suites "$SUITES_DIR"); do
+    for suite in $suites; do
       src="$(suite_to_source "$suite")"
       if [ -z "$src" ]; then
         echo "select-install: suite '$suite' has no PackageSource mapping (add it to suite_to_source)" >&2
