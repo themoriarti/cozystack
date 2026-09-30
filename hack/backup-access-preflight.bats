@@ -270,3 +270,52 @@
         }
     done
 }
+
+@test "preflight reports the port-forward log when the S3 client cannot be configured" {
+    . hack/e2e-chainsaw/_lib/backup-access-preflight.sh
+    out=$(mktemp)
+    pf_ready=$(mktemp)
+    kubectl() {
+        case "$*" in
+            *" get secret bucket-demo-backup "*)
+                printf '%s' '{"spec":{"secretS3":{"accessKeyID":"access","accessSecretKey":"secret"},"bucketName":"bucket-real"}}' | base64 | tr -d '\n'
+                ;;
+            *" port-forward "*)
+                echo 'Forwarding from 127.0.0.1:18333 -> 8333'
+                printf 'ready\n' > "$pf_ready"
+                while :; do command sleep 1; done
+                ;;
+            *) return 1 ;;
+        esac
+    }
+    timeout() {
+        shift
+        if [ "$1" = sh ]; then
+            waited=0
+            while [ ! -s "$pf_ready" ] && [ "$waited" -lt 100 ]; do
+                waited=$(( waited + 1 ))
+                command sleep 0.1
+            done
+            return 0
+        fi
+        "$@"
+    }
+    mc() {
+        case "$1" in
+            alias) echo 'mc: <ERROR> Unable to initialize new alias: not an S3 endpoint' >&2; return 1 ;;
+            *) echo "preflight continued after the S3 client failed: mc $*" >&2; return 1 ;;
+        esac
+    }
+
+    if cozy_backup_access_preflight tenant-test bucket-demo-backup 0 >"$out" 2>&1; then
+        echo "a failed S3 client setup passed the preflight" >&2
+        exit 1
+    fi
+    grep -q 'failed to configure S3 client for BucketAccess tenant-test/bucket-demo-backup' "$out"
+    grep -q 'port-forward: Forwarding from 127.0.0.1:18333' "$out" || {
+        echo "the S3 client failure dropped the port-forward log" >&2
+        cat "$out" >&2
+        exit 1
+    }
+}
+

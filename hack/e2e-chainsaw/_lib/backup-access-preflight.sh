@@ -94,6 +94,7 @@ cozy_backup_access_preflight() (
   if ! mc alias set backup-preflight "https://127.0.0.1:${local_port}" \
       "${access_key}" "${secret_key}" --insecure >/dev/null; then
     echo "failed to configure S3 client for BucketAccess ${namespace}/${access_name}" >&2
+    sed 's/^/  port-forward: /' "${workdir}/port-forward.log" >&2
     return 1
   fi
 
