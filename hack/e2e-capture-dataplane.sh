@@ -605,7 +605,11 @@ pod_on_node() {
   # caller as well: an empty answer means "no such pod" only when the read
   # actually answered, and the callers write that difference into the artifact.
   case "$_pon_rc" in
-    0 | 124 | 137) pod_memo_put "$_pon_key" "${_pon%% *}" "$([ "$_pon_rc" -ne 0 ] && echo 1 || echo 0)" ;;
+    0) pod_memo_put "$_pon_key" "${_pon%% *}" 0 ;;
+    124 | 137)
+      if [ "$_pon_b" -ge "$DP_READ_TIMEOUT" ]; then
+        pod_memo_put "$_pon_key" "${_pon%% *}" 1
+      fi ;;
   esac
   printf '%s' "${_pon%% *}"
   [ "$_pon_rc" -eq 0 ]
@@ -630,7 +634,11 @@ mark_node() { _SEEN_NODES="$_SEEN_NODES$1 "; }
 # one transient permanent for the run: the LB section would take the hit, report
 # the component unknown, and skip the capture this file's header calls the first
 # fork of an LB diagnosis. A cutoff is the opposite, since asking again spends
-# another full bound, which is the budget this memo exists to protect.
+# another full bound, which is the budget this memo exists to protect -- but
+# only a cutoff under the full bound. One the pod section's deadline shortened
+# says nothing about how the full bound would have gone, and caching it would
+# hand the LoadBalancer section an unknown component its reserve could still
+# ask about.
 #
 # Unlike the node memo above, which is a space-delimited string matched with a
 # case glob, this one is a tab-separated file compared field by field, so the

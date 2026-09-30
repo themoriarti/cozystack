@@ -2196,6 +2196,50 @@ STUB
   rm -rf "$d"
 }
 
+@test "a lookup cut short by the pod section's deadline is asked again by the LB section" {
+  # The memo keeps a cutoff so a hung lookup is not paid for twice. A cutoff
+  # under a bound the deadline shortened says nothing about the full bound,
+  # and caching it hands the LoadBalancer section an unknown component for
+  # the node while its reserve still has room to ask. The stub hangs on the
+  # first cilium lookup and answers every one after it.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *endpointslices*) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  *'k8s-app=cilium'*)
+    echo "$*" >>"$STUB_CALLS"
+    if [ ! -e "$STUB_STATE" ]; then : >"$STUB_STATE"; sleep 300; fi
+    echo 'cilium-xyz'; exit 0 ;;
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *'nc -z'*) echo fail; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  STUB_CALLS="$d/calls" STUB_STATE="$d/state" PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" \
+    DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *')" \
+    COZY_DATAPLANE_BUDGET=12 COZY_DATAPLANE_LB_RESERVE=6 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  # Positive control: the first lookup was cut under a shortened bound.
+  grep -q 'looking up the pod matching k8s-app=cilium on node node-a was cut off by its own [1-6]s timeout' "$d/log"
+  n=$(wc -l <"$d/calls" | tr -d ' ')
+  if [ "$n" -lt 2 ]; then
+    echo "the LB section reused a cutoff from a shortened bound (cilium lookups: $n):"
+    cat "$d/out/lb-tenant-web.txt"
+    exit 1
+  fi
+  grep -q 'cilium=cilium-xyz' "$d/out/lb-tenant-web.txt"
+  rm -rf "$d"
+}
+
 @test "a failed OVS interface lookup is not written up as an absent interface" {
   # "no OVS interface with iface-id=..." is an answer only a lookup that ran
   # and succeeded can give. One that failed, was cut off or was refused for a
