@@ -225,7 +225,8 @@ lb_announcer_node() {
 }
 
 # lb_capture_decision: stdin = one probe outcome token per line ("ok" / "fail" /
-# "unknown", the last meaning the probe could not be run at all).
+# "unknown" / "spent"; the last two mean the probe could not be run at all, and
+# "spent" that the wall-clock budget refused it, so both weigh the same here).
 # Emits the gate decision for the heavy per-node capture:
 #   - "capture" when at least one probe ran, none succeeded, and at least one
 #     genuinely failed (the LB IP is unreachable -- the symptom we want
@@ -240,7 +241,7 @@ lb_announcer_node() {
 #     into the artifact without a single probe behind it.
 lb_capture_decision() {
   awk '
-    { if ($0 == "") next; n++; if ($0 == "ok") ok++; if ($0 == "unknown") unk++ }
+    { if ($0 == "") next; n++; if ($0 == "ok") ok++; if ($0 == "unknown" || $0 == "spent") unk++ }
     END {
       if (n == 0) { print "unknown"; exit }
       # Only a wholly unknown set is unknown. One unrun probe beside real
@@ -546,6 +547,9 @@ fi
 if [ -n "$DP_RESERVE_BAD" ]; then
   log "COZY_DATAPLANE_LB_RESERVE='$DP_RESERVE_BAD' is not a whole number of seconds; using ${DP_LB_RESERVE}s"
 fi
+if [ "$DP_LB_RESERVE" -ge "$DP_BUDGET" ]; then
+  log "COZY_DATAPLANE_LB_RESERVE=${DP_LB_RESERVE}s leaves nothing of the ${DP_BUDGET}s budget for the pod section: it starts no call, which is not the same as nothing being affected"
+fi
 if [ -z "$DP_TIMEOUT" ]; then
   log "no timeout binary on PATH: calls run unbounded, and the ${DP_BUDGET}s budget only decides whether each one starts"
 fi
@@ -625,7 +629,7 @@ pod_on_node() {
       fi ;;
   esac
   printf '%s' "${_pon%% *}"
-  [ "$_pon_rc" -eq 0 ]
+  return "$_pon_rc"
 }
 
 # Per-node captures are node-global (every pod on a node shares one cilium-agent
@@ -734,6 +738,8 @@ capture_node() {
       echo
       if [ "$_cn_agent_ok" -eq 0 ]; then
         echo "(no cilium-agent pod found on node $_cn_node)"
+      elif [ "$_cn_agent_ok" -eq "$DP_RC_SPENT" ]; then
+        echo "(whether a cilium-agent runs on node $_cn_node was not asked: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)"
       else
         echo "(could not determine whether a cilium-agent runs on node $_cn_node -- the lookup did not answer)"
       fi
@@ -774,6 +780,8 @@ capture_node() {
       echo
       if [ "$_cn_ovs_ok" -eq 0 ]; then
         echo "(no ovs pod found on node $_cn_node)"
+      elif [ "$_cn_ovs_ok" -eq "$DP_RC_SPENT" ]; then
+        echo "(whether an ovs pod runs on node $_cn_node was not asked: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)"
       else
         echo "(could not determine whether an ovs pod runs on node $_cn_node -- the lookup did not answer)"
       fi
@@ -816,6 +824,8 @@ capture_node() {
       echo
       if [ "$_cn_cni_ok" -eq 0 ]; then
         echo "(no kube-ovn-cni pod found on node $_cn_node -- host netns capture skipped)"
+      elif [ "$_cn_cni_ok" -eq "$DP_RC_SPENT" ]; then
+        echo "(whether a kube-ovn-cni pod runs on node $_cn_node was not asked: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget; host netns capture skipped)"
       else
         echo "(could not determine whether a kube-ovn-cni pod runs on node $_cn_node -- the lookup did not answer; host netns capture skipped)"
       fi
@@ -1128,7 +1138,8 @@ fi
 # LB IP from <node>'s host netns (via the hostNetwork kube-ovn cni-server, so the
 # probe traverses the same host->cross-node->backend datapath the flake breaks).
 # Echoes "ok" / "fail" per the result, "unknown" when the cni-server lookup did
-# not answer so no probe could be attempted, or nothing when the lookup answered
+# not answer so no probe could be attempted, "spent" when the budget stopped
+# the probe (see below), or nothing when the lookup answered
 # that the node has no cni-server pod, when the image ships no probe client, or
 # when the exec itself could not run (the decision helper reads an empty set as
 # unknown too, and the caller tells the two shapes apart). Prefers a pure
@@ -1150,14 +1161,24 @@ host_http_probe() {
   # all-unknown set and an empty set both come back unknown -- so for
   # capture-or-skip this token changes nothing. It exists for the caller's
   # reason line, which is the only place the distinction reaches a reader.
+  #
+  # A third token, "spent", marks a probe the wall-clock budget refused: dp_run
+  # declined the lookup or the exec. Neither the lookup nor the node is the
+  # cause then, and the caller says so. An exec cut at the deadline itself
+  # leaves no token, but the probes after it are refused and leave this one.
+  if [ "$_hp_rc" -eq "$DP_RC_SPENT" ]; then
+    echo spent
+    return 0
+  fi
   if [ "$_hp_rc" -ne 0 ]; then
     echo unknown
     return 0
   fi
   [ -n "$_hp_cni" ] || return 0
+  _hp_b=$(dp_clip 12)
   # The LB IP/port are embedded as inner single-quoted literals (same idiom as
   # the pod-path captures above) so the inner shell never re-splits them.
-  dp_run "$(dp_clip 12)" kubectl exec -n "$KUBEOVN_NS" "$_hp_cni" -c cni-server -- \
+  _hp_out=$(dp_run "$_hp_b" kubectl exec -n "$KUBEOVN_NS" "$_hp_cni" -c cni-server -- \
     sh -c "
       if command -v nc >/dev/null 2>&1; then
         nc -z -w 5 '$_hp_ip' '$_hp_port' >/dev/null 2>&1 && echo ok || echo fail
@@ -1166,7 +1187,13 @@ host_http_probe() {
       elif command -v wget >/dev/null 2>&1; then
         wget -q -T 6 -O /dev/null 'http://$_hp_ip:$_hp_port/' >/dev/null 2>&1 && echo ok || echo fail
       fi
-    " 2>/dev/null || true
+    " 2>/dev/null)
+  _hp_xrc=$?
+  if [ -z "$_hp_out" ] && [ "$_hp_xrc" -eq "$DP_RC_SPENT" ]; then
+    echo spent
+    return 0
+  fi
+  [ -z "$_hp_out" ] || printf '%s\n' "$_hp_out"
 }
 
 # ovs_iface_for <node> <iface-id> -- the OVS interface name on <node> whose
@@ -1420,16 +1447,26 @@ capture_lb_datapath() {
                        host_http_probe "$_probenode" "$_lbip" "$_lbport"
                        host_http_probe "$_probenode" "$_lbip" "$_lbport"; } )
         _decision=$(printf '%s\n' "$_outcomes" | lb_capture_decision)
-        if [ -z "$_outcomes" ]; then
+        if printf '%s\n' "$_outcomes" | grep -qx spent; then
+          # Read only when the verdict is unknown, so no probe produced an
+          # outcome, and the budget refused at least one of them. The wording
+          # stays with what is known: a probe before the refused one may have
+          # started and been cut at the deadline, and another may have found its
+          # lookup unanswered.
+          _why="no probe completed from $_probenode -- the ${DP_SECTION}'s share of the budget ran out, cutting a probe at the deadline or refusing it"
+          if printf '%s\n' "$_outcomes" | grep -qx unknown; then
+            _why="$_why, and for another the cni-server lookup did not answer"
+          fi
+        elif [ -z "$_outcomes" ]; then
           # Three ways in, and this script genuinely cannot tell them apart: the
           # lookup answered that the node runs no kube-ovn-cni pod, its host
-          # netns ships no nc/curl/wget, or the exec could not run at all (no
-          # timeout on its PATH, exec denied, the pod gone mid-probe). The
+          # netns ships no nc/curl/wget, or the exec could not run or finish
+          # (exec denied, the pod gone mid-probe, its own full bound). The
           # exec's status is swallowed by design -- this collector never fails a
           # job -- so they are reported as the set they are rather than guessed
           # apart. What is NOT said here is that the lookup went unanswered: it
           # answered, and pod_on_node keeps that distinction for its callers.
-          _why="no probe outcome from $_probenode -- no kube-ovn-cni pod there, or no TCP/HTTP client in its host netns, or the exec into it could not run"
+          _why="no probe outcome from $_probenode -- no kube-ovn-cni pod there, or no TCP/HTTP client in its host netns, or the exec into it could not run or finish"
         else
           # Outcomes exist and the verdict is still unknown, which the decision
           # helper only returns when every one of them is unknown -- and that

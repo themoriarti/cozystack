@@ -1922,6 +1922,13 @@ STUB
   [ "$(printf 'unknown\nfail\nfail\n' | lb_capture_decision)" = "capture" ]
 }
 
+@test "lb_capture_decision reads a probe refused for the budget as not run" {
+  # "spent" is a probe the budget refused. It is no verdict about the address,
+  # so it weighs like unknown and never like a failure.
+  [ "$(printf 'spent\nspent\nspent\n' | lb_capture_decision)" = "unknown" ]
+  [ "$(printf 'fail\nspent\n' | lb_capture_decision)" = "capture" ]
+}
+
 @test "lb_capture_decision returns unknown only when nothing could be attempted" {
   [ "$(printf 'unknown\nunknown\nunknown\n' | lb_capture_decision)" = "unknown" ]
   # A success still wins: the address answered, whatever else could not be tried.
@@ -1935,7 +1942,8 @@ STUB
   # Chainsaw catch itself, extracted from the config it lives in, so neither
   # side can quietly stop reporting. The Chainsaw backstop is the shorter of the
   # two -- 300s against 600s, because it shares an op envelope with the snapshot
-  # leg -- so it is the likelier of the pair to fire.
+  # leg -- and a line that only one caller prints is a line the reader learns
+  # to miss at the other.
   #
   # The backstop is simulated with a `timeout` on PATH that exits 124, for the
   # same reason the cozytest.sh-side test does it: the call site sees a non-zero
@@ -2122,9 +2130,9 @@ STUB
 
 @test "an affected node gets the cilium service map with no LoadBalancer in the cluster" {
   # The service map describes every service translation on the node, ClusterIP
-  # included, but it used to be read only for a LoadBalancer whose probe
-  # failed. A pod that cannot reach 10.96.0.1 is a ClusterIP failure, and the
-  # table that says which backend that VIP resolved to was never in the bundle.
+  # included. A pod that cannot reach 10.96.0.1 is a ClusterIP failure with no
+  # LoadBalancer path to run, so the table that says which backend that VIP
+  # resolved to has to come from the per-node capture.
   # Asserted on the argv: a header with no exec behind it would pass a grep of
   # the artifact.
   d=$(mktemp -d)
@@ -2280,6 +2288,172 @@ STUB
   rm -rf "$d"
 }
 
+@test "an LB probe refused for a spent budget is not blamed on the lookup" {
+  # The loop checks the budget before each LoadBalancer, but it can run out
+  # inside one: here the endpointslice read hangs until the deadline, so the
+  # cni-server lookup behind the probe is refused rather than asked. Writing
+  # that up as a lookup that did not answer names a cause that never happened.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *'component=speaker'*) echo 'speaker-0|node-a'; exit 0 ;;
+  'logs '*) echo '{"event":"serviceAnnounced","ips":["192.0.2.10"],"node":"node-a"}'; exit 0 ;;
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+esac
+sleep 300
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" \
+    DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *' '*component=speaker*' '*kubectl logs *')" \
+    COZY_DATAPLANE_BUDGET=4 COZY_DATAPLANE_LB_RESERVE=4 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  f="$d/out/lb-tenant_web.txt"
+  # Positive control: the probe leg was reached from the announcer.
+  grep -q 'announcer node: node-a' "$f"
+  if grep -q 'the cni-server lookup did not answer' "$f"; then
+    echo "a refused lookup was written up as one that did not answer:"
+    cat "$f"
+    exit 1
+  fi
+  grep -q "no probe completed from node-a -- the LoadBalancer section's share of the budget ran out" "$f"
+  rm -rf "$d"
+}
+
+@test "an LB probe exec cut by the budget is not blamed on a missing cni-server" {
+  # The sibling of the refused-lookup case: here the lookup answers, and it is
+  # the probe exec that runs into the deadline and the next ones that are
+  # refused. An empty outcome set reads as no cni-server, no probe client, or
+  # an exec that could not run -- and the first of those is what the lookup
+  # has just contradicted.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *endpointslices*) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  'get '*) exit 0 ;;
+esac
+sleep 300
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" DP_PASS='*kubectl get *' \
+    COZY_DATAPLANE_BUDGET=4 COZY_DATAPLANE_LB_RESERVE=4 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  f="$d/out/lb-tenant_web.txt"
+  # Positive control: the probe leg was reached with a backend node.
+  grep -q 'backend: ip=10.0.0.1 node=node-a' "$f"
+  if grep -q 'no kube-ovn-cni pod there' "$f"; then
+    echo "a budget cut was written up as a node without a cni-server:"
+    cat "$f"
+    exit 1
+  fi
+  grep -q "no probe completed from node-a -- the LoadBalancer section's share of the budget ran out" "$f"
+  if grep -q 'no probe could be attempted' "$f"; then
+    echo "a probe that ran and was cut was written up as never attempted:"
+    cat "$f"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "an LB probe stopped by both a refused lookup and the budget names both" {
+  # One probe's lookup is refused by the apiserver, the next hangs into the
+  # deadline and the last is refused by the budget. Naming only the budget
+  # would drop the lookup failure that stopped the first probe.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *endpointslices*) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  *'app=kube-ovn-cni'*)
+    if [ ! -e "$STUB_STATE" ]; then : >"$STUB_STATE"; echo 'Error from server (Forbidden)' >&2; exit 1; fi
+    sleep 300 ;;
+  'get '*) exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  STUB_STATE="$d/state" PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" \
+    DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *' '*endpointslices*')" \
+    COZY_DATAPLANE_BUDGET=4 COZY_DATAPLANE_LB_RESERVE=4 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  f="$d/out/lb-tenant_web.txt"
+  grep -q "no probe completed from node-a -- the LoadBalancer section's share of the budget ran out" "$f"
+  grep -q 'and for another the cni-server lookup did not answer' "$f"
+  rm -rf "$d"
+}
+
+@test "a node lookup refused for a spent budget is not called unanswered" {
+  # The node capture writes an absence three ways: none, unknown because the
+  # lookup did not answer, and -- once the budget runs out inside it -- not
+  # asked at all. The first lookup here hangs into the pod section's deadline,
+  # so the ones after it are refused.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  *'k8s-app=cilium'*) sleep 300 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" DP_PASS='*kubectl get pods -A *' \
+    COZY_DATAPLANE_BUDGET=4 COZY_DATAPLANE_LB_RESERVE=1 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  f="$d/out/node-node-a.txt"
+  # Positive control: the lookup that hung is reported as not answering.
+  grep -q 'could not determine whether a cilium-agent runs on node node-a -- the lookup did not answer' "$f"
+  if grep -q 'could not determine whether an ovs pod runs on node node-a -- the lookup did not answer' "$f"; then
+    echo "a refused lookup was called unanswered:"
+    cat "$f"
+    exit 1
+  fi
+  grep -q 'whether an ovs pod runs on node node-a was not asked: the pod section ran out of its share' "$f"
+  rm -rf "$d"
+}
+
+@test "a reserve that leaves the pod section nothing is named" {
+  # A reserve at least as large as the budget is a legal setting, and it means
+  # the pod section starts no call at all. Silence there reads as a cluster with
+  # nothing affected.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$d/bin/kubectl"
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" COZY_DATAPLANE_BUDGET=5 COZY_DATAPLANE_LB_RESERVE=5 \
+    timeout 30 "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  grep -q 'COZY_DATAPLANE_LB_RESERVE=5s leaves nothing of the 5s budget for the pod section' "$d/out/capture-notes.txt"
+  rm -rf "$d"
+}
+
 @test "a budget knob with a leading zero is read as decimal, not rejected by the shell" {
   # The knob is checked for digits and then used in shell arithmetic, which
   # reads a leading zero as octal: 08 aborts the script before it writes a
@@ -2348,8 +2522,8 @@ STUB
 
 @test "a failed OVS interface lookup is not written up as an absent interface" {
   # "no OVS interface with iface-id=..." is an answer only a lookup that ran
-  # and succeeded can give. One that failed, was cut off or was refused for a
-  # spent budget used to print the same line.
+  # and succeeded can give; one that failed, was cut off or was refused for a
+  # spent budget has to say which.
   d=$(mktemp -d)
   mkdir -p "$d/bin"
   cat >"$d/bin/kubectl" <<'STUB'
