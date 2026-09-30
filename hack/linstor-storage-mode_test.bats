@@ -74,10 +74,6 @@ kubectl() { printf '%s\n' "$*"; }
     echo "unexpected CDI StorageProfile patch: $command" >&2
     return 1
   fi
-  if ! grep -Fq 'timeout 600 sh -ec '\''until kubectl get storageprofile local' "$POST_PREP"; then
-    echo "container prep does not wait for CDI to create StorageProfile/local" >&2
-    return 1
-  fi
 }
 
 @test "invalid DRBD mode is rejected before cluster access" {

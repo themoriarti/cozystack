@@ -57,12 +57,19 @@ STUB
   # forever, and a hung unit test is worse than a failing one. It has to stay
   # low enough to trip in seconds -- a guard that itself takes minutes to fire
   # is the hang it was meant to prevent -- and above every budget under test.
+  # A failing exit status alone does not stop a loop that runs where set -e is
+  # off, such as a function called under `if !`, so the guard also kills the
+  # shell that called it.
   cat > "$d/bin/sleep" <<'STUB'
 #!/bin/sh
 now=$(cat "$STUB_CLOCK")
 now=$(( now + ${1%%.*} ))
 echo "$now" > "$STUB_CLOCK"
-[ "$now" -lt 5000 ]
+if [ "$now" -ge 5000 ]; then
+  echo "STUB-RUNAWAY: virtual clock passed 5000s" >&2
+  kill -TERM "$PPID"
+  exit 1
+fi
 STUB
 
   # Records the parsed bound and then runs the real command, so a wrapped call
@@ -102,6 +109,17 @@ case "$*" in
   'wait deployment/linstor-controller '*)
     [ "$STUB_DEPLOY_READY_AT" != never ] && [ "$now" -ge "$STUB_DEPLOY_READY_AT" ] ;;
   'get endpoints '*) echo 192.0.2.11 ;;
+  'get crd '*)
+    if [ -n "${STUB_CRD_MISSING:-}" ]; then
+      echo 'Error from server (NotFound): customresourcedefinitions.apiextensions.k8s.io "l2advertisements.metallb.io" not found' >&2
+      exit 1
+    fi ;;
+  'get storageprofile local'*)
+    if [ -n "${STUB_SP_MISSING:-}" ]; then
+      echo 'Error from server (NotFound): storageprofiles.cdi.kubevirt.io "local" not found' >&2
+      exit 1
+    fi ;;
+  'get hr -n cozy-metallb'*) echo "STUB-METALLB-HR metallb False install retries exhausted" ;;
   'get hr -A '*)
     echo "cozy-linstor linstor False dependency 'cozy-system/piraeus-operator' is not ready"
     echo "STUB-HR cozy-kubeovn kubeovn False install retries exhausted" ;;
@@ -267,29 +285,34 @@ run_prep() {
   rm -rf "$tmp"
 }
 
-@test "every kubectl call on the success, container and node timeout paths carries a bound" {
+@test "every kubectl call on the success, container and every timeout path carries a bound" {
   # The caller blocks in `wait` on this script, so a single call that never
   # returns holds the install open until the job's own ceiling instead of
   # failing a step. A deadline checked between iterations does not help: the
-  # check sits on the other side of the call that hangs.
-  for path in success container node-timeout; do
+  # check sits on the other side of the call that hangs. The timeout paths
+  # matter most: their reads run only once the cluster is already unhealthy.
+  for path in success container node-timeout hr-timeout metallb-timeout sp-timeout; do
     tmp=$(mktemp -d)
     prep_sandbox "$tmp"
+    hr_ready=0
     case $path in
       node-timeout) export STUB_ONLINE=2 ;;
       # The only path that patches the CDI StorageProfile.
       container) export COZY_LINSTOR_DRBD_ENABLED=false ;;
+      hr-timeout) hr_ready=never ;;
+      metallb-timeout) export STUB_CRD_MISSING=1 ;;
+      sp-timeout) export COZY_LINSTOR_DRBD_ENABLED=false STUB_SP_MISSING=1 ;;
     esac
 
-    run_prep "$tmp" 0 0
-    unset STUB_ONLINE COZY_LINSTOR_DRBD_ENABLED
+    run_prep "$tmp" "$hr_ready" 0
+    unset STUB_ONLINE COZY_LINSTOR_DRBD_ENABLED STUB_CRD_MISSING STUB_SP_MISSING
 
-    if [ "$path" = node-timeout ]; then
-      [ "$(cat "$tmp/rc")" -ne 0 ]
-      grep -q 'timed out waiting for linstor-controller endpoint' "$tmp/err"
-    else
-      [ "$(cat "$tmp/rc")" -eq 0 ]
-    fi
+    case $path in
+      success|container) [ "$(cat "$tmp/rc")" -eq 0 ] ;;
+      *)
+        [ "$(cat "$tmp/rc")" -ne 0 ]
+        grep -q 'timed out' "$tmp/err" ;;
+    esac
     if grep '^UNBOUNDED ' "$tmp/calls" >&2; then
       echo "unbounded kubectl calls on the $path path" >&2
       return 1
@@ -358,5 +381,62 @@ run_prep() {
   # list carries every Ready message, so the blocking release is named in the
   # same log that reports the timeout.
   grep -q 'STUB-HR cozy-kubeovn kubeovn' "$tmp/err"
+  rm -rf "$tmp"
+}
+
+@test "a MetalLB CRD wait that runs out says so and shows which CRD is missing" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  export STUB_CRD_MISSING=1
+  run_prep "$tmp" 0 0
+  unset STUB_CRD_MISSING
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  # A silent exit here leaves the "waiting for" line as the last word, which
+  # cannot tell CRDs that are late from an operator that never got that far.
+  grep -q 'timed out after 300s waiting for MetalLB CRDs' "$tmp/err"
+  grep -q 'l2advertisements.metallb.io" not found' "$tmp/err"
+  grep -q 'STUB-METALLB-HR' "$tmp/err"
+  final=$(cat "$tmp/clock")
+  [ "$final" -ge 300 ]
+  [ "$final" -le 302 ]
+  rm -rf "$tmp"
+}
+
+@test "a CDI StorageProfile wait that runs out says so before any patch" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  export COZY_LINSTOR_DRBD_ENABLED=false STUB_SP_MISSING=1
+  run_prep "$tmp" 0 0
+  unset COZY_LINSTOR_DRBD_ENABLED STUB_SP_MISSING
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  grep -q 'timed out after 600s waiting for CDI StorageProfile/local' "$tmp/err"
+  grep -q 'storageprofiles.cdi.kubevirt.io "local" not found' "$tmp/err"
+  if grep -q '^patch storageprofile' "$tmp/calls"; then
+    echo "the StorageProfile was patched although it never appeared" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+@test "container mode waits for the CDI StorageProfile before patching it" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  export COZY_LINSTOR_DRBD_ENABLED=false
+  run_prep "$tmp" 0 0
+  unset COZY_LINSTOR_DRBD_ENABLED
+
+  [ "$(cat "$tmp/rc")" -eq 0 ]
+  # CDI creates the profile asynchronously; a patch sent first fails on a
+  # profile that does not exist yet.
+  got=$(grep -n '^get storageprofile local' "$tmp/calls" | head -1 | cut -d: -f1)
+  patched=$(grep -n '^patch storageprofile local' "$tmp/calls" | head -1 | cut -d: -f1)
+  [ -n "$got" ]
+  [ -n "$patched" ]
+  [ "$got" -lt "$patched" ]
   rm -rf "$tmp"
 }

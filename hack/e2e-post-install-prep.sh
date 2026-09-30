@@ -37,8 +37,9 @@
 # before, since its budget still starts with the script.
 #
 # The cost is the ceiling: two waits at LINK_BUDGET each put the worst case at
-# twice that figure rather than once, ahead of the 300s node wait and the 300s
-# MetalLB wait below, and still well inside the timeout the job carries.
+# twice that figure rather than once, ahead of the 300s node wait, the 600s
+# StorageProfile wait in container mode and the 300s MetalLB wait below, and
+# still well inside the timeout the job carries.
 set -eu
 
 # The QEMU lane gives every satellite a private /dev/vdc and lets LINSTOR
@@ -233,6 +234,27 @@ controller_reachable() {
     --request-timeout=10s -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)" ]
 }
 
+# wait_for_object <budget-seconds> <description> <kubectl-get-args...>
+# Polls until `kubectl get` finds the objects. NotFound is the ordinary state
+# while polling, so each attempt's stderr is dropped; on the way out the read
+# runs once more with stderr kept, so a timeout says which object is missing
+# instead of ending on the "waiting for" line.
+wait_for_object() {
+  budget=$1
+  desc=$2
+  shift 2
+  echo "[post-install-prep] waiting for ${desc}"
+  deadline=$(( $(date +%s) + budget ))
+  until timeout -k 5 30 kubectl get "$@" --request-timeout=10s >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "[post-install-prep] timed out after ${budget}s waiting for ${desc}" >&2
+      timeout -k 5 30 kubectl get "$@" --request-timeout=10s 2>&1 | tail -n 30 >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
 wait_for_linstor "linstor HelmRelease to be Ready" \
   helmrelease/linstor -n cozy-linstor --for=condition=Ready
 wait_for_linstor "linstor-controller Deployment to be Available" \
@@ -285,14 +307,18 @@ echo "[post-install-prep] applying StorageClasses"
 render_linstor_storageclasses | $KUBECTL_BOUND kubectl apply --request-timeout=60s -f -
 
 if [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" = false ]; then
-  echo "[post-install-prep] waiting for CDI StorageProfile/local"
-  timeout 600 sh -ec 'until kubectl get storageprofile local >/dev/null 2>&1; do sleep 2; done'
+  wait_for_object 600 "CDI StorageProfile/local" storageprofile local
   echo "[post-install-prep] forcing CDI StorageProfile/local to RWO/Block"
   patch_local_cdi_storage_profile
 fi
 
-echo "[post-install-prep] waiting for MetalLB CRDs"
-timeout 300 sh -ec 'until kubectl get crd ipaddresspools.metallb.io l2advertisements.metallb.io >/dev/null 2>&1; do sleep 2; done'
+# The CRDs come from the metallb release, so its state is what separates CRDs
+# that are late from an operator that never got as far as installing them.
+if ! wait_for_object 300 "MetalLB CRDs" crd ipaddresspools.metallb.io l2advertisements.metallb.io; then
+  timeout -k 5 30 kubectl get hr -n cozy-metallb \
+    --request-timeout=10s 2>&1 | tail -n 30 >&2
+  exit 1
+fi
 
 echo "[post-install-prep] applying MetalLB IPAddressPool"
 $KUBECTL_BOUND kubectl apply --request-timeout=60s -f - <<'EOF'
