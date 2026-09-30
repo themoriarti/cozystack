@@ -596,6 +596,72 @@ func TestReconcileBucketClaim_InvalidBucketClassSkipsLabel(t *testing.T) {
 	}
 }
 
+func TestReconcileBucketClaim_InvalidBucketClassDropsStaleLabel(t *testing.T) {
+	s := newTestScheme()
+
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-bucket",
+			Namespace: "tenant-demo",
+		},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Kind: "bucket",
+			Type: "s3",
+			Selector: map[string]string{
+				"app.kubernetes.io/instance": "my-bucket",
+			},
+		},
+	}
+
+	overlong := strings.Repeat("a", 64)
+	bc := &cosiv1alpha1.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-bucket",
+			Namespace: "tenant-demo",
+			Labels: map[string]string{
+				"app.kubernetes.io/instance":          "my-bucket",
+				"workloads.cozystack.io/bucket-class": "seaweedfs-encrypted",
+			},
+		},
+		Spec: cosiv1alpha1.BucketClaimSpec{
+			BucketClassName: overlong,
+			Protocols:       []cosiv1alpha1.Protocol{cosiv1alpha1.ProtocolS3},
+		},
+		Status: cosiv1alpha1.BucketClaimStatus{
+			BucketReady: true,
+			BucketName:  "cosi-abc123",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(monitor, bc).
+		WithStatusSubresource(monitor).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{
+		Name:      "my-bucket",
+		Namespace: "tenant-demo",
+	}}
+
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	workload := &cozyv1alpha1.Workload{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{
+		Name:      "bucket-my-bucket",
+		Namespace: "tenant-demo",
+	}, workload); err != nil {
+		t.Fatalf("expected Workload to be created, got error: %v", err)
+	}
+
+	if v, ok := workload.Labels["workloads.cozystack.io/bucket-class"]; ok {
+		t.Errorf("expected stale bucket-class label to be dropped, got %q", v)
+	}
+}
+
 func TestReconcileBucketClaimNotReady(t *testing.T) {
 	s := newTestScheme()
 

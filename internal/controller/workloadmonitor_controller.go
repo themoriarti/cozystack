@@ -326,6 +326,7 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		maps.Copy(workload.Labels, bc.Labels)
 		workload.Labels[workloadMonitorLabel] = monitor.Name
 
+		delete(workload.Labels, "workloads.cozystack.io/bucket-class")
 		if bc.Spec.BucketClassName != "" {
 			if errs := validation.IsValidLabelValue(bc.Spec.BucketClassName); len(errs) == 0 {
 				workload.Labels["workloads.cozystack.io/bucket-class"] = bc.Spec.BucketClassName
