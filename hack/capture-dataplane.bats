@@ -489,6 +489,33 @@ dp_hanging_kubectl_dir() {
   printf '%s' "$_d"
 }
 
+# A `timeout` for PATH that decides a cutoff by argv instead of by the clock.
+# A read whose argv matches DP_PASS runs; otherwise one matching DP_CUT exits
+# 124 at once, the status a firing bound produces; anything else runs as given,
+# without a bound. A test that shrinks the real per-read bounds to one second
+# bounds the reads that must ANSWER as well, so on a loaded machine the answer
+# is cut and the collector correctly takes another branch: the test then
+# asserts a decision the clock made. Here the cut is the input, and a read that
+# bypasses `timeout` still reaches the stub and hangs into the test's own
+# backstop.
+dp_cut_timeout() {
+  cat >"$1/timeout" <<'SHIM'
+#!/bin/sh
+while [ $# -gt 0 ]; do
+  case $1 in
+    -k | -s) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+shift
+case "$*" in ${DP_PASS:-}) exec "$@" ;; esac
+case "$*" in ${DP_CUT:-}) exit 124 ;; esac
+exec "$@"
+SHIM
+  chmod +x "$1/timeout"
+}
+
 @test "a hung cluster-wide pod list is cut off rather than eating the envelope" {
   d=$(dp_hanging_kubectl_dir)
   # Without a per-read bound the first list runs until the CALLER's backstop and
@@ -518,10 +545,17 @@ done
 sleep 300
 STUB
   chmod +x "$d/bin/kubectl"
-  PATH="$d/bin:$PATH" COZY_DATAPLANE_LIST_TIMEOUT=1 COZY_DATAPLANE_READ_TIMEOUT=1 \
-    timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  # The closing line prints only if control reached it, which it cannot do while
-  # blocked on a read along the way.
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  # Every bounded read but the pod list is cut; a read that is not bounded
+  # reaches the stub's sleep and runs into the outer 90s instead.
+  rc=0
+  PATH="$d/bin:$PATH" DP_PASS='*get pods -A*' DP_CUT='*' \
+    "$real_timeout" 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  # The closing lines print only if control reached them, which it cannot do
+  # while blocked on a read along the way.
+  grep -q 'host->pod data-plane capture complete' "$d/log"
   grep -q 'skipping LB-datapath capture' "$d/log"
   # And the per-pod branch was really walked, so the reads inside it are covered
   # rather than assumed.
@@ -884,8 +918,14 @@ esac
 exit 0
 STUB
   chmod +x "$d/bin/kubectl"
-  PATH="$d/bin:$PATH" COZY_DATAPLANE_LIST_TIMEOUT=1 COZY_DATAPLANE_READ_TIMEOUT=1 \
-    timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_CUT='*--field-selector spec.nodeName=*' \
+    "$real_timeout" 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  # The decision under test, as the collector reports it.
+  grep -q 'looking up the pod matching k8s-app=cilium on node node-a was cut off' "$d/log"
   [ -f "$d/out/node-node-a.txt" ]
   if grep -q 'no cilium-agent pod found' "$d/out/node-node-a.txt"; then
     echo "a cut-off lookup was recorded as an absent pod:"
@@ -1470,8 +1510,16 @@ esac
 exit 0
 STUB
   chmod +x "$d/bin/kubectl"
-  PATH="$d/bin:$PATH" COZY_DATAPLANE_LIST_TIMEOUT=1 COZY_DATAPLANE_READ_TIMEOUT=1 \
-    timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_CUT='*app=kube-ovn-cni*' \
+    "$real_timeout" 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  # The decision under test, in the collector's own words, and the section's
+  # own end, so the file checks below read a finished directory.
+  grep -q 'LB tenant/web (192.0.2.10) not probed -- no probe could be attempted from node-a -- the cni-server lookup did not answer' "$d/log"
+  grep -q 'LoadBalancer-datapath capture complete' "$d/log"
   [ -f "$d/out/lb-tenant-web.txt" ]
   # The specific claim, not the bare word: the honest line says "whether the LB
   # is reachable ... is unknown" and contains it too.
