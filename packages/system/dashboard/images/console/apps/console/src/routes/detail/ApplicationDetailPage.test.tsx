@@ -8,13 +8,14 @@ const h = vi.hoisted(() => ({
   appKind: "Postgres",
   appPlural: "postgreses",
   tabLabels: [] as string[],
+  configMaps: [] as unknown[],
 }))
 
 vi.mock("@cozystack/k8s-client", () => ({
   useK8sGet: () => h.get,
   useK8sDelete: () => ({ mutateAsync: vi.fn() }),
   // Presence probes (use-resource-presence.ts) — report empty lists.
-  useK8sList: () => ({ data: undefined, isLoading: false }),
+  useK8sList: (ref: { plural: string }) => ({ data: { items: ref.plural === "configmaps" ? h.configMaps : [] }, isLoading: false }),
 }))
 vi.mock("../../lib/app-definitions.ts", () => ({
   useApplicationDefinitions: () => ({
@@ -107,5 +108,23 @@ describe("ApplicationDetailPage tabs for a virtual machine", () => {
       "Services",
       "Events",
     ])
+  })
+})
+
+describe("ApplicationDetailPage configuration", () => {
+  it("offers ConfigMaps declared by the application's resource map", () => {
+    h.appKind = "FoundationDB"
+    h.appPlural = "foundationdbs"
+    h.get = {
+      data: { kind: "FoundationDB", metadata: { name: "demo", namespace: "tenant-test" } },
+      isLoading: false,
+      error: undefined,
+    }
+    h.configMaps = [{ metadata: { name: "demo-resourcemap" }, data: {
+      resources: "- apiVersion: v1\n  kind: ConfigMap\n  name: foundationdb-demo-config",
+    } }]
+    h.tabLabels = []
+    renderPage()
+    expect(h.tabLabels).toContain("ConfigMaps")
   })
 })
