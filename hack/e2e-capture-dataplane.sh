@@ -25,7 +25,8 @@
 #
 # What it captures, per affected pod (NotReady and scheduled; podIP may still
 # be empty while CNI endpoint allocation is the thing that is stuck):
-#   - cilium-agent on the node:  cilium-dbg endpoint list; bpf ct entries for
+#   - cilium-agent on the node:  cilium-dbg endpoint list; the whole
+#     `cilium-dbg bpf lb list` service map, ClusterIP included; bpf ct entries for
 #     the podIP; a short bounded `cilium-dbg monitor --type drop`; hubble
 #     dropped-verdict observations (if the hubble CLI is present in the agent).
 #     NOTE: under enable-host-legacy-routing the host->local-pod path traverses
@@ -665,6 +666,15 @@ capture_node() {
       echo "=== cilium-dbg endpoint list ==="
       timeout 25 kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
         cilium-dbg endpoint list 2>&1 || true
+
+      echo
+      echo "=== cilium-dbg bpf lb list (service map, every Service type) ==="
+      # Unfiltered and on every affected node, not only on the LoadBalancer
+      # path: which backend a ClusterIP resolved to, and whether a backend that
+      # stopped answering is still in the map, is answered here and nowhere
+      # else in the bundle.
+      timeout 25 kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
+        cilium-dbg bpf lb list 2>&1 || true
 
       echo
       echo "=== cilium-dbg monitor --type drop (bounded ~8s) ==="

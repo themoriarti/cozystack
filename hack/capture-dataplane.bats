@@ -2022,3 +2022,38 @@ STUB
   awk '/read -r ns pod podip node/ { found = 1 } END { exit !found }' "$SCRIPT"
   grep -q '^  _cpd_ns=\$1' "$SCRIPT"
 }
+
+@test "an affected node gets the cilium service map with no LoadBalancer in the cluster" {
+  # The service map describes every service translation on the node, ClusterIP
+  # included, but it used to be read only for a LoadBalancer whose probe
+  # failed. A pod that cannot reach 10.96.0.1 is a ClusterIP failure, and the
+  # table that says which backend that VIP resolved to was never in the bundle.
+  # Asserted on the argv: a header with no exec behind it would pass a grep of
+  # the artifact.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  *'bpf lb list'*) echo "$*" >>"$STUB_CALLS" ;;
+esac
+for a in "$@"; do
+  case $a in
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+    svc) exit 0 ;;
+  esac
+done
+case "$*" in
+  *'k8s-app=cilium'*) echo 'cilium-xyz'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  STUB_CALLS="$d/calls" PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  # Positive control: no LoadBalancer path ran, so the read below is the pod
+  # path's own.
+  grep -q 'no Service type=LoadBalancer' "$d/log"
+  grep -q -- '-n cozy-cilium cilium-xyz -c cilium-agent -- cilium-dbg bpf lb list' "$d/calls"
+  grep -q '^=== cilium-dbg bpf lb list' "$d/out/node-node-a.txt"
+  rm -rf "$d"
+}
