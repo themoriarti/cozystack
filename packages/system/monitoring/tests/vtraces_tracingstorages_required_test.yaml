@@ -123,6 +123,70 @@ tests:
           path: spec.retentionMaxDiskSpaceUsageBytes
           value: "4GB"
 
+  # The design requires every traces backend to be disk-bounded, not only
+  # age-bounded, so a full PVC cannot block ingest. Without an explicit byte cap
+  # the store drops its oldest day once its filesystem is 80% full. The two
+  # flags are mutually exclusive: VictoriaTraces refuses to start with both.
+  - it: bounds a cluster-mode store at 80% of its filesystem without a byte cap
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - equal:
+          path: spec.storage.extraArgs["retention.maxDiskUsagePercent"]
+          value: "80"
+      - notExists:
+          path: spec.storage.retentionMaxDiskSpaceUsageBytes
+
+  - it: bounds a single-mode store at 80% of its filesystem without a byte cap
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - equal:
+          path: spec.extraArgs["retention.maxDiskUsagePercent"]
+          value: "80"
+      - notExists:
+          path: spec.retentionMaxDiskSpaceUsageBytes
+
+  - it: sets no percentage cap on a cluster-mode store that has a byte cap
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "8GB"
+    asserts:
+      - notExists:
+          path: spec.storage.extraArgs
+
+  - it: sets no percentage cap on a single-mode store that has a byte cap
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "4GB"
+    asserts:
+      - notExists:
+          path: spec.extraArgs
+
   - it: renders a Jaeger-typed Grafana datasource at vtselect:10471 for cluster mode
     templates:
       - templates/vtraces/grafana-datasource.yaml
