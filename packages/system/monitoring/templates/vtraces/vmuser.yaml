@@ -1,0 +1,51 @@
+{{- /*
+  A central-mode tenant's identity at the tenant-root vmauth (vmauth.yaml),
+  pinning one account for both its writes and its reads. Its password lives in
+  the chart-owned traces-central-credentials (central-credentials.yaml).
+*/ -}}
+{{- if include "monitoring.tracingCentral" . }}
+{{- /* Without the tenant-root VMAuth every export fails while every object
+       reports Ready. A live render sees the release namespace; an offline one
+       sees nothing and cannot tell a missing store from a missing cluster. */}}
+{{- if and (lookup "v1" "Namespace" "" .Release.Namespace) (not (lookup "operator.victoriametrics.com/v1beta1" "VMAuth" "tenant-root" "traces-central")) }}
+{{- fail "monitoring: shared-central tracing is on for this tenant, but tenant-root does not host a shared traces store (VMAuth tenant-root/traces-central is missing), so every span would be dropped. In the tenant-root Monitoring set tracingCentralHost: true with a tracingStorages entry named \"generic\" in cluster mode, or turn tracingCentral off for this tenant." }}
+{{- end }}
+{{- $tenantID := splitList ":" (include "monitoring.tracingTenantID" .) }}
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMUser
+metadata:
+  name: traces-central
+  labels:
+    tracing.cozystack.io/central-reader: "true"
+spec:
+  username: {{ .Release.Namespace }}
+  passwordRef:
+    name: traces-central-credentials
+    key: password
+  disable_secret_creation: true
+  # Every central tenant shares one vmauth; this caps what one of them holds in
+  # flight on each vmauth replica, writes and Grafana reads together. Above it
+  # vmauth queues a request for up to 10s (-maxQueueDuration), then answers 429,
+  # which the collector's exporter retries.
+  max_concurrent_requests: 4
+  targetRefs:
+    - crd:
+        kind: VTCluster/vtselect
+        name: generic
+        namespace: tenant-root
+      paths:
+        - /select/jaeger/.*
+      headers:
+        - "AccountID: {{ index $tenantID 0 }}"
+        - "ProjectID: {{ index $tenantID 1 }}"
+    - crd:
+        kind: VTCluster/vtinsert
+        name: generic
+        namespace: tenant-root
+      paths:
+        - /insert/opentelemetry/v1/traces
+      headers:
+        - "AccountID: {{ index $tenantID 0 }}"
+        - "ProjectID: {{ index $tenantID 1 }}"
+{{- end }}

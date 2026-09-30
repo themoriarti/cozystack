@@ -7,6 +7,11 @@
   backend" stays a clean off-state — there is deliberately no fail-on-empty
   guard here (contrast the logsStorages #3181 guard, which must fire because
   fluent-bit ships logs unconditionally, so an absent log store drops data).
+
+  Shared-central topology (monitoring.tracingCentral) moves only the collector's
+  export. The entries still listed here stay rendered: the switch belongs to the
+  parent tenant and the stores to this one, and a VTSingle takes its PVC with it.
+
   The readiness-gate healthCheckExprs on VTCluster/VTSingle stay unconditional:
   Flux evaluates them only against CRs present in the release inventory, so with
   nothing rendered they are inert.

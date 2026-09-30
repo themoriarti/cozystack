@@ -254,3 +254,73 @@
 {{-   end -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+  The shared VictoriaTraces store separates tenants only by the AccountID and
+  ProjectID request headers (two uint32s), so each tenant needs a stable pair it
+  cannot choose. It is derived from the namespace: the first 16 hex digits of
+  the sha256 of its name and UID, split into two uint32s, which needs no
+  allocator and no stored state. The UID keeps a tenant re-created under a
+  deleted tenant's name out of that tenant's retained spans; an offline render
+  has no UID and hashes the name alone. tenant-root's own spans stay in the
+  header-less default 0:0, since its collector always writes locally. Renders
+  "<AccountID>:<ProjectID>".
+*/ -}}
+{{- define "monitoring.tracingTenantID" -}}
+{{- $digits := dict "0" 0 "1" 1 "2" 2 "3" 3 "4" 4 "5" 5 "6" 6 "7" 7 "8" 8 "9" 9 "a" 10 "b" 11 "c" 12 "d" 13 "e" 14 "f" 15 -}}
+{{- $key := .Release.Namespace -}}
+{{- with dig "metadata" "uid" "" (lookup "v1" "Namespace" "" .Release.Namespace) -}}
+{{-   $key = printf "%s:%s" $key . -}}
+{{- end -}}
+{{- $sum := sha256sum $key -}}
+{{- $ids := list -}}
+{{- range $part := list (substr 0 8 $sum) (substr 8 16 $sum) -}}
+{{-   $n := 0 -}}
+{{-   range $c := splitList "" $part -}}
+{{-     $n = add (mul $n 16) (get $digits $c) -}}
+{{-   end -}}
+{{-   $ids = append $ids $n -}}
+{{- end -}}
+{{- printf "%d:%d" (index $ids 0 | int64) (index $ids 1 | int64) -}}
+{{- end -}}
+
+{{- /*
+  The central tenant's vmauth password: the one already stored, else a new
+  random one. Both the Secret and the collector's rollout checksum read it, and
+  randAlphaNum differs per call, so the first result is kept in .Values, which
+  every template of one render shares.
+*/ -}}
+{{- define "monitoring.tracingCentralPassword" -}}
+{{- if not (hasKey .Values "_tracingCentralPassword") -}}
+{{-   $password := "" -}}
+{{-   with (index (lookup "v1" "Secret" .Release.Namespace "traces-central-credentials") "data") -}}
+{{-     with .password }}{{ $password = b64dec . }}{{ end -}}
+{{-   end -}}
+{{-   if not $password }}{{ $password = randAlphaNum 32 }}{{ end -}}
+{{-   $_ := set .Values "_tracingCentralPassword" $password -}}
+{{- end -}}
+{{- index .Values "_tracingCentralPassword" -}}
+{{- end -}}
+
+{{- /* tenant-root hosts the shared store only when it opts in with
+       tracingCentralHost, since the store is also its own, and lists a
+       cluster-mode entry named generic, the store every central VMUser routes
+       to. Renders "true" or "". */}}
+{{- define "monitoring.tracingCentralStore" -}}
+{{- if and (eq .Release.Namespace "tenant-root") (eq (toString .Values.tracingCentralHost) "true") -}}
+{{-   range .Values.tracingStorages -}}
+{{-     if and (eq .name "generic") (eq (.mode | default "cluster") "cluster") }}true{{ end -}}
+{{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  Shared-central tracing is switched on only by the tenant chart, through
+  _namespace in the cozystack-values Secret: the apps API refuses `_` keys, so a
+  Monitoring application cannot opt itself in without the egress rules the
+  tenant chart renders under the same condition. tenant-root hosts the shared
+  store and never exports to it. Renders "true" or "".
+*/ -}}
+{{- define "monitoring.tracingCentral" -}}
+{{- if and (ne .Release.Namespace "tenant-root") (eq (toString (dig "tracingCentral" false (.Values._namespace | default dict))) "true") -}}true{{- end -}}
+{{- end -}}

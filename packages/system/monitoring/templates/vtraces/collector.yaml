@@ -7,22 +7,28 @@
   tracingStorages backend. No OpenTelemetry operator exists in the platform, so
   this is a plain Deployment + ConfigMap + Service (the fluent-bit pattern).
 
-  Trust boundary: the collector is the place where sampling/redaction (and, in
-  the shared-central topology, tenant-header injection) are enforced, but its
-  OTLP receiver is unauthenticated and the Service is a plain ClusterIP — actual
-  tenant isolation is provided by the tenant NetworkPolicies, not by this
-  manifest alone.
+  Trust boundary: the collector is the place where sampling/redaction are
+  enforced, but its OTLP receiver is unauthenticated and the Service is a plain
+  ClusterIP — actual tenant isolation is provided by the tenant NetworkPolicies
+  and, with shared-central tracing, by the vmauth in tenant-root, which pins the
+  account to the tenant's login whatever this collector sends.
 
   Off by default: tracingStorages is empty out of the box, so the collector
-  renders only once a backend is configured (or, in a later PR, central mode) —
-  there is no producer/backend to wire otherwise. Gating on a non-empty
-  tracingStorages, rather than failing on empty, keeps "no backend" a clean
-  off-state (an app's OTLP exporter simply finds no collector Service and
-  retries harmlessly) instead of aborting the whole monitoring release.
+  renders only once a backend is configured (local) or central mode is selected
+  — there is no producer/backend to wire otherwise. Gating on that, rather than
+  failing on empty, keeps "no backend" a clean off-state (an app's OTLP exporter
+  simply finds no collector Service and retries harmlessly) instead of aborting
+  the whole monitoring release.
 
-  Single backend: the exporter targets tracingStorages[0]. A collector fronting
-  more than one backend is rejected below rather than silently writing to only
-  the first, so this index is safe (the render is gated on a non-empty list).
+  Backend topology (monitoring.tracingCentral):
+    - local (default): the exporter targets the tenant's own tracingStorages[0]
+      in this namespace. A collector fronting more than one local backend is
+      rejected below rather than silently writing to only the first.
+    - central (shared-central topology): the exporter writes to the shared
+      VictoriaTraces in tenant-root through its vmauth, logged in as this
+      tenant's VMUser (vmuser.yaml). vmauth sets the account from that login,
+      so the account does not depend on what the collector, or anything else
+      running with its pod label, sends.
 */ -}}
 {{- define "monitoring.tracingCollectorConfig" -}}
 {{- $c := .Values.tracingCollector -}}
@@ -35,9 +41,15 @@
 {{- range ($c.redactAttributes | default list) -}}
 {{- if . }}{{- $redact = append $redact . -}}{{- end -}}
 {{- end -}}
+{{- $central := eq (include "monitoring.tracingCentral" .) "true" -}}
+{{- $endpoint := "" -}}
+{{- if $central -}}
+{{- $endpoint = "http://vmauth-traces-central.tenant-root.svc:8427/insert/opentelemetry/v1/traces" -}}
+{{- else -}}
 {{- $backend := index .Values.tracingStorages 0 -}}
 {{- $mode := $backend.mode | default "cluster" -}}
-{{- $endpoint := ternary (printf "http://vtsingle-%s.%s.svc:10428/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (printf "http://vtinsert-%s.%s.svc:10481/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (eq $mode "single") -}}
+{{- $endpoint = ternary (printf "http://vtsingle-%s.%s.svc:10428/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (printf "http://vtinsert-%s.%s.svc:10481/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (eq $mode "single") -}}
+{{- end -}}
 receivers:
   otlp:
     protocols:
@@ -53,6 +65,17 @@ processors:
   probabilistic_sampler:
     sampling_percentage: {{ $c.samplingPercentage }}
   batch: {}
+{{- if $central }}
+  # The account already separates tenants; the attribute keeps the source
+  # tenant on each span once it is copied out of the store, where the account
+  # does not travel. Prefixed so it does not overwrite an application's own
+  # `tenant`.
+  resource/tenant:
+    attributes:
+      - key: cozystack.tenant
+        value: {{ .Release.Namespace }}
+        action: upsert
+{{- end }}
 {{- if $redact }}
   attributes/redact:
     actions:
@@ -71,19 +94,36 @@ exporters:
   # -otlpGRPCListenAddr on the backend, so export over HTTP.
   otlphttp/victoriatraces:
     traces_endpoint: {{ $endpoint }}
+{{- if $central }}
+    auth:
+      authenticator: basicauth/vmauth
+    # The VMUser allows four requests in flight per vmauth replica, shared with
+    # the tenant's Grafana reads; two senders keep writes under it.
+    sending_queue:
+      num_consumers: 2
+{{- end }}
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
+{{- if $central }}
+  basicauth/vmauth:
+    client_auth:
+      username: ${env:VMAUTH_USERNAME}
+      password: ${env:VMAUTH_PASSWORD}
+{{- end }}
 service:
-  extensions: [health_check]
+  extensions: [health_check{{ if $central }}, basicauth/vmauth{{ end }}]
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, probabilistic_sampler, {{ if $redact }}attributes/redact, {{ end }}batch]
+      processors: [memory_limiter, {{ if $central }}resource/tenant, {{ end }}probabilistic_sampler, {{ if $redact }}attributes/redact, {{ end }}batch]
       exporters: [otlphttp/victoriatraces]
 {{- end -}}
-{{- if and .Values.tracingCollector.enabled (not (empty .Values.tracingStorages)) }}
+{{- if and .Values.tracingCollector.enabled (or (include "monitoring.tracingCentral" .) (not (empty .Values.tracingStorages))) }}
 {{- if gt (len .Values.tracingStorages) 1 }}
+{{- if include "monitoring.tracingCentral" . }}
+{{- fail "monitoring: tracingCollector fronts a single traces backend, but tracingStorages has more than one entry: once shared-central tracing is turned off, the collector would export to the first and leave the rest empty. Reduce tracingStorages to one entry or set tracingCollector.enabled=false." }}
+{{- end }}
 {{- fail "monitoring: tracingCollector fronts a single traces backend, but tracingStorages has more than one entry — the collector would export to the first and leave the rest empty. Reduce tracingStorages to one entry or set tracingCollector.enabled=false (apps then send OTLP straight to each backend)." }}
 {{- end }}
 ---
@@ -116,6 +156,10 @@ spec:
         app.kubernetes.io/name: otel-traces
       annotations:
         checksum/config: {{ include "monitoring.tracingCollectorConfig" . | sha256sum }}
+        {{- if eq (include "monitoring.tracingCentral" .) "true" }}
+        {{- /* The login is read from env at start, so a new one needs a new pod. */}}
+        checksum/credentials: {{ include "monitoring.tracingCentralPassword" . | sha256sum }}
+        {{- end }}
     spec:
       securityContext:
         runAsNonRoot: true
@@ -128,6 +172,19 @@ spec:
           image: {{ include "cozy-lib.image" (list .Values.tracingCollector.image $) }}
           args:
             - --config=/etc/otel-traces/config.yaml
+          {{- if eq (include "monitoring.tracingCentral" .) "true" }}
+          env:
+            - name: VMAUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: traces-central-credentials
+                  key: username
+            - name: VMAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: traces-central-credentials
+                  key: password
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

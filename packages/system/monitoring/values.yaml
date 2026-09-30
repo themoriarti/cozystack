@@ -52,6 +52,7 @@ logsStorages:
   storageClassName: ""
 
 tracingStorages: []
+tracingCentralHost: false
 
 tracingCollector:
   enabled: true
