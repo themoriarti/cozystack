@@ -1,5 +1,10 @@
 .PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check rd-presets-check migrations-target-check test test-controllers preflight
 
+# Before any include, the last file make has read is this one: MAKEFILES and
+# -f files given before it are earlier in the list, -f files after it are not
+# read yet.
+ROOT_MAKEFILE := $(lastword $(MAKEFILE_LIST))
+
 include hack/common-envs.mk
 
 build-deps:
@@ -196,7 +201,12 @@ BATS_UNIT_TARGETS := $(patsubst hack/%.bats,bats-unit-%,$(BATS_UNIT_FILES))
 # the live stream -- see the COZYTEST_TRACE comment in hack/cozytest.sh.
 COZYTEST_TRACE ?= 0
 
-bats-unit-tests: bats-unit-files-check $(BATS_UNIT_TARGETS)
+# A sub-make with --keep-going, so one red file does not stop make from
+# scheduling the files after it; the sub-make still exits non-zero if any
+# file failed (hack/bats-unit-keep-going.bats covers both). It shares the
+# caller's -j slots and --output-sync through MAKEFLAGS.
+bats-unit-tests: bats-unit-files-check
+	@$(MAKE) --file=$(ROOT_MAKEFILE) --no-print-directory --keep-going $(BATS_UNIT_TARGETS)
 
 bats-unit-files-check:
 	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
@@ -204,9 +214,8 @@ bats-unit-files-check:
 		exit 1; \
 	fi
 
-# Each file is its own prerequisite so `make -jN` can schedule them, and the
-# trace switch main added for the serial loop rides along per target rather than
-# being lost with it.
+# Each file is its own target of the sub-make so `make -jN` can schedule them,
+# and the trace switch rides along per target.
 .PHONY: $(BATS_UNIT_TARGETS)
 $(BATS_UNIT_TARGETS): bats-unit-%: hack/%.bats
 	@echo "--- running $< ---"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Contract for the bounded parallel unit-test fan-out used by PR CI.
 
-@test "every non-E2E BATS file is an independent Make prerequisite" {
+@test "every non-E2E BATS file is an independent Make target" {
     # --output-sync arrived in GNU Make 4.0, and macOS still ships 3.81, where
     # this invocation dies on an unknown option rather than telling the reader
     # why. CI is on 4.x, so the contract is still enforced where it gates a

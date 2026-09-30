@@ -154,8 +154,11 @@ brc_audit() {
   printf '%s\n' "$makefile" | grep -qF 'BATS_UNIT_TARGETS := $(patsubst hack/%.bats,bats-unit-%,$(BATS_UNIT_FILES))' \
     || { echo "FAIL: update the unit target model in hack/bats-runner-coverage.bats."; false; }
 
-  printf '%s\n' "$makefile" | grep -qF 'bats-unit-tests: bats-unit-files-check $(BATS_UNIT_TARGETS)' \
-    || { echo "FAIL: bats-unit-tests no longer depends on every discovered unit file."; false; }
+  printf '%s\n' "$makefile" | grep -qF 'bats-unit-tests: bats-unit-files-check' \
+    || { echo "FAIL: bats-unit-tests no longer checks that unit files were discovered."; false; }
+
+  printf '%s\n' "$makefile" | grep -qF -- '--keep-going $(BATS_UNIT_TARGETS)' \
+    || { echo "FAIL: bats-unit-tests no longer runs every discovered unit file past a failing one."; false; }
 
   printf '%s\n' "$makefile" | grep -qF '$(BATS_UNIT_TARGETS): bats-unit-%: hack/%.bats' \
     || { echo "FAIL: each unit target must depend on its discovered bats file."; false; }
