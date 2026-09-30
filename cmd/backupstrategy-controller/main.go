@@ -212,6 +212,11 @@ func main() {
 		}
 	}
 
+	if err := mgr.Add(&backupcontroller.LegacyPasswordScrubber{Client: mgr.GetClient()}); err != nil {
+		setupLog.Error(err, "unable to add LegacyPasswordScrubber runnable")
+		os.Exit(1)
+	}
+
 	// The default Strategy CRs and the Velero BSL are Helm-templated behind
 	// a lookup of the BucketClaim the same chart creates, so a fresh install
 	// renders them empty — permanently, because helm-controller does not
