@@ -1968,3 +1968,57 @@ STUB
   grep -q -- '--- new capture run ---' "$f"
   rm -rf "$d"
 }
+
+@test "no function writes a variable its caller or another function owns" {
+  # The script is POSIX sh, so there is no `local`: every assignment inside a
+  # function lands in the caller's scope. capture_node once wrote `node`, the
+  # variable of the loop that calls it, and capture_lb_node wrote the LB loop's
+  # own _lbip/_np/_epip/_of. Both were harmless only because each caller passed
+  # what it already held, or a default its later reads apply anyway; called with
+  # anything else, the rest of the iteration would describe another node under
+  # the right name.
+  #
+  # The rule held here: a name assigned inside a function is assigned in no
+  # other scope and read by no `read -r` list. Assignments are recognised at
+  # statement start only (line start, after `;`, `if`, `then`, `do`, `&&`,
+  # `||`), because `-l app=ovs` or `awk -v node=...` are arguments, not
+  # writes; quoted text is dropped for the same reason.
+  offenders=$(awk '
+    function strip(s) { gsub(/\047[^\047]*\047/, "", s); gsub(/"[^"]*"/, "", s); sub(/(^|[ \t])#.*/, "", s); return s }
+    /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/ { fn = $1; sub(/\(\).*/, "", fn); next }
+    fn != "" && /^\}/ { fn = ""; next }
+    {
+      s = strip($0)
+      scope = (fn == "" ? "<top level>" : fn)
+      if (match(s, /read -r [A-Za-z0-9_ ]+/)) {
+        k = split(substr(s, RSTART + 8, RLENGTH - 8), a, " ")
+        for (i = 1; i <= k; i++) readvar[a[i]] = 1
+      }
+      rest = s
+      while (match(rest, /(^|;|&&|\|\||(^|[ \t])(if|then|do|else))[ \t]*[A-Za-z_][A-Za-z0-9_]*=/)) {
+        v = substr(rest, RSTART, RLENGTH)
+        sub(/=$/, "", v); sub(/.*[^A-Za-z0-9_]/, "", v)
+        if (!((v SUBSEP scope) in seen)) {
+          seen[v SUBSEP scope] = 1
+          owners[v] = owners[v] " " scope; n[v]++
+          if (fn != "") infn[v] = infn[v] " " fn
+        }
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+    }
+    END {
+      for (v in infn) {
+        if (v in readvar) print v ": assigned in" infn[v] ", and a loop reads it with read -r"
+        else if (n[v] > 1) print v ": assigned in" owners[v]
+      }
+    }' "$SCRIPT" | LC_ALL=C sort)
+  if [ -n "$offenders" ]; then
+    echo "a function writes a variable another scope owns:"
+    printf '%s\n' "$offenders"
+    exit 1
+  fi
+  # Positive control: the extraction saw the loop variables and the function
+  # prefixes, so an empty list above is a clean file and not a blind scan.
+  awk '/read -r ns pod podip node/ { found = 1 } END { exit !found }' "$SCRIPT"
+  grep -q '^  _cpd_ns=\$1' "$SCRIPT"
+}

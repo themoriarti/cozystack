@@ -646,24 +646,24 @@ pod_memo_put() {
 }
 
 capture_node() {
-  node=$1
-  node_seen "$node" && return 0
-  mark_node "$node"
-  nf="$OUT/node-$node.txt"
+  _cn_node=$1
+  node_seen "$_cn_node" && return 0
+  mark_node "$_cn_node"
+  _cn_nf="$OUT/node-$_cn_node.txt"
 
-  agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$node"); _agent_ok=$?
-  ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$node"); _ovs_ok=$?
+  _cn_agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$_cn_node"); _cn_agent_ok=$?
+  _cn_ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$_cn_node"); _cn_ovs_ok=$?
   {
     echo "################################################################"
-    _agent_shown=${agent:-$([ "$_agent_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
-    _ovs_shown=${ovs:-$([ "$_ovs_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
-    echo "# NODE $node  (cilium-agent=$_agent_shown ovs=$_ovs_shown)"
+    _cn_agent_shown=${_cn_agent:-$([ "$_cn_agent_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
+    _cn_ovs_shown=${_cn_ovs:-$([ "$_cn_ovs_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
+    echo "# NODE $_cn_node  (cilium-agent=$_cn_agent_shown ovs=$_cn_ovs_shown)"
     echo "################################################################"
 
-    if [ -n "$agent" ]; then
+    if [ -n "$_cn_agent" ]; then
       echo
       echo "=== cilium-dbg endpoint list ==="
-      timeout 25 kubectl exec -n "$CILIUM_NS" "$agent" -c cilium-agent -- \
+      timeout 25 kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
         cilium-dbg endpoint list 2>&1 || true
 
       echo
@@ -671,26 +671,26 @@ capture_node() {
       # Two nested bounds: an inner `timeout 8` so the capture self-terminates
       # if the agent ships coreutils, and an outer `timeout 12` on the exec as
       # the hard backstop if it does not. Either way it cannot hang.
-      timeout 12 kubectl exec -n "$CILIUM_NS" "$agent" -c cilium-agent -- \
+      timeout 12 kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
         sh -c 'timeout 8 cilium-dbg monitor --type drop 2>&1 || true' 2>&1 || true
 
       echo
       echo "=== hubble observe --verdict DROPPED --last 200 (if hubble present) ==="
-      timeout 25 kubectl exec -n "$CILIUM_NS" "$agent" -c cilium-agent -- \
+      timeout 25 kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
         sh -c 'command -v hubble >/dev/null 2>&1 && hubble observe --verdict DROPPED --last 200 2>&1 || echo "hubble CLI not present in agent"' 2>&1 || true
     else
       echo
-      if [ "$_agent_ok" -eq 0 ]; then
-        echo "(no cilium-agent pod found on node $node)"
+      if [ "$_cn_agent_ok" -eq 0 ]; then
+        echo "(no cilium-agent pod found on node $_cn_node)"
       else
-        echo "(could not determine whether a cilium-agent runs on node $node -- the lookup did not answer)"
+        echo "(could not determine whether a cilium-agent runs on node $_cn_node -- the lookup did not answer)"
       fi
     fi
 
-    if [ -n "$ovs" ]; then
+    if [ -n "$_cn_ovs" ]; then
       echo
       echo "=== ovs-ofctl dump-flows br-int ==="
-      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
+      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
         ovs-ofctl dump-flows br-int 2>&1 || true
 
       echo
@@ -702,12 +702,12 @@ capture_node() {
       # the CNI "port ready" barrier), and "took <N>ms" / recompute /
       # "Unreasonably long ... poll interval" (ovn-controller stalls). A
       # physical_flow_output "took <N>ms" spanning the failure window is proof.
-      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
+      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
         sh -c 'grep -E "physical_flow_output|if_status_mgr|took [0-9]+ ?ms|recompute|Unreasonably long" /var/log/ovn/ovn-controller.log 2>/dev/null | tail -n 400 || echo "no matching lines in /var/log/ovn/ovn-controller.log"' 2>&1 || true
 
       echo
       echo "=== ovn-controller.log tail (bounded) ==="
-      timeout 20 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
+      timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
         sh -c 'tail -n 2000 /var/log/ovn/ovn-controller.log 2>/dev/null || echo "no /var/log/ovn/ovn-controller.log"' 2>&1 || true
 
       echo
@@ -716,32 +716,32 @@ capture_node() {
       # nr_throttled / throttled_usec means ovn-controller was CPU-starved, which
       # aggravates the flow-programming lag above. cgroup v2 path first, v1
       # fallback.
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
         sh -c 'cat /sys/fs/cgroup/cpu.stat 2>/dev/null || cat /sys/fs/cgroup/cpu/cpu.stat 2>/dev/null || echo "no cpu.stat at /sys/fs/cgroup/cpu.stat (v2) or /sys/fs/cgroup/cpu/cpu.stat (v1)"' 2>&1 || true
     else
       echo
-      if [ "$_ovs_ok" -eq 0 ]; then
-        echo "(no ovs pod found on node $node)"
+      if [ "$_cn_ovs_ok" -eq 0 ]; then
+        echo "(no ovs pod found on node $_cn_node)"
       else
-        echo "(could not determine whether an ovs pod runs on node $node -- the lookup did not answer)"
+        echo "(could not determine whether an ovs pod runs on node $_cn_node -- the lookup did not answer)"
       fi
     fi
 
-    cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$node"); _cni_ok=$?
-    if [ -n "$cni" ]; then
+    _cn_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_cn_node"); _cn_cni_ok=$?
+    if [ -n "$_cn_cni" ]; then
       echo
       echo "=== host netns: ip neigh (via kube-ovn cni-server, hostNetwork) ==="
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
         ip neigh 2>&1 || true
 
       echo
       echo "=== host netns: ip rule ==="
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
         ip rule 2>&1 || true
 
       echo
       echo "=== host netns: ip addr show ovn0 ==="
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
         ip addr show ovn0 2>&1 || true
 
       echo
@@ -750,7 +750,7 @@ capture_node() {
       # address instead: the interface actually holding it might be anything on
       # the host (see the header block). This is the same info scoped to every
       # interface, not just ovn0.
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
         ip -o addr show 2>&1 || true
 
       echo
@@ -758,17 +758,17 @@ capture_node() {
       # A podIP resolving to `local <ip> dev lo table local` here is the
       # fingerprint from the header block: it wins over the ovn0 route in
       # `main` because table local is consulted first (see `ip rule` above).
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
         ip route show table local 2>&1 || true
     else
       echo
-      if [ "$_cni_ok" -eq 0 ]; then
-        echo "(no kube-ovn-cni pod found on node $node -- host netns capture skipped)"
+      if [ "$_cn_cni_ok" -eq 0 ]; then
+        echo "(no kube-ovn-cni pod found on node $_cn_node -- host netns capture skipped)"
       else
-        echo "(could not determine whether a kube-ovn-cni pod runs on node $node -- the lookup did not answer; host netns capture skipped)"
+        echo "(could not determine whether a kube-ovn-cni pod runs on node $_cn_node -- the lookup did not answer; host netns capture skipped)"
       fi
     fi
-  } >> "$nf" 2>&1 || true
+  } >> "$_cn_nf" 2>&1 || true
 }
 
 # capture_pod_dataplane <ns> <pod> <podip> <node> <label> [scope] -- the
@@ -1119,51 +1119,51 @@ ovs_iface_for() {
 # role is ANNOUNCER or ENDPOINT and is stamped on every block so the two halves
 # of the path are unambiguous in the artifact.
 capture_lb_node() {
-  _n=$1; _role=$2; _lbip=$3; _np=$4; _epip=$5; _of=$6
-  _agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$_n"); _lb_agent_ok=$?
-  _ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$_n"); _lb_ovs_ok=$?
-  _cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_n"); _lb_cni_ok=$?
-  _lb_a=${_agent:-$([ "$_lb_agent_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
-  _lb_o=${_ovs:-$([ "$_lb_ovs_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
-  _lb_c=${_cni:-$([ "$_lb_cni_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
+  _cln_n=$1; _cln_role=$2; _cln_lbip=$3; _cln_np=$4; _cln_epip=$5; _cln_of=$6
+  _cln_agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$_cln_n"); _cln_agent_ok=$?
+  _cln_ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$_cln_n"); _cln_ovs_ok=$?
+  _cln_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_cln_n"); _cln_cni_ok=$?
+  _cln_a=${_cln_agent:-$([ "$_cln_agent_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
+  _cln_o=${_cln_ovs:-$([ "$_cln_ovs_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
+  _cln_c=${_cln_cni:-$([ "$_cln_cni_ok" -eq 0 ] && echo '<none>' || echo '<unknown>')}
   {
     echo
-    echo "---------------- $_role node=$_n (cilium=$_lb_a ovs=$_lb_o cni=$_lb_c) ----------------"
+    echo "---------------- $_cln_role node=$_cln_n (cilium=$_cln_a ovs=$_cln_o cni=$_cln_c) ----------------"
 
-    if [ -n "$_agent" ]; then
+    if [ -n "$_cln_agent" ]; then
       echo
-      echo "=== [$_role $_n] cilium-dbg bpf lb list | grep LB IP / nodePort -- host cilium LB->backend programming ==="
+      echo "=== [$_cln_role $_cln_n] cilium-dbg bpf lb list | grep LB IP / nodePort -- host cilium LB->backend programming ==="
       # Answers the first fork: if the host cilium has NO LB map entry for the
       # LB IP or the nodePort, the fault is host-cilium-not-programming; if it
       # does, suspicion shifts to kube-ovn delivery (the captures below).
-      timeout 25 kubectl exec -n "$CILIUM_NS" "$_agent" -c cilium-agent -- \
-        sh -c "cilium-dbg bpf lb list 2>/dev/null | grep -E '$_lbip|:$_np' || echo 'no bpf lb entry for $_lbip or nodePort $_np'" 2>&1 || true
+      timeout 25 kubectl exec -n "$CILIUM_NS" "$_cln_agent" -c cilium-agent -- \
+        sh -c "cilium-dbg bpf lb list 2>/dev/null | grep -E '$_cln_lbip|:$_cln_np' || echo 'no bpf lb entry for $_cln_lbip or nodePort $_cln_np'" 2>&1 || true
     fi
 
-    if [ -n "$_cni" ]; then
+    if [ -n "$_cln_cni" ]; then
       echo
-      echo "=== [$_role $_n] host netns: kernel conntrack -d $_lbip (via cni-server) ==="
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cni" -c cni-server -- \
-        sh -c "if command -v conntrack >/dev/null 2>&1; then conntrack -L -d '$_lbip' 2>/dev/null || echo 'no conntrack entries for $_lbip'; else grep -F '$_lbip' /proc/net/nf_conntrack 2>/dev/null || echo 'no conntrack CLI; no /proc/net/nf_conntrack match for $_lbip'; fi" 2>&1 || true
+      echo "=== [$_cln_role $_cln_n] host netns: kernel conntrack -d $_cln_lbip (via cni-server) ==="
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cln_cni" -c cni-server -- \
+        sh -c "if command -v conntrack >/dev/null 2>&1; then conntrack -L -d '$_cln_lbip' 2>/dev/null || echo 'no conntrack entries for $_cln_lbip'; else grep -F '$_cln_lbip' /proc/net/nf_conntrack 2>/dev/null || echo 'no conntrack CLI; no /proc/net/nf_conntrack match for $_cln_lbip'; fi" 2>&1 || true
 
       echo
-      echo "=== [$_role $_n] host netns: ip neigh (LB IP $_lbip, endpoint IP $_epip) ==="
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cni" -c cni-server -- \
-        sh -c "ip neigh 2>/dev/null | grep -E '$_lbip|$_epip' || echo 'no neigh entry for $_lbip or $_epip'" 2>&1 || true
+      echo "=== [$_cln_role $_cln_n] host netns: ip neigh (LB IP $_cln_lbip, endpoint IP $_cln_epip) ==="
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cln_cni" -c cni-server -- \
+        sh -c "ip neigh 2>/dev/null | grep -E '$_cln_lbip|$_cln_epip' || echo 'no neigh entry for $_cln_lbip or $_cln_epip'" 2>&1 || true
     fi
 
-    if [ -n "$_ovs" ]; then
+    if [ -n "$_cln_ovs" ]; then
       echo
-      echo "=== [$_role $_n] ovs-ofctl dump-flows br-int | grep nodePort $_np / endpoint $_epip ==="
-      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_ovs" -c openvswitch -- \
-        sh -c "ovs-ofctl dump-flows br-int 2>/dev/null | grep -E '$_np|$_epip' || echo 'no br-int flow matching nodePort $_np or endpoint $_epip'" 2>&1 || true
+      echo "=== [$_cln_role $_cln_n] ovs-ofctl dump-flows br-int | grep nodePort $_cln_np / endpoint $_cln_epip ==="
+      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_cln_ovs" -c openvswitch -- \
+        sh -c "ovs-ofctl dump-flows br-int 2>/dev/null | grep -E '$_cln_np|$_cln_epip' || echo 'no br-int flow matching nodePort $_cln_np or endpoint $_cln_epip'" 2>&1 || true
 
       echo
-      echo "=== [$_role $_n] ovn-controller.log decisive lines ==="
-      timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_ovs" -c openvswitch -- \
+      echo "=== [$_cln_role $_cln_n] ovn-controller.log decisive lines ==="
+      timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_cln_ovs" -c openvswitch -- \
         sh -c 'grep -E "physical_flow_output|if_status_mgr|took [0-9]+ ?ms|recompute|Unreasonably long" /var/log/ovn/ovn-controller.log 2>/dev/null | tail -n 200 || echo "no matching lines in /var/log/ovn/ovn-controller.log"' 2>&1 || true
     fi
-  } >> "$_of" 2>&1 || true
+  } >> "$_cln_of" 2>&1 || true
 }
 
 # capture_lb_datapath: enumerate LBs, gate on a live probe, and characterise the
