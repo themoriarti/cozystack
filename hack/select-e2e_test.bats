@@ -289,6 +289,30 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "a shared backup helper escalates instead of selecting nothing" {
+    # examples/backups/_lib/ is sourced by the backup walkthroughs, so it is
+    # shared material the way hack/e2e-chainsaw/_lib/ is. Read as an app named
+    # _lib it matched no suite and selected nothing, which both lanes take as
+    # "skip Chainsaw": a change to every walkthrough at once would test none.
+    # Also pinned beside an app path, where selecting only that app would pass
+    # a test that checked for a non-empty selection.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    for diff in "examples/backups/_lib/wait-helpers.sh" \
+        "examples/backups/_lib/wait-helpers.sh examples/backups/postgres/run-all.sh"; do
+        printf '%s\n' $diff > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+        assert_selection "a shared backup helper was not escalated for: $diff" \
+            "$output" "$(full_suite_list)"
+        if ! grep -q "select-e2e: 'examples/backups/_lib/wait-helpers.sh' is shared by every backup walkthrough" "$tmp/err"; then
+            echo "the escalation must name the helper; stderr was:" >&2
+            cat "$tmp/err" >&2
+            exit 1
+        fi
+    done
+    rm -rf "$tmp"
+}
+
 # --- #3392: every path is classified; unclassified escalates -----------------
 #
 # The bug these cover: an unrecognised path used to select nothing, both lanes

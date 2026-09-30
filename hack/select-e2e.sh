@@ -114,8 +114,9 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 # the fall-through at the bottom of the loop can escalate safely: the cost of
 # forgetting an inert path is a wasted full run, the cost of forgetting a live
 # one used to be a green gate with nothing tested.
-#   - examples/       demo manifests; examples/backups/<app>/ is handled above
-#                     as a real test harness before this check is reached
+#   - examples/       demo manifests; examples/backups/<app>/ and
+#                     examples/backups/_lib/ are handled above as real test
+#                     harness before this check is reached
 #   - .github/        templates, CODEOWNERS, labels, renovate, linter config —
 #                     minus the e2e workflows escalated above
 #   - .claude/ .gemini/  agent config, never shipped
@@ -413,6 +414,16 @@ while IFS= read -r file || [ -n "$file" ]; do
         echo "select-e2e: '$file' names no runnable suite ('$app') — escalating to the full suite" >&2
         trigger_full=1
       fi
+      continue ;;
+    examples/backups/_lib/*)
+      # A helper here is shared by the backup walkthroughs, so it is material
+      # of the same kind as hack/e2e-chainsaw/_lib/. Matched before the per-app
+      # rule below, which would read _lib as an app, find no suite and select
+      # nothing. Escalated rather than mapped to the suites that run a
+      # walkthrough: that set is spread across the suites' own scripts, and a
+      # derivation that misses one fails open.
+      echo "select-e2e: '$file' is shared by every backup walkthrough — escalating to the full suite" >&2
+      trigger_full=1
       continue ;;
     examples/backups/*/*)
       # A backup round-trip Test executes the example scripts under
