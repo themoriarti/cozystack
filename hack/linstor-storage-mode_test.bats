@@ -68,7 +68,7 @@ kubectl() { printf '%s\n' "$*"; }
 
 @test "container mode pins CDI local StorageProfile to RWO Block" {
   command=$(patch_local_cdi_storage_profile)
-  expected='patch storageprofile local --type merge -p {"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Block"}]}}'
+  expected='patch storageprofile local --request-timeout=60s --type merge -p {"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Block"}]}}'
 
   if [ "$command" != "$expected" ]; then
     echo "unexpected CDI StorageProfile patch: $command" >&2

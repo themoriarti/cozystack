@@ -81,6 +81,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 printf 'timeout dur=%s grace=%s -- %s\n' "$dur" "$grace" "$*" >> "$STUB_CALLS"
+export STUB_BOUNDED=1
 exec "$@"
 STUB
 
@@ -88,6 +89,12 @@ STUB
 #!/bin/sh
 now=$(cat "$STUB_CLOCK")
 printf '%s\n' "$*" >> "$STUB_CALLS"
+# A call that nothing bounds: not run under `timeout`, and not a `kubectl
+# wait` carrying its own --timeout. Recorded on a line of its own so the
+# assertions on the plain call lines above keep matching.
+bounded=${STUB_BOUNDED:-}
+case "$*" in 'wait '*--timeout=*) bounded=1 ;; esac
+[ -n "$bounded" ] || printf 'UNBOUNDED %s\n' "$*" >> "$STUB_CALLS"
 case "$*" in
   'wait helmrelease/linstor '*)
     [ "$STUB_HR_READY_AT" != never ] && [ "$now" -ge "$STUB_HR_READY_AT" ] ;;
@@ -120,7 +127,9 @@ case "$*" in
       exit 1
     fi
     echo "STUB-EVENT MountVolume.SetUp failed for volume client-tls" ;;
-  *'linstor node list') printf 'Online\nOnline\nOnline\n' ;;
+  *'linstor node list')
+    i=0
+    while [ "$i" -lt "${STUB_ONLINE:-3}" ]; do echo Online; i=$((i + 1)); done ;;
   *) exit 0 ;;
 esac
 STUB
@@ -252,4 +261,48 @@ run_prep() {
     return 1
   fi
   rm -rf "$tmp"
+}
+
+@test "every kubectl call on the success, container and node timeout paths carries a bound" {
+  # The caller blocks in `wait` on this script, so a single call that never
+  # returns holds the install open until the job's own ceiling instead of
+  # failing a step. A deadline checked between iterations does not help: the
+  # check sits on the other side of the call that hangs.
+  for path in success container node-timeout; do
+    tmp=$(mktemp -d)
+    prep_sandbox "$tmp"
+    case $path in
+      node-timeout) export STUB_ONLINE=2 ;;
+      # The only path that patches the CDI StorageProfile.
+      container) export COZY_LINSTOR_DRBD_ENABLED=false ;;
+    esac
+
+    run_prep "$tmp" 0 0
+    unset STUB_ONLINE COZY_LINSTOR_DRBD_ENABLED
+
+    if [ "$path" = node-timeout ]; then
+      [ "$(cat "$tmp/rc")" -ne 0 ]
+      grep -q 'timed out waiting for linstor-controller endpoint' "$tmp/err"
+    else
+      [ "$(cat "$tmp/rc")" -eq 0 ]
+    fi
+    if grep '^UNBOUNDED ' "$tmp/calls" >&2; then
+      echo "unbounded kubectl calls on the $path path" >&2
+      return 1
+    fi
+    # A plain request keeps a client budget strictly inside the wall clock one,
+    # so kubectl names why it could not finish before the kill lands.
+    grep '^timeout dur=.* -- kubectl \(get\|apply\|patch\|events\) ' "$tmp/calls" > "$tmp/reads" || true
+    [ -s "$tmp/reads" ]
+    while IFS= read -r line; do
+      outer=${line#timeout dur=}
+      outer=${outer%% *}
+      inner=$(printf '%s' "$line" | sed -n 's/.*--request-timeout=\([0-9]*\)s.*/\1/p')
+      if [ -z "$inner" ] || [ "$inner" -ge "$outer" ]; then
+        echo "client budget not inside the wall clock one: $line" >&2
+        return 1
+      fi
+    done < "$tmp/reads"
+    rm -rf "$tmp"
+  done
 }

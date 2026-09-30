@@ -55,16 +55,22 @@ validate_linstor_storage_mode() {
   esac
 }
 
+# KUBECTL_BOUND prefixes the cluster calls in the helpers below with a wall-clock
+# bound. The main body sets it; it stays empty when unit tests source the
+# helpers, because `timeout` execs a binary and would bypass the kubectl shell
+# function those tests substitute, reaching whatever cluster the host points at.
+KUBECTL_BOUND=
+
 create_linstor_storage_pool() {
   e2e_linstor_node=$1
   case "${COZY_LINSTOR_DRBD_ENABLED:-true}" in
     true)
-      kubectl exec -n cozy-linstor deploy/linstor-controller -- \
+      $KUBECTL_BOUND kubectl exec -n cozy-linstor deploy/linstor-controller -- \
         linstor physical-storage create-device-pool zfs "$e2e_linstor_node" /dev/vdc \
         --pool-name data --storage-pool data
       ;;
     false)
-      kubectl exec -n cozy-linstor deploy/linstor-controller -- \
+      $KUBECTL_BOUND kubectl exec -n cozy-linstor deploy/linstor-controller -- \
         linstor storage-pool create zfs "$e2e_linstor_node" data "data-$e2e_linstor_node"
       ;;
     *) return 2 ;;
@@ -120,7 +126,7 @@ EOF
 # Pin the one class used by that lane to the RWO/Block combination phase-0
 # proved before any DataVolume can consume the inferred default.
 patch_local_cdi_storage_profile() {
-  kubectl patch storageprofile local --type merge \
+  $KUBECTL_BOUND kubectl patch storageprofile local --request-timeout=60s --type merge \
     -p '{"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Block"}]}}'
 }
 
@@ -132,6 +138,15 @@ fi
 if ! validate_linstor_storage_mode; then
   exit 2
 fi
+
+# Every call that does work carries a bound, not only the waits: the caller
+# blocks in `wait` on this script, so one call that never returns holds the
+# install open until the job's own ceiling instead of failing the step. A
+# deadline checked between loop iterations does not cover the call inside the
+# iteration. Plain requests also carry a --request-timeout strictly inside the
+# outer bound, so kubectl gets to name the reason before the kill lands; exec
+# streams get the outer bound alone.
+KUBECTL_BOUND="timeout -k 5 300"
 
 # Per-link budget in seconds, applied by wait_for_linstor to each link separately.
 LINK_BUDGET=900
@@ -197,8 +212,8 @@ wait_for_linstor() {
 # .subsets[].notReadyAddresses), so a non-empty addresses list is exactly
 # ">=1 ready backend". Missing object / API error -> empty -> not reachable.
 controller_reachable() {
-  [ -n "$(kubectl get endpoints linstor-controller -n cozy-linstor \
-    -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)" ]
+  [ -n "$(timeout -k 5 30 kubectl get endpoints linstor-controller -n cozy-linstor \
+    --request-timeout=10s -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)" ]
 }
 
 wait_for_linstor "linstor HelmRelease to be Ready" \
@@ -223,18 +238,20 @@ wait_for_linstor "linstor-controller Deployment to be Available" \
 echo "[post-install-prep] waiting for linstor-controller endpoint + 3 LINSTOR nodes Online"
 node_deadline=$(( $(date +%s) + 300 ))
 until controller_reachable \
-  && [ "$(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor node list 2>/dev/null | grep -c Online)" -eq 3 ]; do
+  && [ "$(timeout -k 5 30 kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor node list 2>/dev/null | grep -c Online)" -eq 3 ]; do
   if [ "$(date +%s)" -ge "$node_deadline" ]; then
     echo "[post-install-prep] timed out waiting for linstor-controller endpoint + 3 LINSTOR nodes Online" >&2
-    kubectl get endpoints linstor-controller -n cozy-linstor -o wide >&2 || true
-    kubectl get pods -n cozy-linstor -o wide >&2 || true
+    timeout -k 5 30 kubectl get endpoints linstor-controller -n cozy-linstor -o wide \
+      --request-timeout=10s 2>&1 | tail -n 30 >&2
+    timeout -k 5 30 kubectl get pods -n cozy-linstor -o wide \
+      --request-timeout=10s 2>&1 | tail -n 30 >&2
     exit 1
   fi
   sleep 2
 done
 
 echo "[post-install-prep] creating LINSTOR storage pools (parallel across nodes)"
-created_pools=$(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor sp l -s data --pastable | awk '$2 == "data" {printf " " $4} END{printf " "}')
+created_pools=$($KUBECTL_BOUND kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor sp l -s data --pastable | awk '$2 == "data" {printf " " $4} END{printf " "}')
 pids=""
 for node in srv1 srv2 srv3; do
   case $created_pools in
@@ -248,7 +265,7 @@ for pid in $pids; do
 done
 
 echo "[post-install-prep] applying StorageClasses"
-render_linstor_storageclasses | kubectl apply -f -
+render_linstor_storageclasses | $KUBECTL_BOUND kubectl apply --request-timeout=60s -f -
 
 if [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" = false ]; then
   echo "[post-install-prep] waiting for CDI StorageProfile/local"
@@ -261,7 +278,7 @@ echo "[post-install-prep] waiting for MetalLB CRDs"
 timeout 300 sh -ec 'until kubectl get crd ipaddresspools.metallb.io l2advertisements.metallb.io >/dev/null 2>&1; do sleep 2; done'
 
 echo "[post-install-prep] applying MetalLB IPAddressPool"
-kubectl apply -f - <<'EOF'
+$KUBECTL_BOUND kubectl apply --request-timeout=60s -f - <<'EOF'
 ---
 apiVersion: metallb.io/v1beta1
 kind: L2Advertisement
