@@ -907,6 +907,42 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "a seaweedfs change selects every suite that uses tenant-root's object storage" {
+    # cozystack.seaweedfs-application used to map to a seaweedfs suite that does
+    # not exist, so every seaweedfs change ran the whole suite. bucket is not the
+    # only suite it can break. The backup round-trips write to the same instance
+    # through the in-cluster seaweedfs-s3 endpoint, most of them verifying its
+    # CA, which bucket skips; harbor gets its registry storage from a BucketClaim
+    # served by the seaweedfs COSI driver, and no graph edge links the two. The
+    # expected set is read off the suites' own yaml rather than written here, so
+    # a new suite that names the endpoint or a BucketClaim there and is left out
+    # of src_to_suites goes red. A suite reaching seaweedfs only through a
+    # sourced script is invisible to the scan; the round-trips pass S3_ENDPOINT
+    # in their yaml, which is what makes it hold today. Comment lines are
+    # skipped, which is what keeps etcd out: its round-trip is gated off in CI
+    # and names the endpoint only in prose.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    want=''
+    for s in $(full_suite_list); do
+        if cat hack/e2e-chainsaw/"$s"/*.y*ml | grep -v '^[[:space:]]*#' \
+            | grep -qE 'seaweedfs-s3|BucketClaim|objectstorage\.k8s\.io'; then
+            want="${want:+$want }$s"
+        fi
+    done
+    # Premise: the scan must find the suite that exists for this, or it is
+    # reading the wrong files.
+    case " $want " in *" bucket "*) ;; *) echo "premise broken: scan found '$want'" >&2; exit 1 ;; esac
+    for path in packages/system/seaweedfs/values.yaml packages/extra/seaweedfs/values.yaml \
+        packages/system/seaweedfs-db/values.yaml packages/system/seaweedfs-rd/Chart.yaml; do
+        echo "$path" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+        assert_selection "a seaweedfs change must select the suites that use it: $path" \
+            "$output" "$want"
+    done
+    rm -rf "$tmp"
+}
+
 @test "every suite round-trips between the two mapping tables" {
     # select-install.sh maps a suite to the PackageSource that installs it, and
     # select-e2e.sh must map that source back to the suite. A suite that does

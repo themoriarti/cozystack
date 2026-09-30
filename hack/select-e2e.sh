@@ -246,6 +246,13 @@ src_to_suites() {
     # roundtrip, so an edit to packages/apps/kafka (or kafka-operator, which
     # reaches this source) selects both.
     kafka-application) echo "kafka kafka-metadata" ;;
+    # No seaweedfs suite exists. bucket drives the Bucket API against the
+    # tenant-root instance, the backup round-trips write to it through the
+    # in-cluster seaweedfs-s3 endpoint, most of them verifying its CA, and
+    # harbor stores its registry in a BucketClaim the seaweedfs COSI driver
+    # serves. etcd's round-trip is left out because CI gates it off. A test
+    # derives this set from the suites.
+    seaweedfs-application) echo "bucket clickhouse harbor kafka kafka-metadata mariadb mongodb postgres rabbitmq redis" ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
   esac
