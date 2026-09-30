@@ -97,7 +97,7 @@ input:
   initramfs:
     path: /usr/install/${arch}/initramfs.xz
   baseInstaller:
-    imageRef: "ghcr.io/siderolabs/installer:${TALOS_VERSION}"
+    imageRef: "ghcr.io/siderolabs/installer-base:${TALOS_VERSION}"
   systemExtensions:${system_extensions}
 output:
   kind: ${kind}
