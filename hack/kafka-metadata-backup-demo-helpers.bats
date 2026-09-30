@@ -36,7 +36,7 @@ case "$1 $2 $3" in
 "-n tenant-root wait")
     exit 0 ;;
 "-n tenant-root exec")
-    [ -n "${STUB_EXEC_ERROR:-}" ] && { echo "$STUB_EXEC_ERROR" >&2; exit 1; }
+    [ -n "${STUB_EXEC_ERROR:-}" ] && { echo "error: unable to upgrade connection: container not found" >&2; exit 1; }
     shift 6   # drop: -n tenant-root exec -i <pod> --
     if [ "$1" != "bash" ] || [ "$2" != "-c" ]; then
         echo "unexpected exec payload: $*" >&2; exit 96
@@ -97,7 +97,10 @@ run_topic_meta() {
 
 @test "kafka_run fails with kubectl's own error when the exec fails" {
     make_stubs
-    export STUB_EXEC_ERROR="error: unable to upgrade connection: container not found"
+    # A flag, not the message: the runner traces the command that passes
+    # STUB_EXEC_ERROR on, into the same stderr the grep below reads, so a
+    # message carried in it would match with the helper's stderr dropped.
+    export STUB_EXEC_ERROR=1
     err=$(mktemp)
     if run_topic_meta 2>"$err"; then
         echo "a failed exec read as a successful empty reply" >&2
