@@ -82,12 +82,12 @@ SOURCES_DIR="${2:-packages/core/platform/sources}"
 #     The bats half is prefix-matched rather than taking every hack/*.bats,
 #     because the root Makefile splits those two sets by exactly that prefix —
 #     `BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))`
-#     — so the 60 files it keeps are the unit lane and the e2e sandbox runs none
-#     of them. The three it filters out are the ones packages/core/testing's
+#     — so the files it keeps are the unit lane and the e2e sandbox runs none
+#     of them. The ones it filters out are the ones packages/core/testing's
 #     recipes execute inside the sandbox, and they stay here. Narrowing this
 #     cannot leave a bats-only pull request untested: `make unit-tests` is gated
 #     on the `code` output, which pull-requests.yaml computes as "any path
-#     outside docs/" and never from this script, so those 60 files run on their
+#     outside docs/" and never from this script, so the unit files run on their
 #     own lane whatever the selection here is;
 #   - the workflows that RUN the suite — enumerated rather than matched by
 #     prefix, so an unrelated workflow does not burn a full run. Keep this list
@@ -124,7 +124,7 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #   - hack/*.bats     the unit lane, minus the hack/e2e-*.bats escalated above.
 #                     The root Makefile draws the line at that prefix
 #                     (BATS_UNIT_FILES filters hack/e2e-%.bats out of
-#                     hack/*.bats), so these 60 files are never executed inside
+#                     hack/*.bats), so these files are never executed inside
 #                     the e2e sandbox and no Chainsaw suite can regress from one.
 #                     They are not untested by being inert here: `make
 #                     unit-tests` runs them, gated on pull-requests.yaml's `code`
@@ -181,7 +181,7 @@ all_apps=$(printf '%s\n' "$chainsaw_tests" \
 # working directory — not a project without tests, and it silently corrupts
 # every answer the script can give:
 #
-#   - the three escalation branches print this list, so "run everything"
+#   - the escalation branches print this list, so "run everything"
 #     becomes a blank line, which both lanes read as "skip Chainsaw" before
 #     posting the required "E2E Tests" status green;
 #   - the examples/backups/<app>/ rule takes no escalation and still consults
@@ -201,8 +201,8 @@ if [ -z "$all_apps" ]; then
   exit 1
 fi
 
-# Single exit point for the three escalating branches, so the invariant above
-# has one consumer to reason about rather than three copies.
+# Single exit point for every escalating branch, so the invariant above has
+# one consumer to reason about rather than one copy per branch.
 escalate_to_full_suite() {
   echo "$all_apps" | paste -sd ' ' -
   exit 0

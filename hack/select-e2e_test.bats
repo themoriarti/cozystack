@@ -24,7 +24,7 @@
 #
 # The expected set is derived the way the script's full-suite branch derives it
 # rather than pinned as a literal, so adding or disabling a Chainsaw suite does
-# not need an edit in fourteen places here.
+# not need an edit at every full-suite assertion here.
 #
 # A helper rather than an inline one-liner because cozytest.sh runs each @test
 # under `set -x`: a bare failing `[ ... ]` prints the two values already
@@ -449,11 +449,11 @@ assert_full_suite() {
 }
 
 @test "a top-level unit bats file selects nothing" {
-    # All 60 non-e2e hack/*.bats files used to escalate to the full suite. The
+    # The non-e2e hack/*.bats files used to escalate to the full suite. The
     # root Makefile is the authority on which of them the e2e sandbox runs:
     # BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
     # keeps exactly these for the unit lane, and packages/core/testing's recipes
-    # execute only the three it filters out. So the sandbox never runs one of
+    # execute only the ones it filters out. So the sandbox never runs one of
     # these, and no Chainsaw suite can regress from an edit to one.
     #
     # Not a green gate with nothing behind it: `make unit-tests` DOES run them,
@@ -484,7 +484,7 @@ assert_full_suite() {
 }
 
 @test "every hack/*.bats file lands on the lane its name says" {
-    # The rule above is a claim about 63 files, asserted on two of them. This
+    # The rule above is a claim about every hack/*.bats, asserted on two. This
     # pins the claim itself: for every hack/*.bats in the tree, the selector's
     # verdict must agree with the Makefile's split -- e2e-prefixed escalates,
     # everything else selects nothing. A file added with a name that fits neither
