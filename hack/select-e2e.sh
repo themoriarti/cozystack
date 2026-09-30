@@ -114,9 +114,10 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 # the fall-through at the bottom of the loop can escalate safely: the cost of
 # forgetting an inert path is a wasted full run, the cost of forgetting a live
 # one used to be a green gate with nothing tested.
-#   - examples/       demo manifests; examples/backups/<app>/ and
-#                     examples/backups/_lib/ are handled above as real test
-#                     harness before this check is reached
+#   - examples/       demo manifests; examples/backups/<app>/,
+#                     examples/backups/_lib/ and any file directly in
+#                     examples/backups/ are handled above as real test harness
+#                     before this check is reached
 #   - .github/        templates, CODEOWNERS, labels, renovate, linter config —
 #                     minus the e2e workflows escalated above
 #   - .claude/ .gemini/  agent config, never shipped
@@ -442,6 +443,15 @@ while IFS= read -r file || [ -n "$file" ]; do
         selected_apps="$selected_apps $app"
         trigger_any=1
       fi
+      continue ;;
+    examples/backups/*)
+      # A file beside the per-app dirs rather than in one (POSIX case lets `*`
+      # match `/`, so the arm above has already taken every nested path)
+      # belongs to no single walkthrough, so it is treated as shared by all of
+      # them. Otherwise it would fall to examples/ in inert_config_pattern and
+      # select nothing.
+      echo "select-e2e: '$file' belongs to no single backup walkthrough — escalating to the full suite" >&2
+      trigger_full=1
       continue ;;
   esac
 

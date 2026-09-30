@@ -289,6 +289,32 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "a file directly under examples/backups escalates instead of selecting nothing" {
+    # A file beside the per-app directories rather than inside one belongs to
+    # no single walkthrough, so it is treated as shared by all of them. It
+    # matched neither backup rule and fell to examples/ in
+    # inert_config_pattern, so an edit to it selected nothing.
+    # README.md stays inert through the *.md rule, which runs first.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    for diff in "examples/backups/common.sh" \
+        "examples/backups/common.sh examples/backups/postgres/run-all.sh"; do
+        printf '%s\n' $diff > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+        assert_selection "a loose backup file was not escalated for: $diff" \
+            "$output" "$(full_suite_list)"
+        if ! grep -q "select-e2e: 'examples/backups/common.sh' belongs to no single backup walkthrough" "$tmp/err"; then
+            echo "the escalation must name the file; stderr was:" >&2
+            cat "$tmp/err" >&2
+            exit 1
+        fi
+    done
+    echo examples/backups/README.md > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+    rm -rf "$tmp"
+}
+
 @test "a shared backup helper escalates instead of selecting nothing" {
     # examples/backups/_lib/ is sourced by the backup walkthroughs, so it is
     # shared material the way hack/e2e-chainsaw/_lib/ is. Read as an app named
