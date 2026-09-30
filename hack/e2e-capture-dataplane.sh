@@ -1035,8 +1035,15 @@ else
     capture_node "$node"
 
     # Pod-specific state, plus a healthy pod on the same node as a baseline.
-    pf="$OUT/pod-$ns-$pod.txt"
-    capture_pod_dataplane "$ns" "$pod" "$podip" "$node" "NotReady, Ready=$_ready" > "$pf" 2>&1 || true
+    # `_` joins the two because neither a namespace (a DNS label) nor a pod name
+    # (a DNS subdomain) can contain one; a hyphen made a-b/c and a/b-c one file.
+    pf="$OUT/pod-${ns}_${pod}.txt"
+    # Appended with the separator capture-notes.txt uses, so a second run into
+    # this directory keeps the evidence the first run's notes describe.
+    if [ -s "$pf" ]; then
+      printf -- '--- new capture run ---\n' >> "$pf" 2>/dev/null || true
+    fi
+    capture_pod_dataplane "$ns" "$pod" "$podip" "$node" "NotReady, Ready=$_ready" >> "$pf" 2>&1 || true
     capture_pod_reference "$node" "$pf"
   done
   log "host->pod data-plane capture complete"

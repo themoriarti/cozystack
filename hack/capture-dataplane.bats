@@ -969,21 +969,21 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  [ -f "$d/out/pod-tenant-test-wedged.txt" ]
-  grep -q 'POD tenant-test/wedged' "$d/out/pod-tenant-test-wedged.txt"
-  grep -q 'REFERENCE (Ready)' "$d/out/pod-tenant-test-wedged.txt"
-  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test-wedged.txt"
+  [ -f "$d/out/pod-tenant-test_wedged.txt" ]
+  grep -q 'POD tenant-test/wedged' "$d/out/pod-tenant-test_wedged.txt"
+  grep -q 'REFERENCE (Ready)' "$d/out/pod-tenant-test_wedged.txt"
+  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test_wedged.txt"
   # And the baseline carries the evidence it exists to provide: the route and
   # conntrack for the HEALTHY pod's address, not just a section header. A
   # baseline without these compares nothing.
-  grep -q 'ip route get 10.0.0.9' "$d/out/pod-tenant-test-wedged.txt"
-  grep -q 'kernel conntrack for 10.0.0.9' "$d/out/pod-tenant-test-wedged.txt"
+  grep -q 'ip route get 10.0.0.9' "$d/out/pod-tenant-test_wedged.txt"
+  grep -q 'kernel conntrack for 10.0.0.9' "$d/out/pod-tenant-test_wedged.txt"
   # The hostNetwork pod sorts first in the snapshot and must not have been
   # taken: its podIP is the node's own address, the fingerprint the baseline
   # exists to rule out.
-  if grep -q 'POD cozy-cilium/cilium-xyz' "$d/out/pod-tenant-test-wedged.txt"; then
+  if grep -q 'POD cozy-cilium/cilium-xyz' "$d/out/pod-tenant-test_wedged.txt"; then
     echo "a hostNetwork pod was taken as the baseline:"
-    cat "$d/out/pod-tenant-test-wedged.txt"
+    cat "$d/out/pod-tenant-test_wedged.txt"
     exit 1
   fi
   rm -rf "$d"
@@ -1021,7 +1021,7 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 120 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  f="$d/out/pod-tenant-test-wedged.txt"
+  f="$d/out/pod-tenant-test_wedged.txt"
   [ -f "$f" ]
   # Positive control: the affected pod gets the full scope, so the blocks exist
   # and their absence below is scope and not a stub that answered nothing.
@@ -1071,8 +1071,8 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  [ -f "$d/out/pod-tenant-test-wedged.txt" ]
-  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test-wedged.txt"
+  [ -f "$d/out/pod-tenant-test_wedged.txt" ]
+  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test_wedged.txt"
   rm -rf "$d"
 }
 
@@ -1108,8 +1108,8 @@ STUB
   chmod +x "$d/bin/kubectl"
   STUB_CALLS="$d/calls" PATH="$d/bin:$PATH" timeout 120 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
   # Both pods carry the baseline: the saving must not cost one of them its copy.
-  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test-wedged-a.txt"
-  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test-wedged-b.txt"
+  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test_wedged-a.txt"
+  grep -q 'POD tenant/healthy' "$d/out/pod-tenant-test_wedged-b.txt"
   n=$(grep -c ref-capture "$d/calls")
   if [ "$n" -ne 1 ]; then
     echo "the baseline was captured $n times for one node instead of once"
@@ -1190,8 +1190,8 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 120 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  fa="$d/out/pod-tenant-test-wedged-a.txt"
-  fb="$d/out/pod-tenant-test-wedged-b.txt"
+  fa="$d/out/pod-tenant-test_wedged-a.txt"
+  fb="$d/out/pod-tenant-test_wedged-b.txt"
   [ -f "$fa" ]
   [ -f "$fb" ]
   # Each file names its own node's healthy pod ...
@@ -1235,9 +1235,9 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  [ -f "$d/out/pod-tenant-test-wedged.txt" ]
-  grep -q 'REFERENCE (Ready) pod on node=node-a: unknown' "$d/out/pod-tenant-test-wedged.txt"
-  grep -q 'the pod list did not finish' "$d/out/pod-tenant-test-wedged.txt"
+  [ -f "$d/out/pod-tenant-test_wedged.txt" ]
+  grep -q 'REFERENCE (Ready) pod on node=node-a: unknown' "$d/out/pod-tenant-test_wedged.txt"
+  grep -q 'the pod list did not finish' "$d/out/pod-tenant-test_wedged.txt"
   rm -rf "$d"
 }
 
@@ -1260,10 +1260,10 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  grep -q 'none found -- no baseline available' "$d/out/pod-tenant-test-wedged.txt"
-  if grep -q 'did not finish' "$d/out/pod-tenant-test-wedged.txt"; then
+  grep -q 'none found -- no baseline available' "$d/out/pod-tenant-test_wedged.txt"
+  if grep -q 'did not finish' "$d/out/pod-tenant-test_wedged.txt"; then
     echo "a complete list was reported as unfinished:"
-    cat "$d/out/pod-tenant-test-wedged.txt"
+    cat "$d/out/pod-tenant-test_wedged.txt"
     exit 1
   fi
   rm -rf "$d"
@@ -1290,16 +1290,16 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   PATH="$d/bin:$PATH" timeout 120 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
-  [ -f "$d/out/pod-tenant-test-wedged-a.txt" ]
-  [ -f "$d/out/pod-tenant-test-wedged-b.txt" ]
-  for f in "$d"/out/pod-tenant-test-wedged-a.txt "$d"/out/pod-tenant-test-wedged-b.txt; do
+  [ -f "$d/out/pod-tenant-test_wedged-a.txt" ]
+  [ -f "$d/out/pod-tenant-test_wedged-b.txt" ]
+  for f in "$d"/out/pod-tenant-test_wedged-a.txt "$d"/out/pod-tenant-test_wedged-b.txt; do
     if grep 'REFERENCE' "$f" | grep -q 'tenant-test/wedged'; then
       echo "a pod under investigation was used as the healthy baseline in $(basename "$f"):"
       grep '^# POD' "$f"
       exit 1
     fi
   done
-  grep -q 'none found -- no baseline available' "$d/out/pod-tenant-test-wedged-b.txt"
+  grep -q 'none found -- no baseline available' "$d/out/pod-tenant-test_wedged-b.txt"
   rm -rf "$d"
 }
 
@@ -1907,5 +1907,64 @@ STUB
   # said and not about the catch having stopped earlier.
   grep -q 'capturing host->pod data-plane' "$d/out"
   grep -q 'data-plane capture INCOMPLETE (exit 124)' "$d/out"
+  rm -rf "$d"
+}
+
+@test "two pods whose joined names would collide get two capture files" {
+  # A hyphen is legal in a namespace and in a pod name, so joining the two with
+  # one makes a-b/c and a/b-c the same file, and the second capture replaces
+  # the first with nothing saying so. Asserted on content rather than on a file
+  # name, so the test holds for any naming that keeps the two apart.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods)
+      echo 'a-b|c|10.0.0.1|node-a|False|Running||eol'
+      echo 'a|b-c|10.0.0.2|node-a|False|Running||eol'
+      exit 0 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  first=$(grep -l '^# POD a-b/c ' "$d"/out/pod-*.txt || true)
+  second=$(grep -l '^# POD a/b-c ' "$d"/out/pod-*.txt || true)
+  if [ -z "$first" ] || [ -z "$second" ] || [ "$first" = "$second" ]; then
+    echo "the two pods did not land in two files:"
+    grep -H '^# POD' "$d"/out/pod-*.txt
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "a second capture run into one directory keeps the first run's pod capture" {
+  # capture-notes.txt accumulates across runs with a separator. A pod file that
+  # is truncated instead leaves notes from two runs beside evidence from one,
+  # and nothing tells a reader which run the surviving file belongs to.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/out" >>"$d/log" 2>&1
+  f=$(grep -l '^# POD tenant-test/wedged ' "$d"/out/pod-*.txt)
+  n=$(grep -c '^# POD tenant-test/wedged ' "$f")
+  if [ "$n" -ne 2 ]; then
+    echo "expected the capture of both runs in $f, found $n"
+    exit 1
+  fi
+  grep -q -- '--- new capture run ---' "$f"
   rm -rf "$d"
 }
