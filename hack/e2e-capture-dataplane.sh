@@ -462,10 +462,21 @@ dp_clip() {
 # the budget is spent, and the call is not started. The guard in
 # hack/capture-dataplane.bats fails on any kubectl call that does not go
 # through here.
+#
+# A refusal is not silent. It goes to stderr, which every exec block sends into
+# its own section of the artifact, so a block that keeps only its header says
+# why; the reads that capture stderr say it through dp_read_outcome instead.
+# capture-notes.txt gets one line per run, matched on the run's start time,
+# since the budget can run out inside a capture the loops never decline.
 dp_run() {
   _dr_s=$1
   shift
   if [ "$_dr_s" -le 0 ]; then
+    printf '%s\n' "(not started: the wall-clock budget for this section of the ${DP_BUDGET}s run was spent)" >&2
+    _dr_note="[capture-dataplane] the wall-clock budget of the run started at epoch ${DP_T0} ran out; calls after it were not started, and each block they left empty says so"
+    if ! grep -qxF "$_dr_note" "$NOTES" 2>/dev/null; then
+      printf '%s\n' "$_dr_note" >> "$NOTES" 2>/dev/null || true
+    fi
     return "$DP_RC_SPENT"
   fi
   if [ -n "$DP_TIMEOUT" ]; then
@@ -906,13 +917,20 @@ capture_pod_dataplane() {
     # look it up by iface-id (<pod>.<ns>), then read the flag + timestamp.
     # An ovn-installed-ts set early (before physical_flow_output installed
     # the local-delivery flow, see node-$node.txt) is the I-P-lag signature.
+    # The status is kept: "no such interface" is only what a lookup that ran
+    # and answered can say, not one that was cut off or never started.
     _cpd_ovsif=$(dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_cpd_ovs" -c openvswitch -- \
-      ovs-vsctl --no-heading --columns=name find interface "external_ids:iface-id=$_cpd_pod.$_cpd_ns" 2>/dev/null \
-      | head -n 1 | tr -d '" ')
+      ovs-vsctl --no-heading --columns=name find interface "external_ids:iface-id=$_cpd_pod.$_cpd_ns" 2>/dev/null)
+    _cpd_ovsif_rc=$?
+    _cpd_ovsif=$(printf '%s\n' "$_cpd_ovsif" | head -n 1 | tr -d '" ')
     if [ -n "$_cpd_ovsif" ]; then
       echo "ovs interface = $_cpd_ovsif"
       dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_cpd_ovs" -c openvswitch -- \
         ovs-vsctl get interface "$_cpd_ovsif" external_ids:ovn-installed external_ids:ovn-installed-ts 2>&1 || true
+    elif [ "$_cpd_ovsif_rc" -eq "$DP_RC_SPENT" ]; then
+      echo "(not started: the wall-clock budget for this section of the ${DP_BUDGET}s run was spent)"
+    elif [ "$_cpd_ovsif_rc" -ne 0 ]; then
+      echo "(could not look up the OVS interface for iface-id=$_cpd_pod.$_cpd_ns -- the lookup exited $_cpd_ovsif_rc)"
     else
       echo "no OVS interface with external_ids:iface-id=$_cpd_pod.$_cpd_ns"
     fi

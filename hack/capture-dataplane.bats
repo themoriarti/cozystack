@@ -2162,6 +2162,73 @@ STUB
   rm -rf "$d"
 }
 
+@test "a capture the budget ran out in the middle of says so beside each empty block" {
+  # The loops decline a whole pod or LB out loud, but the budget can also run
+  # out inside one capture. The execs after that point are refused, their
+  # blocks keep only a header, and a header with nothing under it reads as a
+  # command that found nothing. Here the node lookups answer at once and the
+  # first exec hangs until the deadline, so every exec after it is refused.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  *'k8s-app=cilium'*) echo 'cilium-xyz'; exit 0 ;;
+  'get '*) exit 0 ;;
+esac
+sleep 300
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" DP_PASS='*kubectl get *' \
+    COZY_DATAPLANE_BUDGET=4 COZY_DATAPLANE_LB_RESERVE=0 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  # Positive control: the first exec ran and was cut, so what follows it is
+  # the refused part and not a capture that never started.
+  grep -q '^=== cilium-dbg endpoint list' "$d/out/node-node-a.txt"
+  grep -q '^(not started: ' "$d/out/node-node-a.txt"
+  grep -q 'wall-clock budget .* was spent' "$d/out/node-node-a.txt"
+  grep -q 'calls after it were not started' "$d/out/capture-notes.txt"
+  rm -rf "$d"
+}
+
+@test "a failed OVS interface lookup is not written up as an absent interface" {
+  # "no OVS interface with iface-id=..." is an answer only a lookup that ran
+  # and succeeded can give. One that failed, was cut off or was refused for a
+  # spent budget used to print the same line.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *'app=ovs'*) echo 'ovs-xyz'; exit 0 ;;
+  *'find interface'*) echo 'ovs-vsctl: unix:/var/run/openvswitch/db.sock: database connection failed' >&2; exit 1 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  f="$d/out/pod-tenant-test_wedged.txt"
+  # Positive control: the OVS block ran for the affected pod.
+  grep -q '^=== OVS interface ovn-installed flag' "$f"
+  if grep -q '^no OVS interface with' "$f"; then
+    echo "a failed lookup was written up as an absent interface:"
+    cat "$f"
+    exit 1
+  fi
+  grep -q 'could not look up the OVS interface for iface-id=wedged.tenant-test -- the lookup exited 1' "$f"
+  rm -rf "$d"
+}
+
 @test "a read refused for a spent budget is not reported as cut off" {
   # With no budget left nothing is asked, so a note naming a timeout would put
   # a cause in the artifact that never happened -- the rule dp_read_outcome
