@@ -38,8 +38,9 @@
 #
 # The cost is the ceiling: two waits at LINK_BUDGET each put the worst case at
 # twice that figure rather than once, ahead of the 300s node wait, the 600s
-# StorageProfile wait in container mode and the 300s MetalLB wait below, and
-# still well inside the timeout the job carries.
+# StorageProfile wait in container mode and the 300s MetalLB wait below, plus
+# the bound on each call that does work, and still well inside the timeout the
+# job carries.
 set -eu
 
 # The QEMU lane gives every satellite a private /dev/vdc and lets LINSTOR
@@ -146,8 +147,21 @@ fi
 # deadline checked between loop iterations does not cover the call inside the
 # iteration. Plain requests also carry a --request-timeout strictly inside the
 # outer bound, so kubectl gets to name the reason before the kill lands; exec
-# streams get the outer bound alone.
-KUBECTL_BOUND="timeout -k 5 300"
+# streams get the outer bound alone. When that bound fires, `timeout` prints
+# nothing and kubectl dies on the signal before it can, so the wrapper says
+# which call it was: otherwise the log ends on the step's announcement line.
+# Only 124 is named. 137 is also what `kubectl exec` returns when the remote
+# command is OOM-killed, so reading it as this bound would name the wrong cause.
+CALL_BOUND=300
+bounded() {
+  bounded_rc=0
+  timeout -k 5 "$CALL_BOUND" "$@" || bounded_rc=$?
+  if [ "$bounded_rc" -eq 124 ]; then
+    echo "[post-install-prep] killed after ${CALL_BOUND}s: $*" >&2
+  fi
+  return "$bounded_rc"
+}
+KUBECTL_BOUND=bounded
 
 # Per-link budget in seconds, applied by wait_for_linstor to each link separately.
 LINK_BUDGET=900
@@ -290,7 +304,11 @@ until controller_reachable \
 done
 
 echo "[post-install-prep] creating LINSTOR storage pools (parallel across nodes)"
-created_pools=$($KUBECTL_BOUND kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor sp l -s data --pastable | awk '$2 == "data" {printf " " $4} END{printf " "}')
+# Read on its own rather than piped into awk, which would hide its status: a
+# listing that failed or timed out reads as "no pools yet", and the creates it
+# triggers then fail on the pools that do exist, naming the wrong reason.
+pool_list=$($KUBECTL_BOUND kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor sp l -s data --pastable)
+created_pools=$(printf '%s\n' "$pool_list" | awk '$2 == "data" {printf " " $4} END{printf " "}')
 pids=""
 for node in srv1 srv2 srv3; do
   case $created_pools in

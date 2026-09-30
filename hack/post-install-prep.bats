@@ -149,6 +149,19 @@ case "$*" in
       exit 1
     fi
     echo "STUB-EVENT MountVolume.SetUp failed for volume client-tls" ;;
+  *'linstor sp l '*)
+    # What the outer bound firing looks like from here: `timeout` prints
+    # nothing and kubectl dies on the signal before it can, so the only
+    # trace is the status.
+    if [ -n "${STUB_SPL_KILLED:-}" ]; then
+      exit 124
+    fi
+    # A remote command killed inside the container, OOM for one: kubectl
+    # exec hands its status back, and 137 is also what `timeout -k` returns.
+    if [ -n "${STUB_SPL_REMOTE_KILLED:-}" ]; then
+      echo 'command terminated with exit code 137' >&2
+      exit 137
+    fi ;;
   *'linstor node list')
     i=0
     while [ "$i" -lt "${STUB_ONLINE:-3}" ]; do echo Online; i=$((i + 1)); done ;;
@@ -438,5 +451,42 @@ run_prep() {
   [ -n "$got" ]
   [ -n "$patched" ]
   [ "$got" -lt "$patched" ]
+  rm -rf "$tmp"
+}
+
+@test "a storage pool listing killed by its bound stops before any pool is created and says so" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  # Read as "no pools exist", a failed listing sends a create for every node,
+  # and the ones that do exist fail it with a reason that is not the cause.
+  export STUB_SPL_KILLED=1
+  run_prep "$tmp" 0 0
+  unset STUB_SPL_KILLED
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  # Nothing else in the log would say why the script stopped.
+  grep 'killed after 300s' "$tmp/err" | grep -q 'linstor sp l'
+  if grep -q 'create-device-pool' "$tmp/calls"; then
+    echo "pools were created after the listing failed" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+@test "a listing whose remote command was killed is not reported as the bound firing" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  export STUB_SPL_REMOTE_KILLED=1
+  run_prep "$tmp" 0 0
+  unset STUB_SPL_REMOTE_KILLED
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  grep -q 'command terminated with exit code 137' "$tmp/err"
+  if grep -q 'killed after' "$tmp/err"; then
+    echo "a remote kill was blamed on the call bound" >&2
+    return 1
+  fi
   rm -rf "$tmp"
 }
