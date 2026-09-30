@@ -97,6 +97,10 @@ resolve_kafka_image() {
 }
 export KAFKA_IMAGE="${KAFKA_IMAGE:-$(resolve_kafka_image)}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
+# Name of the long-lived CLI Pod kafka_run execs into; cleanup.sh removes it.
+# A variable of its own, not the kafka-metadata demo's KAFKA_CLI_POD: the two
+# demos may share a namespace, and one setting must not move the other's Pod.
+export KAFKA_TOPIC_CLI_POD="${KAFKA_TOPIC_CLI_POD:-kafka-topic-cli}"
 
 log_info()    { echo -e "${BLUE}i${NC} $*" >&2; }
 log_success() { echo -e "${GREEN}OK${NC} $*" >&2; }
@@ -278,7 +282,41 @@ kafka_bootstrap() {
     echo "kafka-${app}-kafka-bootstrap.${NAMESPACE}.svc:9092"
 }
 
-# Run a bash snippet in a throwaway Strimzi Kafka Pod. The snippet runs with
+# Ensure the long-lived CLI Pod exists and is Ready, so kafka_run can exec into
+# it. A Ready Pod this demo owns is reused across calls and across the numbered
+# scripts; a leftover in a terminal phase is replaced; a same-named Pod the demo
+# does not own is refused rather than hijacked or deleted.
+# Every step returns on failure explicitly: this runs as the left side of
+# `|| return 1`, and some callers also wrap it in $(...), so errexit never
+# applies inside it and a bare failure would carry on to the next step.
+kafka_cli_pod() {
+    local phase owner overrides
+    phase=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_TOPIC_CLI_POD" --ignore-not-found -o jsonpath='{.status.phase}') || return 1
+    owner=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_TOPIC_CLI_POD" --ignore-not-found -o jsonpath='{.metadata.labels.cozystack\.io/backup-demo}') || return 1
+    if [ -n "$phase" ] && [ "$owner" != "kafka" ]; then
+        log_error "Pod $NAMESPACE/$KAFKA_TOPIC_CLI_POD exists but this demo does not own it; refusing to use or delete it"
+        return 1
+    fi
+    if [ "$phase" != "Running" ] && [ "$phase" != "Pending" ]; then
+        # restricted-clean Pod. The Strimzi image runs as a non-root numeric
+        # UID (1001), so runAsNonRoot/seccomp at the Pod level plus the
+        # container's allowPrivilegeEscalation=false and drop-ALL satisfy PSA
+        # "restricted" without pinning runAsUser to a value specific to this
+        # image tag. An add-only JSON patch layers these onto the run-generated
+        # Pod's sole container (index 0), leaving image, command and args
+        # untouched.
+        overrides='[{"op":"add","path":"/spec/securityContext","value":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}},{"op":"add","path":"/spec/containers/0/securityContext","value":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]'
+        kubectl -n "$NAMESPACE" delete pod "$KAFKA_TOPIC_CLI_POD" --grace-period=1 --ignore-not-found >/dev/null || return 1
+        kubectl -n "$NAMESPACE" run "$KAFKA_TOPIC_CLI_POD" --image="$KAFKA_IMAGE" \
+            --labels=cozystack.io/backup-demo=kafka \
+            --override-type=json --overrides="$overrides" \
+            --restart=Never --command -- sleep infinity >/dev/null || return 1
+    fi
+    kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/$KAFKA_TOPIC_CLI_POD" \
+        --timeout=5m >/dev/null
+}
+
+# Run a bash snippet in the demo's Strimzi Kafka CLI Pod. The snippet runs with
 # these variables pre-set, so it needs no nested shell quoting of its own:
 #   $BOOT  - the target app's plaintext bootstrap (host:port)
 #   $BIN   - the kafka CLI directory
@@ -286,25 +324,19 @@ kafka_bootstrap() {
 # This is the host-side analogue of the strategy Pod: same stock image, same
 # tools, no purpose-built backup container. Pass the snippet single-quoted so
 # its own $VAR references reach the Pod's bash unexpanded.
+#
+# The snippet runs by `kubectl exec`, not in a throwaway `kubectl run -i` Pod.
+# That Pod's stdout comes back over an attach carrying only what the container
+# writes after the attach registers, so a CLI that finishes first reads as an
+# empty reply with exit 0. An exec'd process owns its pipes, so its output
+# cannot be missed that way.
 kafka_run() {
     local app="$1"; shift
     local snippet="$1"
-    local boot pod
+    local boot
     boot="$(kafka_bootstrap "$app")"
-    pod="kafka-cli-$RANDOM"
-    # restricted-clean throwaway Pod. The Strimzi image runs as a non-root
-    # numeric UID (1001), so runAsNonRoot/seccomp at the Pod level plus the
-    # container's allowPrivilegeEscalation=false and drop-ALL satisfy PSA
-    # "restricted" without pinning runAsUser to a value specific to this image
-    # tag. An add-only JSON patch layers these onto the run-generated Pod's sole
-    # container (index 0), leaving image, command and args untouched.
-    local overrides
-    overrides='[{"op":"add","path":"/spec/securityContext","value":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}},{"op":"add","path":"/spec/containers/0/securityContext","value":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]'
-    kubectl -n "$NAMESPACE" run "$pod" \
-        --image="$KAFKA_IMAGE" --restart=Never --rm -i --quiet \
-        --pod-running-timeout=5m \
-        --override-type=json --overrides="$overrides" \
-        --command -- bash -c "set -eu
+    kafka_cli_pod || return 1
+    kubectl -n "$NAMESPACE" exec -i "$KAFKA_TOPIC_CLI_POD" -- bash -c "set -eu
 BOOT=$(printf %q "$boot")
 BIN=$(printf %q "$KAFKA_BIN")
 TOPIC=$(printf %q "$TOPIC")
