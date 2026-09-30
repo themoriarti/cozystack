@@ -1043,8 +1043,10 @@ jobs:
           # harness suppresses DRBD-dependent chart content, registers the host's
           # pre-created zpools and keeps LINSTOR's local ZFS path.
           COZY_LINSTOR_DRBD_ENABLED: "false"
-          # Root monitoring is the one install-time workload whose chart selects
-          # `replicated` explicitly instead of inheriting the default class.
+          # Root monitoring is the one root-tenant workload whose chart selects
+          # `replicated` explicitly instead of inheriting the default class. The
+          # install leaves it off but still seeds its local-storage override, so
+          # a run that turns it on does not create a replicated PVC.
           COZY_E2E_STORAGE_CLASS: local
         run: |
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
