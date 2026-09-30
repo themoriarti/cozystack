@@ -64,46 +64,10 @@ print_header() {
     echo -e "\n${MAGENTA}${BOLD}== $title ==${NC}\n" >&2
 }
 
-# Wait until a JSONPath value on a resource matches the desired string. An
-# optional 7th arg is a TERMINAL failure value: once the field reaches it the
-# wait returns 1 immediately instead of polling to the timeout (a BackupJob /
-# RestoreJob settles on phase=Failed that never becomes Succeeded).
-wait_for_field() {
-    local resource_type="$1" resource_name="$2" jsonpath="$3" desired="$4"
-    local namespace="${5:-}" timeout="${6:-300}" fail_value="${7:-}"
-
-    log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
-    local elapsed=0 ns_flag=()
-    [[ -n "$namespace" ]] && ns_flag=(-n "$namespace")
-    while true; do
-        local current
-        current=$(kubectl get "$resource_type" "$resource_name" "${ns_flag[@]}" -o jsonpath="$jsonpath" || true)
-        [[ "$current" == "$desired" ]] && { log_success "$resource_type/$resource_name reached '$desired'"; return 0; }
-        [[ -n "$fail_value" && "$current" == "$fail_value" ]] && { log_error "$resource_type/$resource_name reached terminal '$current' (expected '$desired')"; return 1; }
-        (( elapsed >= timeout )) && { log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"; return 1; }
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
-
-# Wait for a HelmRelease to become Ready, with an existence backstop (the apps
-# controller creates the HR asynchronously) and a fail-fast on Stalled=True.
-wait_hr_ready() {
-    local name="$1" timeout="${2:-300}" elapsed=0
-    log_substep "Waiting for HelmRelease/$name to become Ready..."
-    while true; do
-        if kubectl -n "$NAMESPACE" get hr "$name" >/dev/null 2>&1; then
-            local ready stalled
-            ready=$(kubectl -n "$NAMESPACE" get hr "$name" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' || true)
-            [[ "$ready" == "True" ]] && { log_success "HelmRelease/$name is Ready"; return 0; }
-            stalled=$(kubectl -n "$NAMESPACE" get hr "$name" -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' || true)
-            [[ "$stalled" == "True" ]] && { log_error "HelmRelease/$name is Stalled (terminal)"; return 1; }
-        fi
-        (( elapsed >= timeout )) && { log_error "Timeout waiting for HelmRelease/$name to become Ready"; return 1; }
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
+# wait_for_field, wait_hr_ready and wait_deleted live in one file shared by
+# every backup walkthrough, so a fix to one reaches all of them.
+# shellcheck source-path=SCRIPTDIR source=../_lib/wait-helpers.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib/wait-helpers.sh"
 
 # The cozystack redis chart names its RedisFailover (hence the operator's rfr-/
 # rfs- Services and the -auth Secret) redis-<app>, mirroring the strategy driver
