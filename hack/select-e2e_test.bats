@@ -933,46 +933,34 @@ assert_full_suite() {
     done
 }
 
-@test "an edit to a non-suite directory under e2e-chainsaw escalates" {
+@test "an edit to a non-suite directory under e2e-chainsaw escalates on its own account" {
     # Only a switched-off suite is ignorable. Shared material next to _lib/, or
     # a suite nested deeper than the depth-2 scan looks, is invisible to
-    # all_apps — selecting nothing for it would skip E2E outright, so it
-    # escalates through the backstop instead. That backstop is the one path
-    # still reaching the bottom of the script now that the graph decides per
-    # path, so pin it rather than assume it stays reachable.
+    # all_apps, and selecting nothing for it would skip E2E outright.
+    #
+    # The mixed diff is the regression pin. When the name was left for the final
+    # intersection to drop, the path escalated alone, through the empty-selection
+    # backstop, but beside any path that contributed a suite the run narrowed to
+    # that suite with nothing on stderr -- the merge-before-escalate shape #3330
+    # removed from the graph walk. The single-path case passes either way.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     # Premise: the directory must not exist, or all_apps would hold it and the
     # test would be measuring the ordinary per-suite rule.
     [ ! -d hack/e2e-chainsaw/_fixtures ]
-    echo "hack/e2e-chainsaw/_fixtures/tenant.yaml" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
-    assert_full_suite "$output"
-    # The backstop is the last branch that could reach the full suite without
-    # saying so. It names the directly-selected names it could not resolve, which
-    # for this diff is the directory the per-suite rule derived.
-    if ! grep -q "select-e2e:.*no runnable suite is named by.*_fixtures" "$tmp/err"; then
-        echo "the backstop must name what it could not resolve; stderr was:" >&2
-        cat "$tmp/err" >&2
-        exit 1
-    fi
-    # Several unresolved directories, with one of them repeated: every distinct
-    # name must appear, exactly once, in one line. The list used to be built by
-    # `tr | sort -u | grep -v | paste`, whose exit status is paste's, so a failure
-    # anywhere earlier in it would have gone unseen under set -e and printed a
-    # partial name or none at all -- the same last-command blindness this script
-    # fixes for the suite list and the yq indexes. The escalation is already
-    # decided by then, so the only casualty is the reason line, which is exactly
-    # what these asserts exist to defend.
-    [ ! -d hack/e2e-chainsaw/_zz ]
-    printf '%s\n' hack/e2e-chainsaw/_fixtures/a.yaml \
-        hack/e2e-chainsaw/_fixtures/b.yaml \
-        hack/e2e-chainsaw/_zz/c.yaml > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
-    assert_full_suite "$output"
-    line=$(grep 'no runnable suite is named by' "$tmp/err")
-    assert_selection "the backstop must name every unresolved directory once" \
-        "$line" "select-e2e: no runnable suite is named by '_fixtures _zz' — escalating to the full suite"
+    for diff in "hack/e2e-chainsaw/_fixtures/tenant.yaml" \
+        "hack/e2e-chainsaw/_fixtures/tenant.yaml packages/apps/postgres/values.yaml" \
+        "hack/e2e-chainsaw/postgres/chainsaw-test.yaml hack/e2e-chainsaw/_fixtures/tenant.yaml"; do
+        printf '%s\n' $diff > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+        assert_selection "a non-suite directory under e2e-chainsaw was not escalated for: $diff" \
+            "$output" "$(full_suite_list)"
+        if ! grep -q "select-e2e: 'hack/e2e-chainsaw/_fixtures/tenant.yaml' names no runnable suite ('_fixtures')" "$tmp/err"; then
+            echo "the escalation must name the path and the directory it read; stderr was:" >&2
+            cat "$tmp/err" >&2
+            exit 1
+        fi
+    done
     rm -rf "$tmp"
 }
 

@@ -346,17 +346,24 @@ while IFS= read -r file || [ -n "$file" ]; do
       # A suite parked as chainsaw-test.yaml.disabled is registered nowhere and
       # executed by nothing, so an edit to it cannot regress a test. Matched
       # before the per-suite rule below, which reads the suite name off the
-      # directory and ignores the suffix: the name it derives matches no
-      # existing suite, the intersection at the bottom empties, and the
-      # safety net for a genuinely unclassified selection escalates to the
-      # full run — the most expensive outcome, bought by the one file class
-      # that provably cannot affect anything. Inert is the classification;
-      # the safety net keeps its job for paths no rule has looked at.
+      # directory and ignores the suffix: a parked suite's directory holds no
+      # live suite, so that rule would escalate to the full run — the most
+      # expensive outcome, bought by the one file class that provably cannot
+      # affect anything. Inert is the classification.
       continue ;;
     hack/e2e-chainsaw/*/*)
+      # Membership-tested here rather than left to the final intersection, for
+      # the reason given on the hack/e2e-apps/ arm below: a directory holding no
+      # suite (shared material beside _lib/, a suite nested deeper than the
+      # depth-2 scan) must escalate whatever else the diff selected.
       app=$(echo "$file" | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/.*,\1,p')
-      selected_apps="$selected_apps $app"
-      trigger_any=1
+      if echo "$all_apps" | grep -Fxq "$app"; then
+        selected_apps="$selected_apps $app"
+        trigger_any=1
+      else
+        echo "select-e2e: '$file' names no runnable suite ('$app') — escalating to the full suite" >&2
+        trigger_full=1
+      fi
       continue ;;
     hack/e2e-apps/*)
       # The pre-Chainsaw per-app BATS suites. One file per app, named after it,
@@ -538,36 +545,14 @@ done
 final_apps=$(intersect_suites "$group_suites $selected_apps")
 
 # Backstop. Every graph path above either escalates or contributes a suite that
-# exists, and both rules that select a suite by name — the per-app BATS one and
-# the examples/backups/<app>/ one — membership-test it first, so what still
-# reaches this is a per-suite Chainsaw edit naming a directory that holds no
-# chainsaw-test.yaml: shared material beside _lib/, or a suite nested deeper than
-# the depth-2 scan looks. Selecting nothing for those would skip E2E outright, so
-# failing towards the full suite is the only safe way to be wrong here.
-#
-# group_suites is empty whenever this fires — every group either escalated above
-# or contributed a suite that exists — so the names worth naming are the
-# directly-selected ones, and printing them says which directory or file the
-# selector could not resolve.
-#
-# Deduplicated in the shell rather than through `tr | sort -u | grep -v | paste`,
-# which is the same blindness this file fixes twice above: a pipeline reports its
-# LAST command's status, so a failing tr or sort would be invisible under set -e
-# and the message would name a partial list or nothing at all. That is only a
-# cosmetic loss — the escalation itself is already decided — but the reason line
-# is a contract now, and a contract that degrades silently is the thing this
-# change set exists to remove. Unquoted expansion is the split, `case` is the
-# membership test, and neither can half-succeed; it is also the idiom
-# resolve_suites already uses.
+# exists, and every rule that selects a suite by name membership-tests it first,
+# so no classification this file makes reaches here today. It stays for the next
+# rule that forgets to: selecting nothing would skip E2E outright, so failing
+# towards the full suite is the only safe way to be wrong. It prints the
+# directly-selected names, since a rule that skipped its membership test is the
+# likely way to get here; no test asserts the line.
 if [ -z "$final_apps" ]; then
-  unmatched=''
-  for a in $selected_apps; do
-    case " $unmatched " in
-      *" $a "*) ;;
-      *) unmatched="${unmatched:+$unmatched }$a" ;;
-    esac
-  done
-  echo "select-e2e: no runnable suite is named by '$unmatched' — escalating to the full suite" >&2
+  echo "select-e2e: no runnable suite is named by '${selected_apps# }' — escalating to the full suite" >&2
   escalate_to_full_suite
 fi
 
