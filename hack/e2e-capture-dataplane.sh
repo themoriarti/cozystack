@@ -8,9 +8,8 @@
 # global catch in hack/e2e-chainsaw/.chainsaw.yaml. Both write into the same
 # snapshot dir so the output lands in the uploaded cozyreport artifact, and both
 # wrap this script in a wall-clock backstop -- but not the same one (600s and
-# 300s respectively), so a change sized against one caller can still overrun the
-# other. The MAX_LBS and MAX_PODS notes below carry that arithmetic, one per
-# fan-out cap.
+# 300s respectively). The script therefore keeps its own wall-clock budget,
+# sized under the smaller of the two: see DP_BUDGET below.
 #
 # Why this exists: a recurrent install failure is a CNI host->local-pod
 # data-plane transient -- kubelet on a node reaches a *local* pod's
@@ -111,11 +110,11 @@
 #     localises the failing hop to host-cilium vs kube-ovn delivery.
 #
 # Robustness contract (matches docs/agents/e2e-testing.md): pure diagnostics,
-# no retries, no behavior change, no traps. Every live capture is time-boxed,
-# and no command can fail or stall the job: most are `|| true`, and the few
-# whose status is read take it into a variable and use it only to say why a
-# read produced nothing. A wall-clock backstop wraps the whole run at each call
-# site. It no-ops cleanly when there are no affected pods.
+# no retries, no behavior change, no traps. Every live capture is time-boxed
+# by dp_run, and no command can fail or stall the job: most are `|| true`, and
+# the few whose status is read take it into a variable and use it only to say
+# why a read produced nothing. A wall-clock backstop wraps the whole run at each
+# call site. It no-ops cleanly when there are no affected pods.
 #
 # Why a read produced nothing is written to capture-notes.txt beside the
 # capture, not only to the job log: the reader who has the uploaded report and
@@ -259,12 +258,8 @@ lb_capture_decision() {
 # reached. The cap bounds LBs actually captured -- the caller increments only on
 # the capture branch, so reachable/skipped LBs never consume it and a broken LB
 # enumerated after many reachable ones is still characterised. The cap bounds
-# WORK, not wall-clock: at >=2 unreachable LBs (each heavy capture takes tens of
-# seconds) the real wall-clock bound is the outer `timeout -k 30 <n>` backstop at
-# the call site, not this cap. That budget differs per caller -- the cozytest.sh
-# EXIT trap runs with no containing operation and allows 600s, while the Chainsaw
-# global catch shares an op envelope with the crust-gather snapshot and allows
-# 300s -- so do not hard-code either number here.
+# WORK, not wall-clock; the wall-clock bound is DP_BUDGET, enforced per call by
+# dp_run.
 lb_budget_ok() {
   if [ "$1" -lt "$2" ]; then echo yes; else echo no; fi
 }
@@ -358,8 +353,14 @@ dp_cutoff_desc() {
 # that a cutoff would put a cause in the artifact that was never observed. The
 # sibling capture gates every one of its notes the same way, and this script's
 # notes claim to follow it.
+#
+# The status dp_run returns for a read it refused to start is a third case, and
+# it is not a cutoff either: nothing was asked, so nothing was cut.
+DP_RC_SPENT=75
 dp_read_outcome() {
-  if [ "${1:-}" = "124" ] || [ "${1:-}" = "137" ]; then
+  if [ "${1:-}" = "$DP_RC_SPENT" ]; then
+    printf '%s' "was not started: the collector's wall-clock budget was already spent"
+  elif [ "${1:-}" = "124" ] || [ "${1:-}" = "137" ]; then
     printf '%s' "was cut off by $(dp_cutoff_desc "$1" "$2" "$3")"
   elif [ -n "${4:-}" ] && [ -s "${4:-}" ]; then
     printf 'failed: kubectl exited %s: %s' "$1" "$(tr '\n\r' '  ' <"$4" | cut -c1-300 | sed 's/[[:space:]]*$//')"
@@ -387,53 +388,10 @@ OUT="${1:?Usage: e2e-capture-dataplane.sh <output-dir>}"
 CILIUM_NS="${COZY_CILIUM_NS:-cozy-cilium}"
 KUBEOVN_NS="${COZY_KUBEOVN_NS:-cozy-kubeovn}"
 # Cap how many pods we inspect so a fully-wedged cluster cannot explode the
-# runtime; the per-command timeouts and the call-site wall-clock wrapper are the
-# other two bounds. Node-global captures are deduped per node, and so is the
-# healthy-pod baseline, so the total is (#affected-pods) per-pod captures plus
-# (#affected-nodes) baselines and node-global captures -- not two per pod.
-#
-# The header asks for this arithmetic against the tighter caller rather than
-# only the roomier one, so here it is. Every term counts the OUTER bound of
-# each call and adds the bounded lookups that call makes; a nested inner
-# timeout is not a second wait. The terms are the whole path before
-# capture_lb_datapath, not only the per-pod ones: the preamble is 82s of the
-# total, and a sum that omits it reports a margin roomy enough for another
-# collector where the real one has no room at all.
-#  - preamble, once per run: 82s -- the cluster pod list at 28s+2s, the
-#    ovn-central lookup at 20s+2s, and the 30s ovn-sbctl lflow-list;
-#  - a node capture bounds at 288s: 222s of execs (the `cilium-dbg monitor`
-#    leg counts its outer 12s, not the inner 8s it wraps) plus three 22s
-#    pod_on_node lookups, memo misses the first time a node is seen;
-#  - an affected pod's capture bounds at 179s: 135s of execs plus two 20s
-#    reads with their 2s kill graces;
-#  - the baseline adds 30s per affected node: it runs at route-only scope, so
-#    the route and the conntrack and nothing else, and it issues no read of
-#    its own.
-#
-# One affected pod on one node therefore bounds at 579s, inside the 600s the
-# cozytest.sh trap allows and still past the 300s the Chainsaw catch shares
-# with its snapshot leg. That margin is 21 seconds, so the next collector
-# added to this path does not fit and the number has to be recomputed rather
-# than assumed. Read the 21s as what this path leaves the rest of the run, not
-# as headroom the run has: capture_lb_datapath executes unconditionally after
-# it and inside the same backstop, and the MAX_LBS note above says that section
-# bounds work rather than wall clock, with each heavy capture costing tens of
-# seconds.
-#
-# The 579s holds only WHILE the lookup memo exists. When mktemp has failed and
-# _POD_MEMO is empty every pod_on_node is live again, each capture pays for
-# its own, and the same case bounds at 667s -- outside both backstops. The
-# guarantee is conditional and this is the condition.
-#
-# Route-only scope is what buys it. At full scope the baseline costs 179s
-# instead of 30s, the single-pod case bounds at 728s, and it would lose a
-# backstop it clears at the merge base (519s there). The three blocks that
-# scope drops describe how a pod was programmed, and a pod chosen for being
-# healthy is programmed correctly by definition -- they compare nothing.
-#
-# What the numbers do say is that this cap counts pods while the ceiling is
-# measured in seconds, and past one affected pod the two stop meeting: raising
-# MAX_PODS buys nothing the envelope can pay for.
+# runtime. Node-global captures are deduped per node, and so is the healthy-pod
+# baseline, so the work is (#affected-pods) per-pod captures plus
+# (#affected-nodes) baselines and node-global captures -- not two per pod. This
+# bounds work; DP_BUDGET below bounds time.
 MAX_PODS="${COZY_DATAPLANE_MAX_PODS:-12}"
 
 # LoadBalancer-datapath section tunables (see the header block and the
@@ -445,40 +403,77 @@ SPEAKER_SELECTOR="${COZY_METALLB_SPEAKER_SELECTOR:-app.kubernetes.io/component=s
 GENEVE_IFACE="${COZY_GENEVE_IFACE:-genev_sys_6081}"
 # Cap how many UNREACHABLE LBs get the heavy datapath capture; reachable/skipped
 # LBs never count toward it (see the captured-budget gate in capture_lb_datapath).
-# This bounds WORK, not wall-clock: at >=2 unreachable LBs the real wall-clock
-# bound is the outer `timeout -k 30 <n>` backstop at the call site (truncate +
-# hard-kill), since each heavy capture itself takes tens of seconds. That budget
-# is per-caller (600s from the cozytest.sh EXIT trap, 300s from the Chainsaw
-# global catch, which shares an op envelope with the snapshot leg).
+# Like MAX_PODS, this bounds work and DP_BUDGET bounds time.
 MAX_LBS="${COZY_DATAPLANE_MAX_LBS:-6}"
 
-# Per-read wall-clock bounds for the plain `kubectl get` reads below. Named once
-# so a message reporting a cutoff cannot quote a number the read never used, and
+# Per-read wall-clock bounds for the plain `kubectl get` reads below, and
 # overridable so a test does not have to wait out the real ones. The list bound
 # is larger because that call asks about every namespace at once, where the
-# others ask about one object.
-#
-# These bound a single READ, not the script: the sum of every bound here is far
-# past any caller's envelope, and deliberately so, because the caps above bound
-# work while the outer `timeout -k` bounds wall clock (see the note above). What
-# a per-read bound buys is forward progress -- one hung apiserver call can no
-# longer consume the whole envelope before anything is written.
+# others ask about one object. A per-read bound buys forward progress -- one
+# hung apiserver call cannot consume the whole run before anything is written.
 DP_READ_TIMEOUT="${COZY_DATAPLANE_READ_TIMEOUT:-20}"
 DP_LIST_TIMEOUT="${COZY_DATAPLANE_LIST_TIMEOUT:-28}"
 DP_READ_GRACE=2
 
-# Resolved once. Empty when `timeout` is absent: the reads then run unbounded
-# rather than every call exiting 127 with its output swallowed, which would
-# report that kubectl failed when kubectl never ran. Every read that carries a
-# note says which of the two happened, the two EndpointSlice reads inside
-# capture_lb_datapath included.
+# Wall-clock budget for the whole run, in seconds, and the part of it kept back
+# for the LoadBalancer section. The caps above count pods and LBs while both
+# callers' backstops count seconds, and a single affected pod's worst case
+# already ran past the 300s Chainsaw one, so no count could be made to fit.
+# dp_run cuts every call's bound down to what is left of the budget instead
+# and starts nothing once it is spent, so no call ends later than the budget
+# plus one kill grace, whatever the cluster looks like. 270s leaves that grace and
+# the script's own bookkeeping inside the 300s backstop.
+#
+# The reserve exists because the pod section runs first: without it a
+# degraded cluster spends the whole budget there, and the LB capture -- which
+# exists for a failure that has no NotReady pod at all -- never starts. The
+# price is that a run with no broken LB leaves the reserve unspent.
+#
+# The budget bounds when a call may START and how long it may run, not the
+# time between calls; that gap is a handful of awk and printf invocations.
+DP_BUDGET="${COZY_DATAPLANE_BUDGET:-270}"
+DP_LB_RESERVE="${COZY_DATAPLANE_LB_RESERVE:-90}"
+case "$DP_BUDGET" in '' | *[!0-9]*) DP_BUDGET_BAD=$DP_BUDGET; DP_BUDGET=270 ;; *) DP_BUDGET_BAD="" ;; esac
+case "$DP_LB_RESERVE" in '' | *[!0-9]*) DP_RESERVE_BAD=$DP_LB_RESERVE; DP_LB_RESERVE=90 ;; *) DP_RESERVE_BAD="" ;; esac
+DP_T0=$(date +%s)
+DP_DEADLINE=$((DP_T0 + DP_BUDGET))
+
+# Resolved once. Empty when `timeout` is absent: dp_run then runs each call
+# unbounded rather than every call exiting 127 with its output swallowed, which
+# would report that kubectl failed when kubectl never ran. The budget still
+# decides whether a call starts; it cannot stop one that has. Every read that
+# carries a note says which of the two happened.
+DP_TIMEOUT=""
 if command -v timeout >/dev/null 2>&1; then
-  DP_BOUND="timeout -k $DP_READ_GRACE $DP_READ_TIMEOUT"
-  DP_LIST_BOUND="timeout -k $DP_READ_GRACE $DP_LIST_TIMEOUT"
-else
-  DP_BOUND=""
-  DP_LIST_BOUND=""
+  DP_TIMEOUT=timeout
 fi
+
+# dp_clip <secs> -> <secs>, or what is left before DP_DEADLINE if that is less
+# (zero or below once it has passed). A read that reports a cutoff clips first
+# and quotes the result, so the note names the bound the read actually ran
+# under rather than the one it was configured with.
+dp_clip() {
+  _dc_left=$((DP_DEADLINE - $(date +%s)))
+  if [ "$_dc_left" -lt "$1" ]; then printf '%s' "$_dc_left"; else printf '%s' "$1"; fi
+}
+
+# dp_run <secs> <cmd...> -- the one way this script runs kubectl. <secs> is
+# already clipped (callers pass "$(dp_clip N)"); a bound of zero or less means
+# the budget is spent, and the call is not started. The guard in
+# hack/capture-dataplane.bats fails on any kubectl call that does not go
+# through here.
+dp_run() {
+  _dr_s=$1
+  shift
+  if [ "$_dr_s" -le 0 ]; then
+    return "$DP_RC_SPENT"
+  fi
+  if [ -n "$DP_TIMEOUT" ]; then
+    timeout -k "$DP_READ_GRACE" "$_dr_s" "$@"
+  else
+    "$@"
+  fi
+}
 
 command -v kubectl >/dev/null 2>&1 || exit 0
 mkdir -p "$OUT" 2>/dev/null || exit 0
@@ -520,6 +515,21 @@ log() {
   printf '%s\n' "[capture-dataplane] $*" >> "$NOTES" 2>/dev/null || true
 }
 
+# A knob value that could not be used is named, so the bound in effect is not
+# mistaken for the one that was asked for.
+if [ -n "$DP_BUDGET_BAD" ]; then
+  log "COZY_DATAPLANE_BUDGET='$DP_BUDGET_BAD' is not a whole number of seconds; using ${DP_BUDGET}s"
+fi
+if [ -n "$DP_RESERVE_BAD" ]; then
+  log "COZY_DATAPLANE_LB_RESERVE='$DP_RESERVE_BAD' is not a whole number of seconds; using ${DP_LB_RESERVE}s"
+fi
+if [ -z "$DP_TIMEOUT" ]; then
+  log "no timeout binary on PATH: calls run unbounded, and the ${DP_BUDGET}s budget only decides whether each one starts"
+fi
+
+# The pod section stops starting calls DP_LB_RESERVE seconds before the end of
+# the budget, so the LoadBalancer section after it always has that much left.
+DP_DEADLINE=$((DP_T0 + DP_BUDGET - DP_LB_RESERVE))
 
 # Affected = scheduled (has nodeName), Ready!=True, and not already terminal.
 # A podIP is intentionally optional: a CNI endpoint leak can strand the pod
@@ -537,13 +547,13 @@ log() {
 # failure. One snapshot makes that impossible rather than guarded -- the
 # affected set and the baseline candidates are the same rows -- and the extra
 # column costs one boolean per pod on a list this script already takes.
-# shellcheck disable=SC2086  # empty DP_LIST_BOUND must vanish, not become ""
-_pods_raw=$($DP_LIST_BOUND kubectl get pods -A \
+_pods_b=$(dp_clip "$DP_LIST_TIMEOUT")
+_pods_raw=$(dp_run "$_pods_b" kubectl get pods -A \
   -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.status.podIP}{"|"}{.spec.nodeName}{"|"}{.status.conditions[?(@.type=="Ready")].status}{"|"}{.status.phase}{"|"}{.spec.hostNetwork}{"|eol"}{"\n"}{end}' \
   2>"${DP_ERR:-/dev/null}")
 _pods_rc=$?
 if [ "$_pods_rc" -ne 0 ]; then
-  log "listing pods $(dp_read_outcome "$_pods_rc" "$DP_LIST_TIMEOUT" "$DP_LIST_BOUND" "$DP_ERR"); whatever it did not name is missing from the capture below, which is not the same as nothing being affected"
+  log "listing pods $(dp_read_outcome "$_pods_rc" "$_pods_b" "$DP_TIMEOUT" "$DP_ERR"); whatever it did not name is missing from the capture below, which is not the same as nothing being affected"
 fi
 affected=$(printf '%s' "$_pods_raw" | pod_filter_affected)
 
@@ -558,7 +568,6 @@ pod_on_node() {
     printf '%s' "${_pon_hit%%	*}"
     return "${_pon_hit#*	}"
   fi
-  # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
   # items[*], not items[0]: client-go's evalArray has no allowMissingKeys escape
   # (evalField does), so indexing [0] into an empty list is a hard error and
   # kubectl exits 1. "No such pod on this node" is the ordinary answer here --
@@ -566,7 +575,8 @@ pod_on_node() {
   # and with a note attached to a non-zero status that answer would be reported
   # as a failed read. [*] yields nothing and exits 0, so a non-zero status again
   # means something actually went wrong.
-  _pon=$($DP_BOUND kubectl get pod -n "$1" -l "$2" --field-selector "spec.nodeName=$3" \
+  _pon_b=$(dp_clip "$DP_READ_TIMEOUT")
+  _pon=$(dp_run "$_pon_b" kubectl get pod -n "$1" -l "$2" --field-selector "spec.nodeName=$3" \
     -o jsonpath='{.items[*].metadata.name}' 2>"${DP_ERR:-/dev/null}")
   _pon_rc=$?
   # The note goes to stderr because this function's stdout is captured by its
@@ -578,7 +588,7 @@ pod_on_node() {
     # The status goes back with the value instead, and the two callers that
     # write an absence into the artifact use it to say "unknown" rather than
     # "none"; the ones that only skip have nothing to record.
-    log "looking up the pod matching $2 on node $3 $(dp_read_outcome "$_pon_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR")" >&2
+    log "looking up the pod matching $2 on node $3 $(dp_read_outcome "$_pon_rc" "$_pon_b" "$DP_TIMEOUT" "$DP_ERR")" >&2
   fi
   # [*] can name several pods; the callers want one. The status goes back to the
   # caller as well: an empty answer means "no such pod" only when the read
@@ -664,7 +674,7 @@ capture_node() {
     if [ -n "$_cn_agent" ]; then
       echo
       echo "=== cilium-dbg endpoint list ==="
-      timeout 25 kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
+      dp_run "$(dp_clip 25)" kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
         cilium-dbg endpoint list 2>&1 || true
 
       echo
@@ -673,7 +683,7 @@ capture_node() {
       # path: which backend a ClusterIP resolved to, and whether a backend that
       # stopped answering is still in the map, is answered here and nowhere
       # else in the bundle.
-      timeout 25 kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
+      dp_run "$(dp_clip 25)" kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
         cilium-dbg bpf lb list 2>&1 || true
 
       echo
@@ -681,12 +691,12 @@ capture_node() {
       # Two nested bounds: an inner `timeout 8` so the capture self-terminates
       # if the agent ships coreutils, and an outer `timeout 12` on the exec as
       # the hard backstop if it does not. Either way it cannot hang.
-      timeout 12 kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
+      dp_run "$(dp_clip 12)" kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
         sh -c 'timeout 8 cilium-dbg monitor --type drop 2>&1 || true' 2>&1 || true
 
       echo
       echo "=== hubble observe --verdict DROPPED --last 200 (if hubble present) ==="
-      timeout 25 kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
+      dp_run "$(dp_clip 25)" kubectl exec -n "$CILIUM_NS" "$_cn_agent" -c cilium-agent -- \
         sh -c 'command -v hubble >/dev/null 2>&1 && hubble observe --verdict DROPPED --last 200 2>&1 || echo "hubble CLI not present in agent"' 2>&1 || true
     else
       echo
@@ -700,7 +710,7 @@ capture_node() {
     if [ -n "$_cn_ovs" ]; then
       echo
       echo "=== ovs-ofctl dump-flows br-int ==="
-      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
+      dp_run "$(dp_clip 25)" kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
         ovs-ofctl dump-flows br-int 2>&1 || true
 
       echo
@@ -712,12 +722,12 @@ capture_node() {
       # the CNI "port ready" barrier), and "took <N>ms" / recompute /
       # "Unreasonably long ... poll interval" (ovn-controller stalls). A
       # physical_flow_output "took <N>ms" spanning the failure window is proof.
-      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
+      dp_run "$(dp_clip 25)" kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
         sh -c 'grep -E "physical_flow_output|if_status_mgr|took [0-9]+ ?ms|recompute|Unreasonably long" /var/log/ovn/ovn-controller.log 2>/dev/null | tail -n 400 || echo "no matching lines in /var/log/ovn/ovn-controller.log"' 2>&1 || true
 
       echo
       echo "=== ovn-controller.log tail (bounded) ==="
-      timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
+      dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
         sh -c 'tail -n 2000 /var/log/ovn/ovn-controller.log 2>/dev/null || echo "no /var/log/ovn/ovn-controller.log"' 2>&1 || true
 
       echo
@@ -726,7 +736,7 @@ capture_node() {
       # nr_throttled / throttled_usec means ovn-controller was CPU-starved, which
       # aggravates the flow-programming lag above. cgroup v2 path first, v1
       # fallback.
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
+      dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_cn_ovs" -c openvswitch -- \
         sh -c 'cat /sys/fs/cgroup/cpu.stat 2>/dev/null || cat /sys/fs/cgroup/cpu/cpu.stat 2>/dev/null || echo "no cpu.stat at /sys/fs/cgroup/cpu.stat (v2) or /sys/fs/cgroup/cpu/cpu.stat (v1)"' 2>&1 || true
     else
       echo
@@ -741,17 +751,17 @@ capture_node() {
     if [ -n "$_cn_cni" ]; then
       echo
       echo "=== host netns: ip neigh (via kube-ovn cni-server, hostNetwork) ==="
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
+      dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
         ip neigh 2>&1 || true
 
       echo
       echo "=== host netns: ip rule ==="
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
+      dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
         ip rule 2>&1 || true
 
       echo
       echo "=== host netns: ip addr show ovn0 ==="
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
+      dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
         ip addr show ovn0 2>&1 || true
 
       echo
@@ -760,7 +770,7 @@ capture_node() {
       # address instead: the interface actually holding it might be anything on
       # the host (see the header block). This is the same info scoped to every
       # interface, not just ovn0.
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
+      dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
         ip -o addr show 2>&1 || true
 
       echo
@@ -768,7 +778,7 @@ capture_node() {
       # A podIP resolving to `local <ip> dev lo table local` here is the
       # fingerprint from the header block: it wins over the ovn0 route in
       # `main` because table local is consulted first (see `ip rule` above).
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
+      dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_cn_cni" -c cni-server -- \
         ip route show table local 2>&1 || true
     else
       echo
@@ -794,8 +804,8 @@ capture_node() {
 # cost 105s of the 135s of exec bounds, on the leg most likely to be cut. The
 # fourth is the Ready-conditions and events pair, which a pod selected for
 # reporting Ready=True and Running has already answered, and dropping it is what
-# leaves the baseline with no read of its own -- the 30s the MAX_PODS note above
-# spends on it, against 179s at full scope. What a baseline is read for is the
+# leaves the baseline with no read of its own, only the route and conntrack
+# execs. What a baseline is read for is the
 # route and the conntrack beside the wedged pod's own. <label> is
 # stamped in the section header and says which role the pod plays: the affected
 # pod under investigation, or the Ready pod captured beside it as a baseline.
@@ -838,14 +848,14 @@ capture_pod_dataplane() {
   if [ "$_cpd_scope" = full ]; then
     echo
     echo "=== pod Ready conditions + recent probe events ==="
-    # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
-    $DP_BOUND kubectl get pod -n "$_cpd_ns" "$_cpd_pod" \
+    _cpd_b=$(dp_clip "$DP_READ_TIMEOUT")
+    dp_run "$_cpd_b" kubectl get pod -n "$_cpd_ns" "$_cpd_pod" \
       -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' 2>&1 \
-      || echo "(reading this pod's Ready conditions $(dp_read_outcome "$?" "$DP_READ_TIMEOUT" "$DP_BOUND"))"
-    # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
-    $DP_BOUND kubectl get events -n "$_cpd_ns" --field-selector "involvedObject.name=$_cpd_pod" \
+      || echo "(reading this pod's Ready conditions $(dp_read_outcome "$?" "$_cpd_b" "$DP_TIMEOUT"))"
+    _cpd_b=$(dp_clip "$DP_READ_TIMEOUT")
+    dp_run "$_cpd_b" kubectl get events -n "$_cpd_ns" --field-selector "involvedObject.name=$_cpd_pod" \
       -o jsonpath='{range .items[*]}{.lastTimestamp}{" "}{.reason}{": "}{.message}{"\n"}{end}' 2>&1 \
-      || echo "(reading this pod's events $(dp_read_outcome "$?" "$DP_READ_TIMEOUT" "$DP_BOUND"))"
+      || echo "(reading this pod's events $(dp_read_outcome "$?" "$_cpd_b" "$DP_TIMEOUT"))"
   fi
 
   if [ -z "$_cpd_ip" ]; then
@@ -857,14 +867,14 @@ capture_pod_dataplane() {
   if [ "$_cpd_scope" = full ] && [ -n "$_cpd_ip" ] && [ -n "$_cpd_agent" ]; then
     echo
     echo "=== cilium-dbg bpf ct list global | grep $_cpd_ip (node=$_cpd_node agent=$_cpd_agent) ==="
-    timeout 25 kubectl exec -n "$CILIUM_NS" "$_cpd_agent" -c cilium-agent -- \
+    dp_run "$(dp_clip 25)" kubectl exec -n "$CILIUM_NS" "$_cpd_agent" -c cilium-agent -- \
       sh -c "cilium-dbg bpf ct list global 2>/dev/null | grep -F '$_cpd_ip' || echo 'no CT entries for $_cpd_ip'" 2>&1 || true
   fi
 
   if [ -n "$_cpd_ip" ] && [ -n "$_cpd_cni" ]; then
     echo
     echo "=== host netns: ip route get $_cpd_ip (via kube-ovn cni-server) ==="
-    timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cpd_cni" -c cni-server -- \
+    dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_cpd_cni" -c cni-server -- \
       ip route get "$_cpd_ip" 2>&1 || true
 
     echo
@@ -873,7 +883,7 @@ capture_pod_dataplane() {
     # kernel netfilter conntrack table, NOT cilium BPF -- this is the
     # authoritative table for the transient. Prefer the conntrack CLI; fall
     # back to /proc/net/nf_conntrack when it is absent from the image.
-    timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cpd_cni" -c cni-server -- \
+    dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_cpd_cni" -c cni-server -- \
       sh -c "if command -v conntrack >/dev/null 2>&1; then conntrack -L 2>/dev/null | grep -F '$_cpd_ip' || echo 'no conntrack entries for $_cpd_ip'; else grep -F '$_cpd_ip' /proc/net/nf_conntrack 2>/dev/null || echo 'no conntrack CLI; no /proc/net/nf_conntrack match for $_cpd_ip'; fi" 2>&1 || true
   fi
 
@@ -881,9 +891,9 @@ capture_pod_dataplane() {
     echo
     echo "=== OVN Port_Binding / Logical_Switch_Port for $_cpd_pod.$_cpd_ns ==="
     # kube-ovn names the OVN logical port <pod>.<namespace>.
-    timeout 20 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
+    dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
       ovn-sbctl --no-leader-only find port_binding "logical_port=$_cpd_pod.$_cpd_ns" 2>&1 || true
-    timeout 20 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
+    dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
       ovn-nbctl --no-leader-only find logical_switch_port "name=$_cpd_pod.$_cpd_ns" 2>&1 || true
   fi
 
@@ -896,12 +906,12 @@ capture_pod_dataplane() {
     # look it up by iface-id (<pod>.<ns>), then read the flag + timestamp.
     # An ovn-installed-ts set early (before physical_flow_output installed
     # the local-delivery flow, see node-$node.txt) is the I-P-lag signature.
-    _cpd_ovsif=$(timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_cpd_ovs" -c openvswitch -- \
+    _cpd_ovsif=$(dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_cpd_ovs" -c openvswitch -- \
       ovs-vsctl --no-heading --columns=name find interface "external_ids:iface-id=$_cpd_pod.$_cpd_ns" 2>/dev/null \
       | head -n 1 | tr -d '" ')
     if [ -n "$_cpd_ovsif" ]; then
       echo "ovs interface = $_cpd_ovsif"
-      timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_cpd_ovs" -c openvswitch -- \
+      dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_cpd_ovs" -c openvswitch -- \
         ovs-vsctl get interface "$_cpd_ovsif" external_ids:ovn-installed external_ids:ovn-installed-ts 2>&1 || true
     else
       echo "no OVS interface with external_ids:iface-id=$_cpd_pod.$_cpd_ns"
@@ -1002,10 +1012,10 @@ else
   # rather than per pod. ovn-central is a Deployment (not per-node); any replica
   # answers. --no-leader-only lets a read land on a raft follower instead of
   # erroring.
-  # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
   # items[*] for the same reason as pod_on_node: an absent ovn-central is a
   # cluster without kube-ovn, not a read that failed.
-  central=$($DP_BOUND kubectl get pod -n "$KUBEOVN_NS" -l app=ovn-central \
+  _central_b=$(dp_clip "$DP_READ_TIMEOUT")
+  central=$(dp_run "$_central_b" kubectl get pod -n "$KUBEOVN_NS" -l app=ovn-central \
     -o jsonpath='{.items[*].metadata.name}' 2>"${DP_ERR:-/dev/null}")
   _central_rc=$?
   central=${central%% *}
@@ -1013,12 +1023,12 @@ else
     # No consequence named here: the lookup can fail after naming a replica, in
     # which case the dump below runs on what it named. The branch that actually
     # skips says so itself.
-    log "looking up an ovn-central replica $(dp_read_outcome "$_central_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR")"
+    log "looking up an ovn-central replica $(dp_read_outcome "$_central_rc" "$_central_b" "$DP_TIMEOUT" "$DP_ERR")"
   fi
   if [ -n "$central" ]; then
     {
       echo "=== ovn-sbctl lflow-list (cluster-global, pod=$central) ==="
-      timeout 30 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
+      dp_run "$(dp_clip 30)" kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
         ovn-sbctl --no-leader-only lflow-list 2>&1 || true
     } > "$OUT/ovn-lflows.txt" 2>&1 || true
   elif [ "$_central_rc" -ne 0 ]; then
@@ -1037,6 +1047,13 @@ else
     i=$((i + 1))
     if [ "$i" -gt "$MAX_PODS" ]; then
       log "reached MAX_PODS=$MAX_PODS cap; $((ncount - MAX_PODS)) more affected pod(s) NOT captured"
+      break
+    fi
+    # Declined out loud rather than walked: past the deadline every call below
+    # would refuse to start, leaving pod files that look captured and hold
+    # nothing.
+    if [ "$(dp_clip 1)" -le 0 ]; then
+      log "the pod section's share of the ${DP_BUDGET}s budget is spent; $((ncount - i + 1)) affected pod(s) NOT captured"
       break
     fi
 
@@ -1101,7 +1118,7 @@ host_http_probe() {
   [ -n "$_hp_cni" ] || return 0
   # The LB IP/port are embedded as inner single-quoted literals (same idiom as
   # the pod-path captures above) so the inner shell never re-splits them.
-  timeout 12 kubectl exec -n "$KUBEOVN_NS" "$_hp_cni" -c cni-server -- \
+  dp_run "$(dp_clip 12)" kubectl exec -n "$KUBEOVN_NS" "$_hp_cni" -c cni-server -- \
     sh -c "
       if command -v nc >/dev/null 2>&1; then
         nc -z -w 5 '$_hp_ip' '$_hp_port' >/dev/null 2>&1 && echo ok || echo fail
@@ -1119,7 +1136,7 @@ host_http_probe() {
 ovs_iface_for() {
   _oi_ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$1")
   [ -n "$_oi_ovs" ] || return 0
-  timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_oi_ovs" -c openvswitch -- \
+  dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_oi_ovs" -c openvswitch -- \
     ovs-vsctl --no-heading --columns=name find interface "external_ids:iface-id=$2" 2>/dev/null \
     | head -n 1 | tr -d '" '
 }
@@ -1146,31 +1163,31 @@ capture_lb_node() {
       # Answers the first fork: if the host cilium has NO LB map entry for the
       # LB IP or the nodePort, the fault is host-cilium-not-programming; if it
       # does, suspicion shifts to kube-ovn delivery (the captures below).
-      timeout 25 kubectl exec -n "$CILIUM_NS" "$_cln_agent" -c cilium-agent -- \
+      dp_run "$(dp_clip 25)" kubectl exec -n "$CILIUM_NS" "$_cln_agent" -c cilium-agent -- \
         sh -c "cilium-dbg bpf lb list 2>/dev/null | grep -E '$_cln_lbip|:$_cln_np' || echo 'no bpf lb entry for $_cln_lbip or nodePort $_cln_np'" 2>&1 || true
     fi
 
     if [ -n "$_cln_cni" ]; then
       echo
       echo "=== [$_cln_role $_cln_n] host netns: kernel conntrack -d $_cln_lbip (via cni-server) ==="
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cln_cni" -c cni-server -- \
+      dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_cln_cni" -c cni-server -- \
         sh -c "if command -v conntrack >/dev/null 2>&1; then conntrack -L -d '$_cln_lbip' 2>/dev/null || echo 'no conntrack entries for $_cln_lbip'; else grep -F '$_cln_lbip' /proc/net/nf_conntrack 2>/dev/null || echo 'no conntrack CLI; no /proc/net/nf_conntrack match for $_cln_lbip'; fi" 2>&1 || true
 
       echo
       echo "=== [$_cln_role $_cln_n] host netns: ip neigh (LB IP $_cln_lbip, endpoint IP $_cln_epip) ==="
-      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cln_cni" -c cni-server -- \
+      dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_cln_cni" -c cni-server -- \
         sh -c "ip neigh 2>/dev/null | grep -E '$_cln_lbip|$_cln_epip' || echo 'no neigh entry for $_cln_lbip or $_cln_epip'" 2>&1 || true
     fi
 
     if [ -n "$_cln_ovs" ]; then
       echo
       echo "=== [$_cln_role $_cln_n] ovs-ofctl dump-flows br-int | grep nodePort $_cln_np / endpoint $_cln_epip ==="
-      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_cln_ovs" -c openvswitch -- \
+      dp_run "$(dp_clip 25)" kubectl exec -n "$KUBEOVN_NS" "$_cln_ovs" -c openvswitch -- \
         sh -c "ovs-ofctl dump-flows br-int 2>/dev/null | grep -E '$_cln_np|$_cln_epip' || echo 'no br-int flow matching nodePort $_cln_np or endpoint $_cln_epip'" 2>&1 || true
 
       echo
       echo "=== [$_cln_role $_cln_n] ovn-controller.log decisive lines ==="
-      timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_cln_ovs" -c openvswitch -- \
+      dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_cln_ovs" -c openvswitch -- \
         sh -c 'grep -E "physical_flow_output|if_status_mgr|took [0-9]+ ?ms|recompute|Unreasonably long" /var/log/ovn/ovn-controller.log 2>/dev/null | tail -n 200 || echo "no matching lines in /var/log/ovn/ovn-controller.log"' 2>&1 || true
     fi
   } >> "$_cln_of" 2>&1 || true
@@ -1179,10 +1196,10 @@ capture_lb_node() {
 # capture_lb_datapath: enumerate LBs, gate on a live probe, and characterise the
 # announcer/endpoint datapath for any LB whose every probe fails. Wraps the whole
 # per-LB body in `|| true`-guarded, time-boxed captures so it is always best-
-# effort and self-limiting (MAX_LBS cap + per-command timeouts).
+# effort and self-limiting (MAX_LBS cap + dp_run's per-call bounds and budget).
 capture_lb_datapath() {
-  # shellcheck disable=SC2086  # empty DP_LIST_BOUND must vanish, not become ""
-  _raw=$($DP_LIST_BOUND kubectl get svc -A \
+  _raw_b=$(dp_clip "$DP_LIST_TIMEOUT")
+  _raw=$(dp_run "$_raw_b" kubectl get svc -A \
     -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.spec.type}{"|"}{.status.loadBalancer.ingress[0].ip}{"|"}{.spec.ports[0].port}{"|"}{.spec.ports[0].nodePort}{"|"}{.spec.externalTrafficPolicy}{"\n"}{end}' \
     2>"${DP_ERR:-/dev/null}")
   _raw_rc=$?
@@ -1192,7 +1209,7 @@ capture_lb_datapath() {
   # complete one. The pod list splits the same way, an unconditional note here
   # and the empty-versus-unanswered distinction below.
   if [ "$_raw_rc" -ne 0 ]; then
-    log "listing services $(dp_read_outcome "$_raw_rc" "$DP_LIST_TIMEOUT" "$DP_LIST_BOUND" "$DP_ERR"); any LoadBalancer it did not name is missing from the capture below"
+    log "listing services $(dp_read_outcome "$_raw_rc" "$_raw_b" "$DP_TIMEOUT" "$DP_ERR"); any LoadBalancer it did not name is missing from the capture below"
   fi
   _lbs=$(printf '%s\n' "$_raw" | lb_filter_services)
   if [ -z "$_lbs" ] && [ "$_raw_rc" -ne 0 ]; then
@@ -1216,15 +1233,15 @@ capture_lb_datapath() {
   # reports <unknown> and the probe falls back to the endpoint node.
   _speakerlog="$OUT/lb-speaker-logs.txt"
   : > "$_speakerlog" 2>/dev/null || _speakerlog=""
-  # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
-  _speakers=$($DP_BOUND kubectl get pod -n "$METALLB_NS" -l "$SPEAKER_SELECTOR" \
+  _speakers_b=$(dp_clip "$DP_READ_TIMEOUT")
+  _speakers=$(dp_run "$_speakers_b" kubectl get pod -n "$METALLB_NS" -l "$SPEAKER_SELECTOR" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.spec.nodeName}{"\n"}{end}' 2>"${DP_ERR:-/dev/null}")
   _speakers_rc=$?
   if [ "$_speakers_rc" -ne 0 ]; then
     # Same reason: a list that failed after naming speakers still resolves an
     # announcer from the ones it named, so the note says what is missing rather
     # than what was given up on.
-    log "listing metallb speakers $(dp_read_outcome "$_speakers_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); any speaker it did not name is missing from the announcer lookup"
+    log "listing metallb speakers $(dp_read_outcome "$_speakers_rc" "$_speakers_b" "$DP_TIMEOUT" "$DP_ERR"); any speaker it did not name is missing from the announcer lookup"
   fi
   if [ -n "$_speakers" ] && [ -n "$_speakerlog" ]; then
     # No field-count check here, unlike the three record filters above, and the
@@ -1238,7 +1255,7 @@ capture_lb_datapath() {
     # accepts, while reading as a closed gap.
     printf '%s\n' "$_speakers" | while IFS='|' read -r _sp _spnode; do
       [ -n "$_sp" ] && [ -n "$_spnode" ] || continue
-      timeout 15 kubectl logs -n "$METALLB_NS" "$_sp" -c speaker --tail=2000 2>/dev/null \
+      dp_run "$(dp_clip 15)" kubectl logs -n "$METALLB_NS" "$_sp" -c speaker --tail=2000 2>/dev/null \
         | awk -v n="$_spnode" '{ print n "\t" $0 }' >> "$_speakerlog" 2>/dev/null || true
     done
   fi
@@ -1251,6 +1268,12 @@ capture_lb_datapath() {
   printf '%s\n' "$_lbs" | {
     while IFS='|' read -r _ns _name _type _lbip _port _np _etp; do
       [ -n "$_lbip" ] || continue
+      # Past the deadline every lookup below refuses to start, and an LB whose
+      # probe never ran would be written up as if its lookups had not answered.
+      if [ "$(dp_clip 1)" -le 0 ]; then
+        log "the ${DP_BUDGET}s budget is spent; $_ns/$_name and any LoadBalancer after it NOT probed"
+        break
+      fi
       _lbport="${_port:-0}"
 
       # EndpointSlice backend for this Service (first ready, addressed endpoint).
@@ -1273,14 +1296,14 @@ capture_lb_datapath() {
       # from `8080` is indistinguishable from a real 80 -- so its note names
       # where the printed value came from instead. The service and pod lists are
       # worded like the first; pod_on_node names no consequence at all.
-      # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
-      _eps=$($DP_BOUND kubectl get endpointslices -n "$_ns" \
+      _eps_b=$(dp_clip "$DP_READ_TIMEOUT")
+      _eps=$(dp_run "$_eps_b" kubectl get endpointslices -n "$_ns" \
         -l "kubernetes.io/service-name=$_name" \
         -o jsonpath='{range .items[*]}{range .endpoints[*]}{.addresses[0]}{"|"}{.nodeName}{"|"}{.targetRef.namespace}{"|"}{.targetRef.name}{"|"}{.conditions.ready}{"\n"}{end}{end}' \
         2>"${DP_ERR:-/dev/null}")
       _eps_rc=$?
       if [ "$_eps_rc" -ne 0 ]; then
-        log "listing the endpointslices of $_ns/$_name $(dp_read_outcome "$_eps_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); any endpoint it did not name is missing from the backend line below"
+        log "listing the endpointslices of $_ns/$_name $(dp_read_outcome "$_eps_rc" "$_eps_b" "$DP_TIMEOUT" "$DP_ERR"); any endpoint it did not name is missing from the backend line below"
       fi
       _backend=$(printf '%s\n' "$_eps" | lb_first_ready_endpoint)
       _epip=$(printf '%s' "$_backend" | cut -d'|' -f1)
@@ -1294,14 +1317,14 @@ capture_lb_datapath() {
       # the status is reported it would otherwise arrive as a failed read. The
       # wildcard yields nothing and exits 0; several ports collapse to the first,
       # the same way the pod lookups take the first name.
-      # shellcheck disable=SC2086  # empty DP_BOUND must vanish, not become ""
-      _eptport=$($DP_BOUND kubectl get endpointslices -n "$_ns" \
+      _eptport_b=$(dp_clip "$DP_READ_TIMEOUT")
+      _eptport=$(dp_run "$_eptport_b" kubectl get endpointslices -n "$_ns" \
         -l "kubernetes.io/service-name=$_name" \
         -o jsonpath='{.items[*].ports[*].port}' 2>"${DP_ERR:-/dev/null}")
       _eptport_rc=$?
       _eptport=${_eptport%% *}
       if [ "$_eptport_rc" -ne 0 ]; then
-        log "reading the target port of $_ns/$_name $(dp_read_outcome "$_eptport_rc" "$DP_READ_TIMEOUT" "$DP_BOUND" "$DP_ERR"); the port below is what arrived before it stopped, which may be nothing at all or a value cut short"
+        log "reading the target port of $_ns/$_name $(dp_read_outcome "$_eptport_rc" "$_eptport_b" "$DP_TIMEOUT" "$DP_ERR"); the port below is what arrived before it stopped, which may be nothing at all or a value cut short"
       fi
       # Absent versus never-read, once per value, in the vocabulary the per-node
       # captures already use.
@@ -1384,7 +1407,7 @@ capture_lb_datapath() {
 
       # Heavy-capture budget: only failing LBs consume MAX_LBS (reachable ones
       # skipped above without counting). Stop once the cap's worth of broken LBs
-      # have been captured; remaining ones are left to the outer wall-clock bound.
+      # have been captured.
       if [ "$(lb_budget_ok "$_captured" "$MAX_LBS")" != "yes" ]; then
         echo "probe: LB IP unreachable from node $_probenode but MAX_LBS=$MAX_LBS captured cap reached -- NOT characterised" >> "$_of" 2>&1 || true
         log "reached MAX_LBS=$MAX_LBS captured cap; further unreachable LB(s) NOT characterised"
@@ -1448,7 +1471,7 @@ capture_lb_datapath() {
       if [ -n "$_an_cni" ]; then
         {
           echo "# ANNOUNCER tcpdump node=${_annode:-<none>} iface=$GENEVE_IFACE filter='host $_lbip or host ${_epip:-0.0.0.0}'"
-          timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_an_cni" -c cni-server -- \
+          dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_an_cni" -c cni-server -- \
             sh -c "timeout 10 tcpdump -n -i '$GENEVE_IFACE' -c 60 'host $_lbip or host ${_epip:-0.0.0.0}' 2>&1 || true"
         } > "$_an_pcap" 2>&1 &
         _an_td=$!
@@ -1456,7 +1479,7 @@ capture_lb_datapath() {
       if [ -n "$_en_cni" ]; then
         {
           echo "# ENDPOINT tcpdump node=${_epnode:-<none>} iface=$_en_iface filter='host $_lbip or host ${_epip:-0.0.0.0} or port ${_np:-0}'"
-          timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_en_cni" -c cni-server -- \
+          dp_run "$(dp_clip 15)" kubectl exec -n "$KUBEOVN_NS" "$_en_cni" -c cni-server -- \
             sh -c "timeout 10 tcpdump -n -i '$_en_iface' -c 60 'host $_lbip or host ${_epip:-0.0.0.0} or port ${_np:-0}' 2>&1 || true"
         } > "$_en_pcap" 2>&1 &
         _en_td=$!
@@ -1489,6 +1512,8 @@ capture_lb_datapath() {
   }
 }
 
+# The LoadBalancer section gets the rest of the budget, the reserve included.
+DP_DEADLINE=$((DP_T0 + DP_BUDGET))
 capture_lb_datapath
 
 # The stderr sink is scratch, not evidence: everything worth keeping from it is

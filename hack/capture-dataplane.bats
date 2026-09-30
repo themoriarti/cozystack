@@ -453,7 +453,7 @@ EOF
 
 @test "capture budget stops after the cap worth of broken LBs" {
   # Once MAX_LBS broken LBs are captured, further unreachable LBs are not
-  # characterised (left to the outer wall-clock backstop). max=2, three broken.
+  # characterised. max=2, three broken.
   max=2
   captured=0
   dropped=0
@@ -490,9 +490,11 @@ dp_hanging_kubectl_dir() {
 }
 
 # A `timeout` for PATH that decides a cutoff by argv instead of by the clock.
-# A read whose argv matches DP_PASS runs; otherwise one matching DP_CUT exits
-# 124 at once, the status a firing bound produces; anything else runs as given,
-# without a bound. A test that shrinks the real per-read bounds to one second
+# A read whose argv matches one of the newline-separated globs in DP_PASS runs
+# unbounded; otherwise one matching DP_CUT exits 124 at once, the status a
+# firing bound produces; anything else goes to DP_REAL_TIMEOUT with its bound
+# intact when that is set, and runs unbounded when it is not. A test that
+# shrinks the real per-read bounds to one second
 # bounds the reads that must ANSWER as well, so on a loaded machine the answer
 # is cut and the collector correctly takes another branch: the test then
 # asserts a decision the clock made. Here the cut is the input, and a read that
@@ -501,6 +503,15 @@ dp_hanging_kubectl_dir() {
 dp_cut_timeout() {
   cat >"$1/timeout" <<'SHIM'
 #!/bin/sh
+all="$*"
+pass=$(printf '%s\n' "${DP_PASS:-}" | while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  case "$all" in ($p) echo y; break ;; esac
+done)
+if [ -z "$pass" ]; then
+  case "$all" in ${DP_CUT:-}) exit 124 ;; esac
+  if [ -n "${DP_REAL_TIMEOUT:-}" ]; then exec "$DP_REAL_TIMEOUT" "$@"; fi
+fi
 while [ $# -gt 0 ]; do
   case $1 in
     -k | -s) shift 2 ;;
@@ -509,8 +520,6 @@ while [ $# -gt 0 ]; do
   esac
 done
 shift
-case "$*" in ${DP_PASS:-}) exec "$@" ;; esac
-case "$*" in ${DP_CUT:-}) exit 124 ;; esac
 exec "$@"
 SHIM
   chmod +x "$1/timeout"
@@ -1034,9 +1043,9 @@ STUB
   # one. Cilium CT, the OVN port binding and the OVS ovn-installed flag describe
   # how a pod was PROGRAMMED, and a pod chosen for being healthy is correctly
   # programmed by definition -- they compare nothing and cost 105s of exec bound
-  # on the leg most likely to be cut. Dropping them is what keeps one affected
-  # pod on one node inside the 600s backstop, so the scope is load-bearing and
-  # not a preference.
+  # on the leg most likely to be cut. Dropping them leaves that time in the
+  # wall-clock budget for affected pods, so the scope is load-bearing and not a
+  # preference.
   d=$(mktemp -d)
   mkdir -p "$d/bin"
   cat >"$d/bin/kubectl" <<'STUB'
@@ -1120,8 +1129,8 @@ STUB
   # The baseline depends on the node alone, and several affected pods on one
   # node is what a wedged datapath looks like rather than an edge case. What
   # must not repeat is the CAPTURE -- a second full per-pod capture of the same
-  # healthy pod, against a backstop the pod leg already strains. Counted by the
-  # baseline pod's own conditions read, which happens once per capture.
+  # healthy pod, against a budget the pod leg already strains. Counted by the
+  # baseline's route exec, which happens once per capture.
   d=$(mktemp -d)
   mkdir -p "$d/bin"
   cat >"$d/bin/kubectl" <<'STUB'
@@ -2104,4 +2113,133 @@ STUB
   grep -q -- '-n cozy-cilium cilium-xyz -c cilium-agent -- cilium-dbg bpf lb list' "$d/calls"
   grep -q '^=== cilium-dbg bpf lb list' "$d/out/node-node-a.txt"
   rm -rf "$d"
+}
+
+@test "a run stops starting reads when its wall-clock budget is spent" {
+  # The fan-out caps count pods and LBs, the callers' backstops count seconds,
+  # and one affected pod's worst case already ran past the smaller backstop. So
+  # this runs a cluster where both lists answer and every other read hangs,
+  # under per-read bounds of 20s: bounded only per read, the walk takes minutes
+  # and the outer 60s below stands in for the caller's backstop killing it.
+  #
+  # The lists are answered by the timeout shim without a bound, so whether they
+  # answer is not a race against a small budget; the hanging reads go to the
+  # real `timeout` with the bound the collector gave them.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*)
+    echo 'tenant-test|wedged-a|10.0.0.1|node-a|False|Running||eol'
+    echo 'tenant-test|wedged-b|10.0.0.2|node-b|False|Running||eol'
+    exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+esac
+sleep 300
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" \
+    DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *')" \
+    COZY_DATAPLANE_READ_TIMEOUT=20 COZY_DATAPLANE_BUDGET=8 COZY_DATAPLANE_LB_RESERVE=4 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector ran past its budget into the outer bound (exit $rc):"; cat "$d/log"; exit 1; }
+  # The pod section stopped at its share and said what it left behind ...
+  grep -q "the pod section's share of the 8s budget is spent; 2 affected pod(s) NOT captured" "$d/log"
+  # ... and the LoadBalancer section still had the reserve to start in.
+  grep -q 'probing 1 LoadBalancer service' "$d/log"
+  grep -q 'the 8s budget is spent; tenant/web and any LoadBalancer after it NOT probed' "$d/log"
+  # A cut read names the bound it actually ran under, not the configured 20s.
+  if grep -q 'its own 20s timeout' "$d/out/capture-notes.txt"; then
+    echo "a note quotes a bound the read never ran under:"
+    cat "$d/out/capture-notes.txt"
+    exit 1
+  fi
+  grep -q 'cut off by its own [1-8]s timeout' "$d/out/capture-notes.txt"
+  rm -rf "$d"
+}
+
+@test "a read refused for a spent budget is not reported as cut off" {
+  # With no budget left nothing is asked, so a note naming a timeout would put
+  # a cause in the artifact that never happened -- the rule dp_read_outcome
+  # already keeps for instant failures.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  printf '#!/bin/sh\necho called >>"$STUB_CALLS"\nexit 0\n' >"$d/bin/kubectl"
+  chmod +x "$d/bin/kubectl"
+  rc=0
+  STUB_CALLS="$d/calls" PATH="$d/bin:$PATH" COZY_DATAPLANE_BUDGET=0 COZY_DATAPLANE_LB_RESERVE=0 \
+    timeout 30 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ]
+  [ ! -e "$d/calls" ]
+  grep -q "listing pods was not started: the collector's wall-clock budget was already spent" "$d/out/capture-notes.txt"
+  if grep -q 'cut off' "$d/out/capture-notes.txt"; then
+    echo "a read that never started was reported as cut off:"
+    cat "$d/out/capture-notes.txt"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "the wall-clock budget fits inside the backstop of each caller" {
+  # dp_run ends no call later than the budget plus one kill grace, so that sum
+  # has to sit under both callers' backstops or the backstop is what fires and
+  # the notes explaining the cut never reach the artifact. Read from the script
+  # and from both call sites, so raising the budget or lowering a backstop
+  # turns this red.
+  budget=$(sed -n 's/^DP_BUDGET="${COZY_DATAPLANE_BUDGET:-\([0-9]*\)}"$/\1/p' "$SCRIPT")
+  reserve=$(sed -n 's/^DP_LB_RESERVE="${COZY_DATAPLANE_LB_RESERVE:-\([0-9]*\)}"$/\1/p' "$SCRIPT")
+  grace=$(sed -n 's/^DP_READ_GRACE=\([0-9]*\)$/\1/p' "$SCRIPT")
+  [ -n "$budget" ] && [ -n "$reserve" ] && [ -n "$grace" ]
+  # The reserve is carved out of the budget; one at least as large leaves the
+  # pod section nothing.
+  [ "$reserve" -lt "$budget" ]
+  for caller in "$HACK_DIR/cozytest.sh" "$HACK_DIR/e2e-chainsaw/.chainsaw.yaml"; do
+    backstop=$(sed -n 's/.*timeout -k [0-9]* \([0-9]*\) .*e2e-capture-dataplane\.sh.*/\1/p' "$caller" | head -n 1)
+    [ -n "$backstop" ] || { echo "no backstop found around the collector in $caller"; exit 1; }
+    if [ $((budget + grace)) -ge "$backstop" ]; then
+      echo "budget ${budget}s + grace ${grace}s does not fit the ${backstop}s backstop in $caller"
+      exit 1
+    fi
+  done
+}
+
+@test "every kubectl call in the collector goes through dp_run" {
+  # dp_run is what bounds a call and what enforces the budget, so a kubectl
+  # call that bypasses it can hang the run into the caller's backstop. Matched
+  # by position: a kubectl token must directly follow `dp_run <bound> ` or
+  # `command -v `. Comments and single-quoted text are dropped first, since
+  # a single-quoted `kubectl` is a message or a command run on a remote pod.
+  # Double-quoted text is kept on purpose: `x="$(kubectl ...)"` is a real call.
+  # Offenders are listed by line, so the failure says where to look.
+  offenders=$(awk '
+    {
+      s = $0
+      if (s ~ /^[ \t]*#/) next
+      gsub(/\047[^\047]*\047/, "", s)
+      sub(/[ \t]#.*/, "", s)
+      rest = s; pre = ""
+      while (match(rest, /(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)/)) {
+        k = RSTART + (substr(rest, RSTART, 1) == "k" ? 0 : 1)
+        before = pre substr(rest, 1, k - 1)
+        if (before !~ /dp_run "(\$\(dp_clip [A-Za-z0-9_$"]+\)|\$[A-Za-z_][A-Za-z0-9_]*)" $/ && before !~ /command -v $/) {
+          print FILENAME ":" NR ": " $0
+          break
+        }
+        pre = before "kubectl"
+        rest = substr(rest, k + 7)
+      }
+    }' "$SCRIPT")
+  if [ -n "$offenders" ]; then
+    echo "kubectl called outside dp_run:"
+    printf '%s\n' "$offenders"
+    exit 1
+  fi
+  # Positive control: the scan reaches the calls it guards, so an empty list
+  # above is a clean file and not a pattern that matches nothing.
+  n=$(grep -c 'dp_run "[^"]*" kubectl ' "$SCRIPT")
+  [ "$n" -ge 30 ]
 }
