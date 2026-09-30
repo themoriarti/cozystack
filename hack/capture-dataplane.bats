@@ -2231,8 +2231,73 @@ STUB
   # the refused part and not a capture that never started.
   grep -q '^=== cilium-dbg endpoint list' "$d/out/node-node-a.txt"
   grep -q '^(not started: ' "$d/out/node-node-a.txt"
-  grep -q 'wall-clock budget .* was spent' "$d/out/node-node-a.txt"
-  grep -q 'calls after it were not started' "$d/out/capture-notes.txt"
+  grep -q 'the pod section ran out of its share of the 4s wall-clock budget' "$d/out/node-node-a.txt"
+  grep -q 'its calls after that were not started' "$d/out/capture-notes.txt"
+  rm -rf "$d"
+}
+
+@test "running out of the pod section's share is not reported as the run's budget running out" {
+  # The pod section stops a reserve short of the end, and the LoadBalancer
+  # section then keeps starting calls. A note claiming the run's budget ran out
+  # at that point puts a cause in the artifact the rest of the file
+  # contradicts, and a run-wide note deduplicated once would leave the LB
+  # section's own exhaustion unrecorded. Every exec hangs here, so each section
+  # runs into its own deadline.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *endpointslices*) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  *'k8s-app=cilium'*) echo 'cilium-xyz'; exit 0 ;;
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  'get '*) exit 0 ;;
+esac
+sleep 300
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" DP_PASS='*kubectl get *' \
+    COZY_DATAPLANE_BUDGET=8 COZY_DATAPLANE_LB_RESERVE=4 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  notes="$d/out/capture-notes.txt"
+  # Positive control: the LoadBalancer section ran after the pod section's
+  # share was spent.
+  grep -q 'probing 1 LoadBalancer service' "$notes"
+  grep -q 'the pod section ran out of its share of the 8s wall-clock budget' "$notes"
+  grep -q 'the LoadBalancer section ran out of its share of the 8s wall-clock budget' "$notes"
+  if grep -q 'budget of the run' "$notes"; then
+    echo "a section's deadline was reported as the whole run's:"
+    cat "$notes"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "a budget knob with a leading zero is read as decimal, not rejected by the shell" {
+  # The knob is checked for digits and then used in shell arithmetic, which
+  # reads a leading zero as octal: 08 aborts the script before it writes a
+  # note, and 010 silently becomes 8.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$d/bin/kubectl"
+  chmod +x "$d/bin/kubectl"
+  rc=0
+  PATH="$d/bin:$PATH" COZY_DATAPLANE_BUDGET=08 COZY_DATAPLANE_LB_RESERVE=03 \
+    timeout 30 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "a leading zero broke the run (exit $rc):"; cat "$d/log"; exit 1; }
+  # Positive control: the run reached its end.
+  grep -q 'no Service type=LoadBalancer' "$d/log"
+  if grep -qi 'illegal number\|value too great\|arithmetic' "$d/log"; then
+    echo "the shell choked on the knob:"
+    cat "$d/log"
+    exit 1
+  fi
   rm -rf "$d"
 }
 
@@ -2326,7 +2391,7 @@ STUB
     timeout 30 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
   [ "$rc" -eq 0 ]
   [ ! -e "$d/calls" ]
-  grep -q "listing pods was not started: the collector's wall-clock budget was already spent" "$d/out/capture-notes.txt"
+  grep -q 'listing pods was not started: the wall-clock budget of its section was already spent' "$d/out/capture-notes.txt"
   if grep -q 'cut off' "$d/out/capture-notes.txt"; then
     echo "a read that never started was reported as cut off:"
     cat "$d/out/capture-notes.txt"

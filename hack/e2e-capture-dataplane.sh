@@ -359,7 +359,7 @@ dp_cutoff_desc() {
 DP_RC_SPENT=75
 dp_read_outcome() {
   if [ "${1:-}" = "$DP_RC_SPENT" ]; then
-    printf '%s' "was not started: the collector's wall-clock budget was already spent"
+    printf '%s' "was not started: the wall-clock budget of its section was already spent"
   elif [ "${1:-}" = "124" ] || [ "${1:-}" = "137" ]; then
     printf '%s' "was cut off by $(dp_cutoff_desc "$1" "$2" "$3")"
   elif [ -n "${4:-}" ] && [ -s "${4:-}" ]; then
@@ -435,8 +435,13 @@ DP_BUDGET="${COZY_DATAPLANE_BUDGET:-270}"
 DP_LB_RESERVE="${COZY_DATAPLANE_LB_RESERVE:-90}"
 case "$DP_BUDGET" in '' | *[!0-9]*) DP_BUDGET_BAD=$DP_BUDGET; DP_BUDGET=270 ;; *) DP_BUDGET_BAD="" ;; esac
 case "$DP_LB_RESERVE" in '' | *[!0-9]*) DP_RESERVE_BAD=$DP_LB_RESERVE; DP_LB_RESERVE=90 ;; *) DP_RESERVE_BAD="" ;; esac
+# Shell arithmetic reads a leading zero as octal, so 08 would abort the run and
+# 010 would mean 8; both knobs are decimal seconds.
+DP_BUDGET=$(printf '%s' "$DP_BUDGET" | sed 's/^0*\([0-9]\)/\1/')
+DP_LB_RESERVE=$(printf '%s' "$DP_LB_RESERVE" | sed 's/^0*\([0-9]\)/\1/')
 DP_T0=$(date +%s)
 DP_DEADLINE=$((DP_T0 + DP_BUDGET))
+DP_SECTION="run"
 
 # Resolved once. Empty when `timeout` is absent: dp_run then runs each call
 # unbounded rather than every call exiting 127 with its output swallowed, which
@@ -463,17 +468,23 @@ dp_clip() {
 # hack/capture-dataplane.bats fails on any kubectl call that does not go
 # through here.
 #
-# A refusal is not silent. It goes to stderr, which every exec block sends into
-# its own section of the artifact, so a block that keeps only its header says
+# A refusal is not silent. It goes to stderr, which the exec blocks send into
+# their own section of the artifact, so a block that keeps only its header says
 # why; the reads that capture stderr say it through dp_read_outcome instead.
-# capture-notes.txt gets one line per run, matched on the run's start time,
-# since the budget can run out inside a capture the loops never decline.
+# The few calls that discard stderr -- the LB probe, the two OVS interface
+# lookups, the speaker logs -- write no block of their own, and the per-pod
+# interface lookup reads the status itself.
+# capture-notes.txt gets one line per section and run, matched on the section
+# name and the run's start time, since the budget can run out inside a capture
+# the loops never decline. The line names the section because the pod
+# section's deadline is not the run's: the LoadBalancer section still starts
+# calls after it.
 dp_run() {
   _dr_s=$1
   shift
   if [ "$_dr_s" -le 0 ]; then
-    printf '%s\n' "(not started: the wall-clock budget for this section of the ${DP_BUDGET}s run was spent)" >&2
-    _dr_note="[capture-dataplane] the wall-clock budget of the run started at epoch ${DP_T0} ran out; calls after it were not started, and each block they left empty says so"
+    printf '%s\n' "(not started: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)" >&2
+    _dr_note="[capture-dataplane] the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget (run started at epoch ${DP_T0}); its calls after that were not started, and each block they left empty says so"
     if ! grep -qxF "$_dr_note" "$NOTES" 2>/dev/null; then
       printf '%s\n' "$_dr_note" >> "$NOTES" 2>/dev/null || true
     fi
@@ -541,6 +552,7 @@ fi
 # The pod section stops starting calls DP_LB_RESERVE seconds before the end of
 # the budget, so the LoadBalancer section after it always has that much left.
 DP_DEADLINE=$((DP_T0 + DP_BUDGET - DP_LB_RESERVE))
+DP_SECTION="pod section"
 
 # Affected = scheduled (has nodeName), Ready!=True, and not already terminal.
 # A podIP is intentionally optional: a CNI endpoint leak can strand the pod
@@ -936,7 +948,7 @@ capture_pod_dataplane() {
       dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_cpd_ovs" -c openvswitch -- \
         ovs-vsctl get interface "$_cpd_ovsif" external_ids:ovn-installed external_ids:ovn-installed-ts 2>&1 || true
     elif [ "$_cpd_ovsif_rc" -eq "$DP_RC_SPENT" ]; then
-      echo "(not started: the wall-clock budget for this section of the ${DP_BUDGET}s run was spent)"
+      echo "(not started: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)"
     elif [ "$_cpd_ovsif_rc" -ne 0 ]; then
       echo "(could not look up the OVS interface for iface-id=$_cpd_pod.$_cpd_ns -- the lookup exited $_cpd_ovsif_rc)"
     else
@@ -1551,6 +1563,7 @@ capture_lb_datapath() {
 
 # The LoadBalancer section gets the rest of the budget, the reserve included.
 DP_DEADLINE=$((DP_T0 + DP_BUDGET))
+DP_SECTION="LoadBalancer section"
 capture_lb_datapath
 
 # The stderr sink is scratch, not evidence: everything worth keeping from it is
