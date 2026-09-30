@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -523,6 +524,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, err
 	}
 
+	previousFinalizers := slices.Clone(oldObj.(*appsv1alpha1.Application).Finalizers)
+
 	// Update the Application object
 	newObj, err := objInfo.UpdatedObject(ctx, oldObj)
 	if err != nil {
@@ -587,7 +590,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
-	r.applyLiveMetadata(helmRelease, cur, app)
+	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 
 	// Suspension is not part of the Application, so the rebuilt object always
 	// says suspend=false, and sending it as is resumes a release that an
@@ -628,7 +631,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 				return getErr
 			}
 			helmRelease = converted.DeepCopy()
-			r.applyLiveMetadata(helmRelease, cur, app)
+			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 			helmRelease.SetResourceVersion(cur.GetResourceVersion())
 			helmRelease.Spec.Suspend = cur.Spec.Suspend
 		}
@@ -1220,10 +1223,36 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 	return processed
 }
 
+func garbageCollectionFinalizers(finalizers []string) []string {
+	var result []string
+	for _, finalizer := range finalizers {
+		if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents {
+			result = append(result, finalizer)
+		}
+	}
+	return result
+}
+
+func mergeGarbageCollectionFinalizers(current, previous, desired []string) []string {
+	result := slices.Clone(current)
+	for _, finalizer := range []string{metav1.FinalizerDeleteDependents, metav1.FinalizerOrphanDependents} {
+		before, after := slices.Contains(previous, finalizer), slices.Contains(desired, finalizer)
+		if before == after {
+			continue
+		}
+		if !after {
+			result = slices.DeleteFunc(result, func(f string) bool { return f == finalizer })
+		} else if !slices.Contains(result, finalizer) {
+			result = append(result, finalizer)
+		}
+	}
+	return result
+}
+
 // applyLiveMetadata assembles the metadata of a HelmRelease rebuilt from an
 // Application, given the live object it is about to replace. The PUT is a full
 // replace, so anything not restated here is dropped:
-//   - finalizers: helm-controller's finalizers.fluxcd.io guarantees
+//   - controller finalizers: helm-controller's finalizers.fluxcd.io guarantees
 //     `helm uninstall` runs on deletion. Stripping it lets a subsequent delete
 //     remove the HelmRelease instantly, orphaning every resource of the release.
 //   - ownerReferences: garbage collection and lineage.
@@ -1234,8 +1263,10 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 //
 // hr must be a fresh conversion output: the function overlays the live metadata
 // and is not idempotent against its own result.
-func (r *REST) applyLiveMetadata(hr, cur *helmv2.HelmRelease, app *appsv1alpha1.Application) {
-	hr.Finalizers = cur.Finalizers
+func (r *REST) applyLiveMetadata(hr, cur *helmv2.HelmRelease, app *appsv1alpha1.Application, previousFinalizers []string) {
+	hr.Finalizers = mergeGarbageCollectionFinalizers(cur.Finalizers, previousFinalizers, app.Finalizers)
+	hr.DeletionTimestamp = cur.DeletionTimestamp.DeepCopy()
+	hr.DeletionGracePeriodSeconds = cur.DeletionGracePeriodSeconds
 	hr.OwnerReferences = cur.OwnerReferences
 	hr.Labels = mergeMaps(omitPrefixedMap(cur.Labels, LabelPrefix), hr.Labels)
 	hr.Annotations = mergeMaps(omitPrefixedMap(cur.Annotations, AnnotationPrefix), hr.Annotations)
@@ -1513,6 +1544,7 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 			ResourceVersion:   hr.GetResourceVersion(),
 			CreationTimestamp: hr.CreationTimestamp,
 			DeletionTimestamp: hr.DeletionTimestamp,
+			Finalizers:        garbageCollectionFinalizers(hr.Finalizers),
 			Labels:            filterPrefixedMap(hr.Labels, LabelPrefix),
 			Annotations:       filterPrefixedMap(hr.Annotations, AnnotationPrefix),
 		},
@@ -1744,6 +1776,7 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			Annotations:     addPrefixedMap(app.Annotations, AnnotationPrefix),
 			ResourceVersion: app.ResourceVersion,
 			UID:             app.UID,
+			Finalizers:      garbageCollectionFinalizers(app.Finalizers),
 		},
 		Spec: helmv2.HelmReleaseSpec{
 			ChartRef: &helmv2.CrossNamespaceSourceReference{
