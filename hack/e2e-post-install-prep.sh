@@ -226,12 +226,19 @@ wait_for_linstor() {
         --request-timeout=10s 2>&1 | tail -n 30 >&2
       return 1
     fi
-    if { attempt_err=$(timeout -k 5 $(( remaining + 30 )) \
-      kubectl wait "$@" --timeout="${remaining}s" 2>&1 >&3); } 3>&1; then
+    attempt_rc=0
+    { attempt_err=$(timeout -k 5 $(( remaining + 30 )) \
+      kubectl wait "$@" --timeout="${remaining}s" 2>&1 >&3); } 3>&1 || attempt_rc=$?
+    if [ "$attempt_rc" -eq 0 ]; then
       return 0
     fi
+    # A bound that fires leaves no text: `timeout` prints nothing and kubectl
+    # dies on the signal. Not a remote exit code here, so 137 is the -k kill.
+    case $attempt_rc in
+      124 | 137) attempt_err="attempt cut by its outer bound after $(( remaining + 30 ))s" ;;
+    esac
     if [ -n "$attempt_err" ] && [ "$attempt_err" != "$last_err" ]; then
-      printf '%s\n' "$attempt_err" >&2
+      printf '%s\n' "$attempt_err" | sed 's/^/[post-install-prep] /' >&2
       last_err=$attempt_err
     fi
     sleep 5

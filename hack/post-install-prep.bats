@@ -104,6 +104,10 @@ bounded=${STUB_BOUNDED:-}
 [ -n "$bounded" ] || printf 'UNBOUNDED %s\n' "$*" >> "$STUB_CALLS"
 case "$*" in
   'wait helmrelease/linstor '*)
+    # The outer bound firing: `timeout` prints nothing and kubectl dies on the
+    # signal before it can, so the status is the only trace. 124 on TERM, 137
+    # when kubectl ignored it and the -k KILL landed.
+    if [ -n "${STUB_WAIT_KILLED:-}" ]; then exit "$STUB_WAIT_KILLED"; fi
     if [ -n "${STUB_WAIT_ERR:-}" ]; then echo "$STUB_WAIT_ERR" >&2; fi
     [ "$STUB_HR_READY_AT" != never ] && [ "$now" -ge "$STUB_HR_READY_AT" ] ;;
   'wait deployment/linstor-controller '*)
@@ -378,7 +382,27 @@ run_prep() {
   n=$(grep -v 'timed out' "$tmp/err" | grep -c 'not found' || true)
   [ "$n" -eq 1 ]
   grep 'timed out' "$tmp/err" | grep -q 'not found'
+  # Printed on every green run too, since the release appears ~70s in, so it
+  # has to read as this script's progress rather than as a failure.
+  grep -v 'timed out' "$tmp/err" | grep 'not found' | grep -q '^\[post-install-prep\] '
   rm -rf "$tmp"
+}
+
+@test "a wait attempt cut by its outer bound says so in the timeout line" {
+  for code in 124 137; do
+    tmp=$(mktemp -d)
+    prep_sandbox "$tmp"
+
+    export STUB_WAIT_KILLED=$code
+    run_prep "$tmp" never 0
+    unset STUB_WAIT_KILLED
+
+    [ "$(cat "$tmp/rc")" -ne 0 ]
+    # Without this the line reads "last kubectl error: none", which says the
+    # client had nothing to report, not that it was killed mid-request.
+    grep 'timed out' "$tmp/err" | grep -q 'cut by its outer bound'
+    rm -rf "$tmp"
+  done
 }
 
 @test "a linstor HelmRelease timeout names the upstream release that blocks it" {
