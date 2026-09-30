@@ -176,6 +176,8 @@ LINK_BUDGET=900
 # so the loop tolerates "not created yet" without the set -e cliff that a bare
 # `kubectl wait` would trigger on a NotFound. The per-attempt timeout shrinks
 # to the budget remaining, so the final attempt can consume the rest of it.
+# The outer `timeout` sits above that: --timeout covers only the watch, not the
+# GET that resolves the object first, which has no deadline of its own.
 # An expired credential or an RBAC denial exits the same way, and only the
 # text tells them apart, so stderr is kept and printed whenever it changes:
 # once for a NotFound repeated every poll, and again when the cause changes.
@@ -224,7 +226,8 @@ wait_for_linstor() {
         --request-timeout=10s 2>&1 | tail -n 30 >&2
       return 1
     fi
-    if { attempt_err=$(kubectl wait "$@" --timeout="${remaining}s" 2>&1 >&3); } 3>&1; then
+    if { attempt_err=$(timeout -k 5 $(( remaining + 30 )) \
+      kubectl wait "$@" --timeout="${remaining}s" 2>&1 >&3); } 3>&1; then
       return 0
     fi
     if [ -n "$attempt_err" ] && [ "$attempt_err" != "$last_err" ]; then

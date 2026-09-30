@@ -96,11 +96,11 @@ STUB
 #!/bin/sh
 now=$(cat "$STUB_CLOCK")
 printf '%s\n' "$*" >> "$STUB_CALLS"
-# A call that nothing bounds: not run under `timeout`, and not a `kubectl
-# wait` carrying its own --timeout. Recorded on a line of its own so the
-# assertions on the plain call lines above keep matching.
+# A call not run under `timeout`. `kubectl wait --timeout` does not count:
+# that timeout starts after the GET that resolves the object, which carries no
+# deadline of its own. Recorded on a line of its own so the assertions on the
+# plain call lines above keep matching.
 bounded=${STUB_BOUNDED:-}
-case "$*" in 'wait '*--timeout=*) bounded=1 ;; esac
 [ -n "$bounded" ] || printf 'UNBOUNDED %s\n' "$*" >> "$STUB_CALLS"
 case "$*" in
   'wait helmrelease/linstor '*)
