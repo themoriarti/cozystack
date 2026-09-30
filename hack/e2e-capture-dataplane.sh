@@ -415,6 +415,18 @@ MAX_LBS="${COZY_DATAPLANE_MAX_LBS:-6}"
 DP_READ_TIMEOUT="${COZY_DATAPLANE_READ_TIMEOUT:-20}"
 DP_LIST_TIMEOUT="${COZY_DATAPLANE_LIST_TIMEOUT:-28}"
 DP_READ_GRACE=2
+# Validated like the budget knobs below, and stricter: zero is refused too,
+# since a zero bound makes dp_run refuse every read as if the budget were
+# spent. A value `timeout` cannot parse would fail every read with 125, which
+# the notes would report as kubectl failing although kubectl never ran.
+DP_READ_BAD=""
+DP_LIST_BAD=""
+case "$DP_READ_TIMEOUT" in '' | *[!0-9]*) DP_READ_BAD=bad ;; *[1-9]*) ;; *) DP_READ_BAD=bad ;; esac
+case "$DP_LIST_TIMEOUT" in '' | *[!0-9]*) DP_LIST_BAD=bad ;; *[1-9]*) ;; *) DP_LIST_BAD=bad ;; esac
+if [ -n "$DP_READ_BAD" ]; then DP_READ_BAD=$DP_READ_TIMEOUT; DP_READ_TIMEOUT=20; fi
+if [ -n "$DP_LIST_BAD" ]; then DP_LIST_BAD=$DP_LIST_TIMEOUT; DP_LIST_TIMEOUT=28; fi
+DP_READ_TIMEOUT=$(printf '%s' "$DP_READ_TIMEOUT" | sed 's/^0*\([0-9]\)/\1/')
+DP_LIST_TIMEOUT=$(printf '%s' "$DP_LIST_TIMEOUT" | sed 's/^0*\([0-9]\)/\1/')
 
 # Wall-clock budget for the whole run, in seconds, and the part of it kept back
 # for the LoadBalancer section. The caps above count pods and LBs while both
@@ -473,9 +485,9 @@ dp_clip() {
 # A refusal is not silent. It goes to stderr, which the exec blocks send into
 # their own section of the artifact, so a block that keeps only its header says
 # why; the reads that capture stderr say it through dp_read_outcome instead.
-# The few calls that discard stderr -- the LB probe, the two OVS interface
-# lookups, the speaker logs -- write no block of their own, and the per-pod
-# interface lookup reads the status itself.
+# The two OVS interface lookups discard stderr and read the status themselves
+# instead; the LB probe discards it too and reports a refusal through its
+# "spent" outcome.
 # capture-notes.txt gets one line per section and run, matched on the section
 # name and the run's start time, since the budget can run out inside a capture
 # the loops never decline. The line names the section because the pod
@@ -512,6 +524,15 @@ mkdir -p "$OUT" 2>/dev/null || exit 0
 # one's.
 NOTES="$OUT/capture-notes.txt"
 
+# dp_new_run <file> -- the separator every per-run file carries between runs,
+# written only when the file already holds an earlier one. Each capture file is
+# appended to rather than truncated, for the reason the notes are.
+dp_new_run() {
+  if [ -s "$1" ]; then
+    printf -- '--- new capture run ---\n' >> "$1" 2>/dev/null || true
+  fi
+}
+
 # Created here rather than beside the helpers above, and the position is the
 # point: everything before the sourcing guard runs in every unit test that
 # sources this file, so a temp file made up there is one leaked per test, and
@@ -546,6 +567,12 @@ if [ -n "$DP_BUDGET_BAD" ]; then
 fi
 if [ -n "$DP_RESERVE_BAD" ]; then
   log "COZY_DATAPLANE_LB_RESERVE='$DP_RESERVE_BAD' is not a whole number of seconds; using ${DP_LB_RESERVE}s"
+fi
+if [ -n "$DP_READ_BAD" ]; then
+  log "COZY_DATAPLANE_READ_TIMEOUT='$DP_READ_BAD' is not a whole number of seconds above zero; using ${DP_READ_TIMEOUT}s"
+fi
+if [ -n "$DP_LIST_BAD" ]; then
+  log "COZY_DATAPLANE_LIST_TIMEOUT='$DP_LIST_BAD' is not a whole number of seconds above zero; using ${DP_LIST_TIMEOUT}s"
 fi
 if [ "$DP_LB_RESERVE" -ge "$DP_BUDGET" ]; then
   log "COZY_DATAPLANE_LB_RESERVE=${DP_LB_RESERVE}s leaves nothing of the ${DP_BUDGET}s budget for the pod section: it starts no call, which is not the same as nothing being affected"
@@ -697,6 +724,7 @@ capture_node() {
   node_seen "$_cn_node" && return 0
   mark_node "$_cn_node"
   _cn_nf="$OUT/node-$_cn_node.txt"
+  dp_new_run "$_cn_nf"
 
   _cn_agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$_cn_node"); _cn_agent_ok=$?
   _cn_ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$_cn_node"); _cn_ovs_ok=$?
@@ -847,9 +875,9 @@ capture_node() {
 # fourth is the Ready-conditions and events pair, which a pod selected for
 # reporting Ready=True and Running has already answered, and dropping it is what
 # leaves the baseline with no read of its own, only the route and conntrack
-# execs. What a baseline is read for is the
-# route and the conntrack beside the wedged pod's own. <label> is
-# stamped in the section header and says which role the pod plays: the affected
+# execs. What a baseline is read for is the route and the conntrack beside the
+# wedged pod's own. <label> is stamped in the section header and says which
+# role the pod plays: the affected
 # pod under investigation, or the Ready pod captured beside it as a baseline.
 # Writes to stdout; the caller redirects into the pod's output file. $central
 # (the ovn-central pod, or empty) is read from the caller's scope rather than
@@ -1116,9 +1144,7 @@ else
     pf="$OUT/pod-${ns}_${pod}.txt"
     # Appended with the separator capture-notes.txt uses, so a second run into
     # this directory keeps the evidence the first run's notes describe.
-    if [ -s "$pf" ]; then
-      printf -- '--- new capture run ---\n' >> "$pf" 2>/dev/null || true
-    fi
+    dp_new_run "$pf"
     capture_pod_dataplane "$ns" "$pod" "$podip" "$node" "NotReady, Ready=$_ready" >> "$pf" 2>&1 || true
     capture_pod_reference "$node" "$pf"
   done
@@ -1166,10 +1192,17 @@ host_http_probe() {
   # declined the lookup or the exec. Neither the lookup nor the node is the
   # cause then, and the caller says so. An exec cut at the deadline itself
   # leaves no token, but the probes after it are refused and leave this one.
-  if [ "$_hp_rc" -eq "$DP_RC_SPENT" ]; then
-    echo spent
-    return 0
-  fi
+  # A lookup cut off once the deadline has passed counts the same way: its
+  # bound was the one the deadline shortened, so it says nothing about the
+  # cni-server -- the rule the pod_on_node memo applies to such a cutoff.
+  case "$_hp_rc" in
+    "$DP_RC_SPENT") echo spent; return 0 ;;
+    124 | 137)
+      if [ "$(dp_clip 1)" -le 0 ]; then
+        echo spent
+        return 0
+      fi ;;
+  esac
   if [ "$_hp_rc" -ne 0 ]; then
     echo unknown
     return 0
@@ -1196,15 +1229,42 @@ host_http_probe() {
   [ -z "$_hp_out" ] || printf '%s\n' "$_hp_out"
 }
 
-# ovs_iface_for <node> <iface-id> -- the OVS interface name on <node> whose
-# external_ids:iface-id matches (kube-ovn stamps <pod>.<ns>); empty if none. Used
-# to point the endpoint-node tcpdump at the backend's host-side tap.
+# ovs_iface_for <node> <iface-id> <outfile> -- the OVS interface name on <node>
+# whose external_ids:iface-id matches (kube-ovn stamps <pod>.<ns>); empty if
+# none. Used to point the endpoint-node tcpdump at the backend's host-side tap.
+#
+# An empty answer means the tcpdump falls back to the geneve interface, and the
+# reason is appended to <outfile>, the LB capture. There are two lookups behind
+# it, the ovs pod and then the interface inside it, and the note names the one
+# that stopped: each has its own status, and reporting one as the other puts a
+# status in the artifact that no read returned.
 ovs_iface_for() {
+  _oi_fallback="the endpoint tcpdump uses $GENEVE_IFACE instead"
   _oi_ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$1")
-  [ -n "$_oi_ovs" ] || return 0
-  dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_oi_ovs" -c openvswitch -- \
-    ovs-vsctl --no-heading --columns=name find interface "external_ids:iface-id=$2" 2>/dev/null \
-    | head -n 1 | tr -d '" '
+  _oi_rc=$?
+  if [ -z "$_oi_ovs" ]; then
+    if [ "$_oi_rc" -eq 0 ]; then
+      echo "(no ovs pod found on node $1; $_oi_fallback)" >> "$3" 2>/dev/null || true
+    elif [ "$_oi_rc" -eq "$DP_RC_SPENT" ]; then
+      echo "(whether an ovs pod runs on node $1 was not asked: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget; $_oi_fallback)" >> "$3" 2>/dev/null || true
+    else
+      echo "(could not determine whether an ovs pod runs on node $1 -- the lookup did not answer; $_oi_fallback)" >> "$3" 2>/dev/null || true
+    fi
+    return 0
+  fi
+  _oi_out=$(dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_oi_ovs" -c openvswitch -- \
+    ovs-vsctl --no-heading --columns=name find interface "external_ids:iface-id=$2" 2>/dev/null)
+  _oi_rc=$?
+  _oi_name=$(printf '%s\n' "$_oi_out" | head -n 1 | tr -d '" ')
+  if [ -n "$_oi_name" ]; then
+    printf '%s\n' "$_oi_name"
+  elif [ "$_oi_rc" -eq 0 ]; then
+    echo "(no OVS interface with iface-id=$2 on node $1; $_oi_fallback)" >> "$3" 2>/dev/null || true
+  elif [ "$_oi_rc" -eq "$DP_RC_SPENT" ]; then
+    echo "(the OVS interface for iface-id=$2 on node $1 was not looked up: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget; $_oi_fallback)" >> "$3" 2>/dev/null || true
+  else
+    echo "(could not look up the OVS interface for iface-id=$2 on node $1 -- the lookup exited $_oi_rc; $_oi_fallback)" >> "$3" 2>/dev/null || true
+  fi
 }
 
 # capture_lb_node <node> <role> <lbip> <nodeport> <endpointip> <outfile>
@@ -1321,8 +1381,18 @@ capture_lb_datapath() {
     # accepts, while reading as a closed gap.
     printf '%s\n' "$_speakers" | while IFS='|' read -r _sp _spnode; do
       [ -n "$_sp" ] && [ -n "$_spnode" ] || continue
-      dp_run "$(dp_clip 15)" kubectl logs -n "$METALLB_NS" "$_sp" -c speaker --tail=2000 2>/dev/null \
-        | awk -v n="$_spnode" '{ print n "\t" $0 }' >> "$_speakerlog" 2>/dev/null || true
+      # Read into a variable so the status survives: the announcer comes from
+      # these lines, and a read that failed would otherwise look exactly like a
+      # speaker that never announced the address.
+      _sp_b=$(dp_clip 15)
+      _sp_logs=$(dp_run "$_sp_b" kubectl logs -n "$METALLB_NS" "$_sp" -c speaker --tail=2000 2>"${DP_ERR:-/dev/null}")
+      _sp_rc=$?
+      if [ "$_sp_rc" -ne 0 ]; then
+        log "reading the logs of speaker $_sp on $_spnode $(dp_read_outcome "$_sp_rc" "$_sp_b" "$DP_TIMEOUT" "$DP_ERR"); an announce it did not return is missing from the announcer lookup"
+      fi
+      if [ -n "$_sp_logs" ]; then
+        printf '%s\n' "$_sp_logs" | awk -v n="$_spnode" '{ print n "\t" $0 }' >> "$_speakerlog" 2>/dev/null || true
+      fi
     done
   fi
 
@@ -1404,9 +1474,7 @@ capture_lb_datapath() {
       # reasons: `_` fits in neither a namespace nor a Service name, and a
       # second run into this directory keeps the first run's capture.
       _of="$OUT/lb-${_ns}_${_name}.txt"
-      if [ -s "$_of" ]; then
-        printf -- '--- new capture run ---\n' >> "$_of" 2>/dev/null || true
-      fi
+      dp_new_run "$_of"
       {
         echo "################################################################"
         echo "# LB $_ns/$_name  ip=$_lbip port=$_lbport nodePort=${_np:-<none>} etp=${_etp:-<default>}"
@@ -1539,7 +1607,7 @@ capture_lb_datapath() {
       if [ -n "$_epnode" ]; then
         _en_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_epnode")
         if [ -n "$_eptname" ] && [ -n "$_eptns" ]; then
-          _cand=$(ovs_iface_for "$_epnode" "$_eptname.$_eptns")
+          _cand=$(ovs_iface_for "$_epnode" "$_eptname.$_eptns" "$_of")
           [ -n "$_cand" ] && _en_iface="$_cand"
         fi
       else
@@ -1550,11 +1618,8 @@ capture_lb_datapath() {
       _en_pcap="$OUT/lb-${_ns}_${_name}.tcpdump-endpoint.txt"
       _an_td=""
       _en_td=""
-      for _pcap in "$_an_pcap" "$_en_pcap"; do
-        if [ -s "$_pcap" ]; then
-          printf -- '--- new capture run ---\n' >> "$_pcap" 2>/dev/null || true
-        fi
-      done
+      dp_new_run "$_an_pcap"
+      dp_new_run "$_en_pcap"
       if [ -n "$_an_cni" ]; then
         {
           echo "# ANNOUNCER tcpdump node=${_annode:-<none>} iface=$GENEVE_IFACE filter='host $_lbip or host ${_epip:-0.0.0.0}'"

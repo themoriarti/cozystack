@@ -2371,6 +2371,43 @@ STUB
   rm -rf "$d"
 }
 
+@test "an LB probe whose lookup the deadline cut is blamed on the budget alone" {
+  # The only cni-server lookup hangs and is cut by a bound the deadline
+  # shortened; the probes after it are refused. The budget is the whole cause,
+  # so the reason line must not add a second, unanswered lookup.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *endpointslices*) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  *'app=kube-ovn-cni'*) sleep 300 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" \
+    DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *' '*endpointslices*')" \
+    COZY_DATAPLANE_BUDGET=4 COZY_DATAPLANE_LB_RESERVE=4 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  f="$d/out/lb-tenant_web.txt"
+  # Positive control: the lookup was cut under a shortened bound.
+  grep -q 'looking up the pod matching app=kube-ovn-cni on node node-a was cut off by its own [1-4]s timeout' "$d/log"
+  grep -q "no probe completed from node-a -- the LoadBalancer section's share of the budget ran out" "$f"
+  if grep -q 'for another the cni-server lookup did not answer' "$f"; then
+    echo "a lookup the deadline cut was reported as a second cause:"
+    cat "$f"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
 @test "an LB probe stopped by both a refused lookup and the budget names both" {
   # One probe's lookup is refused by the apiserver, the next hangs into the
   # deadline and the last is refused by the budget. Naming only the budget
@@ -2644,4 +2681,149 @@ STUB
   # above is a clean file and not a pattern that matches nothing.
   n=$(grep -c 'dp_run "[^"]*" kubectl ' "$SCRIPT")
   [ "$n" -ge 30 ]
+}
+
+# A cluster with one affected pod on node-a, an ovn-central replica, and one
+# reachable LoadBalancer announced from node-a.
+dp_every_file_stub() {
+  cat >"$1/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *'app=ovn-central'*) echo 'ovn-central-0'; exit 0 ;;
+  *'component=speaker'*) echo 'speaker-0|node-a'; exit 0 ;;
+  'logs '*) echo '{"event":"serviceAnnounced","ips":["192.0.2.10"],"node":"node-a"}'; exit 0 ;;
+  *endpointslices*) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *'nc -z'*) echo ok; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$1/kubectl"
+}
+
+@test "a second run into one directory keeps the node capture apart" {
+  # capture-notes.txt, the per-pod and the per-LB files keep every run behind
+  # a separator. The node capture ran two runs together with nothing between
+  # them, so a reader could not tell where the second began.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  dp_every_file_stub "$d/bin"
+  timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >>"$d/log" 2>&1
+  f="$d/out/node-node-a.txt"
+  # Positive control: both runs wrote the node capture.
+  [ "$(grep -c '^# NODE node-a ' "$f")" -eq 2 ]
+  grep -qx -- '--- new capture run ---' "$f"
+  rm -rf "$d"
+}
+
+@test "a failed speaker log read says so in the notes" {
+  # The announcer is taken from these logs. A read that failed left no trace,
+  # so an <unknown> announcer could not be told from a speaker that never
+  # announced the address.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *'component=speaker'*) echo 'speaker-0|node-a'; exit 0 ;;
+  'logs '*) echo 'Error from server (BadRequest): container "speaker" in pod "speaker-0" is waiting to start' >&2; exit 1 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  grep -q 'reading the logs of speaker speaker-0 on node-a failed: kubectl exited 1: Error from server (BadRequest)' "$d/out/capture-notes.txt"
+  rm -rf "$d"
+}
+
+@test "an endpoint tcpdump that falls back to the geneve interface says so" {
+  # The endpoint-side tcpdump is pointed at the backend's OVS interface when
+  # the lookup finds one. When it does not, the capture runs on the geneve
+  # interface instead, and the header then names an interface nobody chose for
+  # the backend.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *endpointslices*) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *'app=ovs'*) echo 'ovs-xyz'; exit 0 ;;
+  *'nc -z'*) echo fail; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  # Positive control: the heavy capture ran and the endpoint tcpdump used the
+  # fallback.
+  grep -q 'iface=genev_sys_6081' "$d/out/lb-tenant_web.tcpdump-endpoint.txt"
+  grep -q 'no OVS interface with iface-id=wedged.tenant-test on node node-a; the endpoint tcpdump uses genev_sys_6081 instead' "$d/out/lb-tenant_web.txt"
+  rm -rf "$d"
+}
+
+@test "an endpoint tcpdump fallback names the lookup that failed, not a status nobody saw" {
+  # The fallback has two lookups behind it: the ovs pod on the node, then the
+  # interface inside it. When the pod lookup is cut off, the note has to say
+  # that, not report the interface lookup as having exited with a status that
+  # only the pod lookup's memo holds. A node with no ovs pod is a third case.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) exit 0 ;;
+  'get svc -A '*) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *endpointslices*) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *'nc -z'*) echo fail; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  dp_cut_timeout "$d/bin"
+  PATH="$d/bin:$PATH" DP_CUT='*app=ovs*' timeout 90 "$SCRIPT" "$d/cut" >"$d/log" 2>&1
+  f="$d/cut/lb-tenant_web.txt"
+  # Positive control: the endpoint side ran on the fallback.
+  grep -q 'iface=genev_sys_6081' "$d/cut/lb-tenant_web.tcpdump-endpoint.txt"
+  grep -q 'could not determine whether an ovs pod runs on node node-a -- the lookup did not answer; the endpoint tcpdump uses genev_sys_6081 instead' "$f"
+  if grep -q 'the lookup exited' "$f"; then
+    echo "the pod lookup's cutoff was reported as the interface lookup exiting:"
+    cat "$f"
+    exit 1
+  fi
+  # No ovs pod on the node at all: nothing was looked up inside one.
+  PATH="$d/bin:$PATH" timeout 90 "$SCRIPT" "$d/none" >>"$d/log" 2>&1
+  grep -q 'no ovs pod found on node node-a; the endpoint tcpdump uses genev_sys_6081 instead' "$d/none/lb-tenant_web.txt"
+  rm -rf "$d"
+}
+
+@test "a read timeout knob that is not a whole number of seconds is named and replaced" {
+  # A value timeout cannot parse made every read exit 125, reported as kubectl
+  # exiting 125 although kubectl never ran. Zero is rejected too: every read
+  # would be refused as if the budget were spent.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$d/bin/kubectl"
+  chmod +x "$d/bin/kubectl"
+  COZY_DATAPLANE_READ_TIMEOUT=abc COZY_DATAPLANE_LIST_TIMEOUT=0 \
+    timeout 30 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  notes="$d/out/capture-notes.txt"
+  grep -q "COZY_DATAPLANE_READ_TIMEOUT='abc' is not a whole number of seconds above zero; using 20s" "$notes"
+  grep -q "COZY_DATAPLANE_LIST_TIMEOUT='0' is not a whole number of seconds above zero; using 28s" "$notes"
+  if grep -q 'exited 125\|was not started' "$notes"; then
+    echo "a bad knob still broke the reads:"
+    cat "$notes"
+    exit 1
+  fi
+  # Positive control: the reads ran and answered.
+  grep -q 'no Service type=LoadBalancer' "$d/log"
+  rm -rf "$d"
 }
