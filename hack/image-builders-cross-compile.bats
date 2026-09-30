@@ -9,11 +9,12 @@
 # of the other architecture pulls it.
 #
 # A stage compiles when one of its RUN commands is go build/test/install, make,
-# gradle, dpkg-buildpackage, a node package manager or a *build.sh script, at
-# command position (after RUN and its --flag options, `&&`, `;` or `||`, past
-# any VAR=value prefixes). Such a stage must run on the build platform (see
-# stages() below) and use TARGETARCH or TARGETPLATFORM on a RUN or ENV line, unless its output
-# carries no architecture at all (ARCH_NEUTRAL below). A bare
+# gradle, dpkg-buildpackage, a node package manager or a script whose file name
+# contains "build" and ends in .sh, at command position (after RUN and its
+# --flag options, `&&`, `;` or `||`, past any VAR=value prefixes). Such a stage
+# must run on the build platform (see stages() below) and use TARGETARCH or
+# TARGETPLATFORM on a RUN or ENV line, unless its output carries no
+# architecture at all (ARCH_NEUTRAL below). A bare
 # `ARG TARGETARCH` does not count: it declares the variable, and a `go build`
 # that never reads it still builds for the host. The check is per stage, not
 # per command: a stage with `RUN echo $TARGETARCH` and a bare `go build` would
@@ -60,7 +61,7 @@ stages() {
       if (native && name != "-") nativestage[name] = 1
       next
     }
-    /^RUN[[:space:]]/ && /(^RUN([[:space:]]+--[^[:space:]]+)*|&&|;|[|][|])[[:space:]]+([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(go[[:space:]]+(build|test|install)|make|gradle|[.]\/gradlew|dpkg-buildpackage|pnpm|npm|yarn|[^[:space:]]*build[.]sh)([[:space:]]|$)/ { compiles = 1 }
+    /^RUN[[:space:]]/ && /(^RUN([[:space:]]+--[^[:space:]]+)*|&&|;|[|][|])[[:space:]]+([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(go[[:space:]]+(build|test|install)|make|gradle|[.]\/gradlew|dpkg-buildpackage|pnpm|npm|yarn|[^[:space:]]*build[^[:space:]\/]*[.]sh)([[:space:]]|$)/ { compiles = 1 }
     /^(RUN|ENV)[[:space:]]/ && /TARGETARCH|TARGETPLATFORM/ { targets = 1 }
     END { flush() }
   '
@@ -104,6 +105,22 @@ stages() {
   out="$(stages "$fixture")"
   rm -f "$fixture"
   [ "$out" = "1 0 0 builder FROM golang AS builder" ]
+}
+
+@test "a build script with a suffix after build still counts as a compile" {
+  fixture="$(mktemp)"
+  printf '%s\n' 'FROM --platform=$BUILDPLATFORM golang AS build' 'RUN ./hack/build-go.sh' >"$fixture"
+  out="$(stages "$fixture")"
+  rm -f "$fixture"
+  [ "$out" = '1 0 1 build FROM --platform=$BUILDPLATFORM golang AS build' ]
+}
+
+@test "a script under a build/ directory is not a build script" {
+  fixture="$(mktemp)"
+  printf '%s\n' 'FROM golang AS x' 'RUN ./build/install.sh' >"$fixture"
+  out="$(stages "$fixture")"
+  rm -f "$fixture"
+  [ "$out" = "0 0 0 x FROM golang AS x" ]
 }
 
 @test "a stage built FROM an earlier BUILDPLATFORM stage runs on the build platform too" {
