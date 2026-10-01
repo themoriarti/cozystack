@@ -161,22 +161,24 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #                     fall-through — both of which fail safe
 inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|packages/tests/|hack/[^/]+\.bats$|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$|packages/system/\.gitattributes$|packages/system/(backup-controller|backupstrategy-controller)/definitions/\.gitattributes$)'
 
-# All known Chainsaw suites: every dir under hack/e2e-chainsaw/ holding a
-# chainsaw-test.yaml (this excludes _lib/ and the top-level config files).
-# chainsaw-test.yml counts too, because Chainsaw loads it when the .yaml is
-# absent, and a suite that runs but is never listed is never selected.
+# All known Chainsaw suites: every dir directly under hack/e2e-chainsaw/ that
+# Chainsaw v0.2.15 would run as one (pkg/discovery/load.go). That is a dir
+# holding chainsaw-test.yaml, or chainsaw-test.yml when the .yaml is absent, or,
+# with neither, files named like 01-install.yaml, which Chainsaw turns into a
+# Test on its own. A suite that runs but is never listed is never selected. A
+# parked chainsaw-test.yaml.disabled matches none of these.
 #
 # Captured before the sed/sort rather than piped straight into them: a pipeline
 # carries its LAST command's status, so `$(find ... | sed | sort)` would report
 # sort's success whatever find did — the same blindness handled for yq below,
 # and worse here, because this list is what every escalation prints. Errors go
 # to stderr rather than /dev/null for the same reason.
-if ! chainsaw_tests=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 \( -name chainsaw-test.yaml -o -name chainsaw-test.yml \)); then
+if ! suite_files=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2); then
   echo "select-e2e: find failed listing the Chainsaw suites under hack/e2e-chainsaw — nothing can be decided without that list" >&2
   exit 1
 fi
-all_apps=$(printf '%s\n' "$chainsaw_tests" \
-  | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' -e 's,/chainsaw-test\.yml$,,' | sort -u)
+all_apps=$(printf '%s\n' "$suite_files" \
+  | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' | sort -u)
 
 # An empty list here is a broken enumeration — a moved directory, a wrong
 # working directory — not a project without tests, and it silently corrupts
@@ -198,7 +200,7 @@ all_apps=$(printf '%s\n' "$chainsaw_tests" \
 # Both lanes run this step under `bash -e`, so the non-zero exit fails the job
 # instead of falling through to the empty selection.
 if [ -z "$all_apps" ]; then
-  echo "select-e2e: found no chainsaw-test.yaml or chainsaw-test.yml under hack/e2e-chainsaw — the suite enumeration is broken (wrong working directory?), refusing to decide anything from an empty suite list" >&2
+  echo "select-e2e: found no Chainsaw suite under hack/e2e-chainsaw (no chainsaw-test.yaml, chainsaw-test.yml or numbered step file in any directory below it) — the suite enumeration is broken (wrong working directory?), refusing to decide anything from an empty suite list" >&2
   exit 1
 fi
 

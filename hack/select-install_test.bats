@@ -203,6 +203,20 @@ YAML
     rm -rf "$tmp"
 }
 
+@test "validate sees a suite made only of numbered step files" {
+    # Chainsaw runs a directory of 01-*.yaml step files as a suite when it holds
+    # no chainsaw-test.*, so the mapping check has to see that layout too.
+    tmp=$(mktemp -d)
+    mkdir -p "$tmp/suites/totally-unmapped-suite"
+    : > "$tmp/suites/totally-unmapped-suite/00-install.yaml"
+    err=$(hack/select-install.sh --validate packages/core/platform/sources "$tmp/suites" 2>&1 1>/dev/null) && {
+        echo "expected validation to fail on an unmapped step-file suite" >&2
+        exit 1
+    }
+    echo "$err" | grep -q "suite 'totally-unmapped-suite' has no PackageSource mapping"
+    rm -rf "$tmp"
+}
+
 @test "validate fails when the suite listing itself fails" {
     # A failed find and an empty suites dir used to read the same: the error
     # went to /dev/null and the pipeline reported sort's status, so the mapping

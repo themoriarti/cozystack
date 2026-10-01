@@ -31,8 +31,8 @@
 # expanded, but not which side is which, and reading a whole-tree diff off a trace
 # line is exactly the moment a test stops being worth having.
 full_suite_list() {
-    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 \( -name chainsaw-test.yaml -o -name chainsaw-test.yml \) \
-      | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' -e 's,/chainsaw-test\.yml$,,' \
+    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 \
+      | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' \
       | sort -u | paste -sd ' ' -
 }
 
@@ -786,6 +786,30 @@ assert_full_suite() {
     echo hack/e2e-chainsaw/beta/step.yaml > "$tmp/diff"
     output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources")
     assert_selection "a per-suite edit must select a .yml suite" "$output" "beta"
+    rm -rf "$tmp"
+}
+
+@test "a suite made only of numbered step files is discovered" {
+    # With no chainsaw-test.* in a directory, Chainsaw builds a Test from files
+    # named like 01-install.yaml (TryFindStepFiles), so that directory runs as a
+    # suite whenever the whole tree is handed to chainsaw. Listed by the
+    # chainsaw-test name alone, it was never selected.
+    tmp=$(mktemp -d)
+    script="$PWD/hack/select-e2e.sh"
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/alpha" "$tmp/tree/hack/e2e-chainsaw/gamma" \
+        "$tmp/tree/hack/e2e-chainsaw/delta"
+    : > "$tmp/tree/hack/e2e-chainsaw/alpha/chainsaw-test.yaml"
+    : > "$tmp/tree/hack/e2e-chainsaw/gamma/01-install.yaml"
+    : > "$tmp/tree/hack/e2e-chainsaw/gamma/01-assert.yml"
+    # Not a step file: the number has to lead the name.
+    : > "$tmp/tree/hack/e2e-chainsaw/delta/install-01.yaml"
+    echo go.mod > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    assert_selection "the full suite must include a step-file suite" "$output" "alpha gamma"
+    echo hack/e2e-chainsaw/gamma/01-install.yaml > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources")
+    assert_selection "a per-suite edit must select a step-file suite" "$output" "gamma"
     rm -rf "$tmp"
 }
 
