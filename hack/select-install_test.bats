@@ -217,6 +217,21 @@ YAML
     rm -rf "$tmp"
 }
 
+@test "validate sees a suite nested below a top-level directory" {
+    # Chainsaw walks every directory under the one it is handed, so a test in a
+    # subdirectory runs as part of its top-level directory, which then needs a
+    # mapping like any other suite.
+    tmp=$(mktemp -d)
+    mkdir -p "$tmp/suites/totally-unmapped-suite/cases"
+    : > "$tmp/suites/totally-unmapped-suite/cases/chainsaw-test.yaml"
+    err=$(hack/select-install.sh --validate packages/core/platform/sources "$tmp/suites" 2>&1 1>/dev/null) && {
+        echo "expected validation to fail on an unmapped nested suite" >&2
+        exit 1
+    }
+    echo "$err" | grep -q "suite 'totally-unmapped-suite' has no PackageSource mapping"
+    rm -rf "$tmp"
+}
+
 @test "validate fails when the suite listing itself fails" {
     # A failed find and an empty suites dir used to read the same: the error
     # went to /dev/null and the pipeline reported sort's status, so the mapping

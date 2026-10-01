@@ -31,8 +31,8 @@
 # expanded, but not which side is which, and reading a whole-tree diff off a trace
 # line is exactly the moment a test stops being worth having.
 full_suite_list() {
-    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 \
-      | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' \
+    find hack/e2e-chainsaw -mindepth 2 \
+      | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/(.*/)?(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' \
       | sort -u | paste -sd ' ' -
 }
 
@@ -839,6 +839,28 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "a suite nested below a top-level directory is discovered" {
+    # Chainsaw walks every directory under the path it is given, so a test in
+    # hack/e2e-chainsaw/<dir>/<sub>/ runs whenever <dir> is handed to chainsaw,
+    # with or without a test of its own at the top. Read off the top level
+    # alone, <dir> was never listed, so even the full suite left it out.
+    tmp=$(mktemp -d)
+    script="$PWD/hack/select-e2e.sh"
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/alpha" "$tmp/tree/hack/e2e-chainsaw/epsilon/cases" \
+        "$tmp/tree/hack/e2e-chainsaw/eta/cases/deep"
+    : > "$tmp/tree/hack/e2e-chainsaw/alpha/chainsaw-test.yaml"
+    : > "$tmp/tree/hack/e2e-chainsaw/epsilon/cases/chainsaw-test.yml"
+    : > "$tmp/tree/hack/e2e-chainsaw/eta/cases/deep/02-apply.yaml"
+    echo go.mod > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    assert_selection "the full suite must include a nested suite" "$output" "alpha epsilon eta"
+    echo hack/e2e-chainsaw/eta/cases/deep/02-apply.yaml > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources")
+    assert_selection "an edit to a nested suite must select its top-level directory" "$output" "eta"
+    rm -rf "$tmp"
+}
+
 @test "an unterminated last line is still classified" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -1067,9 +1089,9 @@ assert_full_suite() {
 }
 
 @test "an edit to a non-suite directory under e2e-chainsaw escalates on its own account" {
-    # Only a switched-off suite is ignorable. Shared material next to _lib/, or
-    # a suite nested deeper than the depth-2 scan looks, is invisible to
-    # all_apps, and selecting nothing for it would skip E2E outright.
+    # Only a switched-off suite is ignorable. Shared material next to _lib/ is
+    # invisible to all_apps, and selecting nothing for it would skip E2E
+    # outright.
     #
     # The mixed diff is the regression pin. When the name was left for the final
     # intersection to drop, the path escalated alone, through the empty-selection
