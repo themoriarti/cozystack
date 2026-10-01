@@ -38,17 +38,10 @@
 # wait would sum ceilings the script reaches only on the happy path. Both sit at
 # exactly their constant, so raising a wait without raising the op reds.
 #
-# Two tests reach beyond mariadb: several backup examples share one
-# wait_hr_ready body, and those tests run its exit branches in every copy and
-# hold the copies byte-identical. The population is every definition in the
-# tree except the named exceptions below (mbw_hr_copies), and each exception is
-# held to still differ, so it goes red once its copy converges:
-#   examples/backups/redis/00-helpers.sh -- written in the compact one-line
-#     style of the rest of that file, so converging it rewrites its shape
-#     rather than applying the shared body.
-#   examples/backups/kafka-metadata/00-helpers.sh -- a helper of its own rather
-#     than a copy, with the same diagnostic gap on timeout; closing that is a
-#     change to kafka-metadata, not to this population.
+# The errexit test reaches beyond mariadb: wait_hr_ready is defined once, in
+# examples/backups/_lib/wait-helpers.sh, for every backup example, and that
+# test runs its exit branches through the helpers run-all.sh sources.
+# hack/backup-examples-shared-helpers.bats holds it to that one definition.
 #
 # cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
 # own line; there is no bats `run` or `$status`, and no setup/teardown.
@@ -88,33 +81,6 @@ mbw_mariadb_waits() {
     | awk '/^wait_hr_ready[[:space:]]/ && $2 ~ /^"mariadb-/ {
              print $2, ($3 == "" ? "default" : $3)
            }'
-}
-
-# wait_hr_ready definitions deliberately left out of the byte-identity pin; the
-# header says why for each.
-MBW_HR_EXCEPTIONS="examples/backups/kafka-metadata/00-helpers.sh examples/backups/redis/00-helpers.sh"
-
-# Print, sorted, every shell file under examples/ and packages/ that defines
-# wait_hr_ready, exceptions included. Found rather than listed, so a new copy
-# joins the identity pin without anyone remembering to add it.
-mbw_hr_definers() {
-  grep -rlE --include='*.sh' '^wait_hr_ready\(\)' examples packages | sort
-}
-
-# Print the definers minus the named exceptions: the population pinned
-# byte-identical to the mariadb copy.
-mbw_hr_copies() {
-  for mbw_f in $(mbw_hr_definers); do
-    case " $MBW_HR_EXCEPTIONS " in
-      *" $mbw_f "*) ;;
-      *) printf '%s\n' "$mbw_f" ;;
-    esac
-  done
-}
-
-# Print the wait_hr_ready body defined in $1.
-mbw_hr_body() {
-  sed -n '/^wait_hr_ready()/,/^}/p' "$1"
 }
 
 # Print every release argument wait_hr_ready is called with in $1, mariadb or
@@ -565,15 +531,9 @@ MBW_FIXTURE
     # stub that returns the same string to every call makes the conditions dump
     # emit it too, and an assertion on it would then pass with the branch it
     # names deleted.
-    # Every copy, not just the mariadb one: the identity check below compares
-    # text, and only a run shows that each copy still behaves under errexit.
-    mbw_copies=$(mbw_hr_copies)
-    printf '%s\n' "$mbw_copies" | grep -qx 'examples/backups/mariadb/00-helpers.sh' || {
-        echo "the wait_hr_ready population no longer contains the mariadb copy:" >&2
-        printf '%s\n' "$mbw_copies" >&2
-        exit 1
-    }
-    for mbw_helper in $mbw_copies; do
+    # Sourced the way run-all.sh sources it, so the shared body is reached
+    # through the walkthrough's own helpers rather than loaded directly.
+    for mbw_helper in examples/backups/mariadb/00-helpers.sh; do
     # Run under bash EXPLICITLY, not under the runner's shell. run-all.sh and
     # the helpers are #!/bin/bash; cozytest.sh is #!/bin/sh and sources this
     # file, so on the CI runner the body would execute under dash, where
@@ -817,54 +777,6 @@ MBW_FIXTURE
     esac
     done
 
-}
-
-@test "every wait_hr_ready copy in the tree matches the mariadb one" {
-    # A separate contract from the errexit one above, and it fails for a
-    # separate reason, so it gets a name of its own: a divergence introduced by
-    # editing one helper would otherwise surface only when another example
-    # ran. Compare the function bodies rather than the files, because the files
-    # legitimately differ in their app-specific blocks.
-    mbw_ref=examples/backups/mariadb/00-helpers.sh
-    mbw_a=$(mbw_hr_body "$mbw_ref")
-    [ -n "$mbw_a" ] || { echo "wait_hr_ready not found in $mbw_ref" >&2; exit 1; }
-    mbw_copies=$(mbw_hr_copies)
-    mbw_n=$(printf '%s\n' "$mbw_copies" | grep -c . || true)
-    # A population of one compares mariadb with itself and passes on nothing.
-    [ "$mbw_n" -ge 2 ] || {
-        echo "found ${mbw_n} wait_hr_ready copies outside the exceptions, expected more than the mariadb one:" >&2
-        printf '%s\n' "$mbw_copies" >&2
-        exit 1
-    }
-    for mbw_f in $mbw_copies; do
-        [ "$(mbw_hr_body "$mbw_f")" = "$mbw_a" ] || {
-            echo "$mbw_f: wait_hr_ready has diverged from $mbw_ref" >&2
-            echo "carry the change to every copy, or name the file in MBW_HR_EXCEPTIONS with its reason in the header" >&2
-            mbw_tmp=$(mktemp)
-            mbw_hr_body "$mbw_f" > "$mbw_tmp"
-            printf '%s\n' "$mbw_a" | diff - "$mbw_tmp" >&2 || true
-            rm -f "$mbw_tmp"
-            exit 1
-        }
-    done
-}
-
-@test "each wait_hr_ready exception still defines a body of its own" {
-    # An exception is a statement that a copy differs. Once it converges, or
-    # moves, the entry exempts nothing and the reason in the header is false,
-    # so both states red rather than leaving a stale name behind.
-    mbw_a=$(mbw_hr_body examples/backups/mariadb/00-helpers.sh)
-    mbw_definers=$(mbw_hr_definers)
-    for mbw_f in $MBW_HR_EXCEPTIONS; do
-        printf '%s\n' "$mbw_definers" | grep -qx "$mbw_f" || {
-            echo "$mbw_f is a named exception but defines no wait_hr_ready; drop it from MBW_HR_EXCEPTIONS and the header" >&2
-            exit 1
-        }
-        [ "$(mbw_hr_body "$mbw_f")" != "$mbw_a" ] || {
-            echo "$mbw_f now matches the mariadb wait_hr_ready; drop it from MBW_HR_EXCEPTIONS and the header so the identity pin covers it" >&2
-            exit 1
-        }
-    done
 }
 
 @test "a trailing space does not turn a literal budget into skip" {
