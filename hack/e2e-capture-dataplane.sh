@@ -517,7 +517,7 @@ dp_budget_cut() {
 # pod section's deadline is not the run's: the LoadBalancer section still
 # starts calls after it.
 dp_spent_note() {
-  printf '%s' "[capture-dataplane] the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget (run started at epoch ${DP_T0}); a call running then was cut at the deadline, its calls after that were not started, and each block they left empty says so"
+  printf '%s' "[capture-dataplane] the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget (run started at epoch ${DP_T0}); a call running then, if any, was cut at the deadline, its calls after that were not started, and each block they left empty says so"
 }
 dp_note_spent() {
   _dns_note=$(dp_spent_note)
@@ -555,8 +555,18 @@ dp_run() {
     "$@"
   fi
   _dr_rc=$?
+  # A cutoff is marked where the call's output went, as a refusal is: an exec
+  # block keeps whatever it printed before its bound fired, and a partial table
+  # reads as a complete one. The reads that capture stderr into DP_ERR name the
+  # cutoff through dp_read_outcome, which does not read that file for one.
   if dp_budget_cut "$_dr_rc" "$_dr_s" "$_dr_left"; then
+    printf '%s\n' "(cut off at the deadline: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)" >&2
     dp_note_spent
+  elif [ "$_dr_rc" -eq 124 ] || [ "$_dr_rc" -eq 137 ]; then
+    # The same reading the notes give a read: kubectl exec passes a remote
+    # command's own 124 through unchanged, so that one cannot be told from
+    # this bound firing, and dp_cutoff_desc says so for a 137.
+    printf '%s\n' "(cut off by $(dp_cutoff_desc "$_dr_rc" "$_dr_s" "$DP_TIMEOUT"))" >&2
   fi
   return "$_dr_rc"
 }

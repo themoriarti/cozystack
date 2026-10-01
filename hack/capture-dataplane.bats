@@ -2126,6 +2126,73 @@ STUB
   grep -q '^  _cpd_ns=\$1' "$SCRIPT"
 }
 
+@test "an exec block cut off by its own bound says so inside the block" {
+  # A cut exec leaves whatever it printed before its bound fired, and a partial
+  # service map reads as a complete one: the question it answers is whether a
+  # backend is still in the map. The block has to carry the cut itself.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  *'k8s-app=cilium'*) echo 'cilium-xyz'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  dp_cut_timeout "$d/bin"
+  PATH="$d/bin:$PATH" DP_CUT='*bpf lb list*' timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  f="$d/out/node-node-a.txt"
+  # The marker sits under the service map's own header, before the next block.
+  block=$(awk '/^=== cilium-dbg bpf lb list/ { on = 1; next } on && /^=== / { exit } on { print }' "$f")
+  # Positive control: the block exists.
+  grep -q '^=== cilium-dbg bpf lb list' "$f"
+  case "$block" in
+    *'(cut off by its own 25s timeout)'*) : ;;
+    *) echo "the cut service map carries no marker:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  rm -rf "$d"
+}
+
+@test "an exec block the deadline cut off names the budget inside the block" {
+  # The other cut a block can take: the endpoint list runs under a bound the
+  # pod section's deadline shortened and hangs into it. The block names the
+  # budget, not a timeout of its own it never reached.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get svc -A '*) exit 0 ;;
+  *'k8s-app=cilium'*) echo 'cilium-xyz'; exit 0 ;;
+  *'endpoint list'*) sleep 300 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *')" \
+    COZY_DATAPLANE_BUDGET=6 COZY_DATAPLANE_LB_RESERVE=3 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  f="$d/out/node-node-a.txt"
+  block=$(awk '/^=== cilium-dbg endpoint list/ { on = 1; next } on && /^=== / { exit } on { print }' "$f")
+  # Positive control: the block exists.
+  grep -q '^=== cilium-dbg endpoint list' "$f"
+  case "$block" in
+    *'(cut off at the deadline: the pod section ran out of its share of the 6s wall-clock budget)'*) : ;;
+    *) echo "the block the deadline cut does not name the budget:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  case "$block" in
+    *'cut off by its own'*) echo "the block blames a bound of its own:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  rm -rf "$d"
+}
+
 @test "an affected node gets the cilium service map with no LoadBalancer in the cluster" {
   # The service map describes every service translation on the node, ClusterIP
   # included. A pod that cannot reach 10.96.0.1 is a ClusterIP failure with no
@@ -3169,5 +3236,10 @@ STUB
   fi
   # Positive control: the reads ran and answered.
   grep -q 'no Service type=LoadBalancer' "$d/log"
+  # And the other way round, so each knob is held to both rejections.
+  COZY_DATAPLANE_READ_TIMEOUT=0 COZY_DATAPLANE_LIST_TIMEOUT=abc \
+    timeout 30 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/swap" >"$d/log2" 2>&1
+  grep -q "COZY_DATAPLANE_READ_TIMEOUT='0' is not a whole number of seconds above zero; using 20s" "$d/swap/capture-notes.txt"
+  grep -q "COZY_DATAPLANE_LIST_TIMEOUT='abc' is not a whole number of seconds above zero; using 28s" "$d/swap/capture-notes.txt"
   rm -rf "$d"
 }
