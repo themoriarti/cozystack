@@ -34,6 +34,7 @@ bundles:
     - cozystack.kuberture
     - cozystack.linstor-gui
     - cozystack.local-ccm
+    - cozystack.local-storage
     - cozystack.mariadb-application
     - cozystack.mariadb-operator
     - cozystack.mongodb-application
