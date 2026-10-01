@@ -2142,7 +2142,7 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   dp_cut_timeout "$d/bin"
-  PATH="$d/bin:$PATH" DP_CUT='*bpf lb list*' timeout 90 "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  timeout 90 env PATH="$d/bin:$PATH" DP_CUT='*bpf lb list*' "$SCRIPT" "$d/out" >"$d/log" 2>&1
   f="$d/out/node-node-a.txt"
   # The marker sits under the service map's own header, before the next block.
   block=$(awk '/^=== cilium-dbg bpf lb list/ { on = 1; next } on && /^=== / { exit } on { print }' "$f")
@@ -2223,11 +2223,232 @@ STUB
   grep -q '^=== pod Ready conditions' "$f"
   case "$block" in
     *"(reading this pod's Ready conditions was cut off at the deadline: the wall-clock budget of its section ran out)"*) : ;;
-    *) echo "the read the deadline cut does not name the budget:"; printf '%s\n' "$block"; exit 1 ;;
+    *) echo "the read the deadline cut does not name itself and the budget:"; printf '%s\n' "$block"; exit 1 ;;
   esac
   case "$block" in
     *'cut off by its own'*) echo "the block blames a bound of its own:"; printf '%s\n' "$block"; exit 1 ;;
   esac
+  # One line per cut: the conditions read is cut once, so the block says so
+  # once.
+  n=$(printf '%s\n' "$block" | grep -c 'cut off')
+  [ "$n" -eq 1 ] || { echo "the block reports one cut $n times:"; printf '%s\n' "$block"; exit 1; }
+  rm -rf "$d"
+}
+
+@test "a read cut off by its own bound is reported once in its block" {
+  # The read's own bound fires; dp_run marks the cut in the block, and the
+  # read must not add a second line saying the same thing.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  dp_cut_timeout "$d/bin"
+  timeout 90 env PATH="$d/bin:$PATH" DP_CUT='*get pod -n tenant-test wedged *' "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  f="$d/out/pod-tenant-test_wedged.txt"
+  block=$(awk '/^=== pod Ready conditions/ { on = 1; next } on && /^=== / { exit } on { print }' "$f")
+  # Positive control: the block exists and carries the cut.
+  grep -q '^=== pod Ready conditions' "$f"
+  case "$block" in
+    *"(reading this pod's Ready conditions was cut off by its own 20s timeout)"*) : ;;
+    *) echo "the cut read is not marked by name:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  n=$(printf '%s\n' "$block" | grep -c 'cut off')
+  [ "$n" -eq 1 ] || { echo "the block reports one cut $n times:"; printf '%s\n' "$block"; exit 1; }
+  rm -rf "$d"
+}
+
+@test "a cut events read is named as the events read" {
+  # Two reads share the Ready block, so a cut line has to say which one it is:
+  # conditions answered and events cut reads the same as conditions cut
+  # mid-output otherwise.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get pod -n tenant-test wedged '*) echo 'Ready=False reason=ContainersNotReady: x'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  dp_cut_timeout "$d/bin"
+  timeout 90 env PATH="$d/bin:$PATH" DP_CUT='*get events -n tenant-test *' "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  f="$d/out/pod-tenant-test_wedged.txt"
+  block=$(awk '/^=== pod Ready conditions/ { on = 1; next } on && /^=== / { exit } on { print }' "$f")
+  # Positive control: the conditions read answered.
+  case "$block" in *'Ready=False reason=ContainersNotReady'*) : ;; *) echo "no conditions:"; printf '%s\n' "$block"; exit 1 ;; esac
+  case "$block" in
+    *"(reading this pod's events was cut off by its own 20s timeout)"*) : ;;
+    *) echo "the cut events read is not named:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  n=$(printf '%s\n' "$block" | grep -c 'cut off')
+  [ "$n" -eq 1 ] || { echo "the block reports one cut $n times:"; printf '%s\n' "$block"; exit 1; }
+  rm -rf "$d"
+}
+
+@test "a pod read kubectl refused keeps kubectl's message in its block, once" {
+  # A refusal from the apiserver is not a cut: the block names the read and
+  # carries kubectl's own words, once.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get pod -n tenant-test wedged '*) echo 'Error from server (Forbidden): pods "wedged" is forbidden' >&2; exit 1 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  f="$d/out/pod-tenant-test_wedged.txt"
+  block=$(awk '/^=== pod Ready conditions/ { on = 1; next } on && /^=== / { exit } on { print }' "$f")
+  case "$block" in
+    *"(reading this pod's Ready conditions failed: kubectl exited 1)"*) : ;;
+    *) echo "the refused read is not named:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  n=$(printf '%s\n' "$block" | grep -c 'Forbidden')
+  [ "$n" -eq 1 ] || { echo "kubectl's message appears $n times:"; printf '%s\n' "$block"; exit 1; }
+  rm -rf "$d"
+}
+
+@test "a pod read kubectl refused keeps all of kubectl's stderr in its block" {
+  # A degraded apiserver throttles clients, and kubectl prints its throttling
+  # lines ahead of the error that matters. The block keeps kubectl's stderr as
+  # it came, not a flattened, shortened copy that can end before the reason.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get pod -n tenant-test wedged '*)
+    for i in 1 2 3; do
+      echo 'I1001 12:00:00.000000 1 request.go:697] Waited for 1.19s due to client-side throttling, not priority and fairness, request: GET:https://192.0.2.1:6443/api/v1/namespaces/tenant-test/pods/wedged' >&2
+    done
+    echo 'Error from server (Forbidden): pods "wedged" is forbidden: THE-REAL-REASON' >&2
+    exit 1 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  f="$d/out/pod-tenant-test_wedged.txt"
+  block=$(awk '/^=== pod Ready conditions/ { on = 1; next } on && /^=== / { exit } on { print }' "$f")
+  # Positive control: the read failed and said so by name.
+  case "$block" in
+    *"(reading this pod's Ready conditions failed: kubectl exited 1)"*) : ;;
+    *) echo "the refused read is not named:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  n=$(printf '%s\n' "$block" | grep -c 'THE-REAL-REASON')
+  [ "$n" -eq 1 ] || { echo "kubectl's reason appears $n times:"; printf '%s\n' "$block"; exit 1; }
+  rm -rf "$d"
+}
+
+@test "a pod read that answered with a warning keeps the warning in its block" {
+  # A read can succeed and still write to stderr -- a deprecation notice, a
+  # partial-result warning. That warning is part of what the read returned and
+  # stays beside it, with no failure line, since nothing failed.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get pod -n tenant-test wedged '*)
+    echo 'Ready=False reason=ContainersNotReady: x'
+    echo 'Warning: THE-WARNING' >&2
+    exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  f="$d/out/pod-tenant-test_wedged.txt"
+  block=$(awk '/^=== pod Ready conditions/ { on = 1; next } on && /^=== / { exit } on { print }' "$f")
+  # Positive control: the read answered.
+  case "$block" in *'Ready=False reason=ContainersNotReady'*) : ;; *) echo "no conditions:"; printf '%s\n' "$block"; exit 1 ;; esac
+  n=$(printf '%s\n' "$block" | grep -c 'THE-WARNING')
+  [ "$n" -eq 1 ] || { echo "the warning appears $n times:"; printf '%s\n' "$block"; exit 1; }
+  case "$block" in
+    *"(reading this pod's Ready conditions"*) echo "a read that answered got a failure line:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  rm -rf "$d"
+}
+
+@test "a pod read kubectl refused keeps kubectl's message even without a scratch file" {
+  # The reads send stderr to a scratch file, which mktemp may fail to create.
+  # kubectl's message must then still reach the block, once.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get pod -n tenant-test wedged '*) echo 'Error from server (Forbidden): pods "wedged" is forbidden' >&2; exit 1 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  timeout 90 env TMPDIR="$d/missing" PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  f="$d/out/pod-tenant-test_wedged.txt"
+  block=$(awk '/^=== pod Ready conditions/ { on = 1; next } on && /^=== / { exit } on { print }' "$f")
+  # Positive control: the read failed and said so by name.
+  case "$block" in
+    *"(reading this pod's Ready conditions failed: kubectl exited 1"*) : ;;
+    *) echo "the refused read is not named:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  n=$(printf '%s\n' "$block" | grep -c 'Forbidden')
+  [ "$n" -eq 1 ] || { echo "kubectl's message appears $n times:"; printf '%s\n' "$block"; exit 1; }
+  rm -rf "$d"
+}
+
+@test "an OVS interface lookup the deadline cut names the budget on both paths" {
+  # The per-pod ovn-installed lookup and the LB endpoint lookup both read their
+  # own status. A cut at the deadline has to name the budget there too, not
+  # report the raw status of the call.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) [ -n "${STUB_NO_POD:-}" ] && exit 0; echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get svc -A '*) [ -n "${STUB_NO_POD:-}" ] || exit 0; echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+  *endpointslices*) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  *'app=kube-ovn-cni'*) [ -n "${STUB_NO_POD:-}" ] || exit 0; echo 'cni-abc'; exit 0 ;;
+  *'app=ovs'*) echo 'ovs-xyz'; exit 0 ;;
+  *'nc -z'*) echo fail; exit 0 ;;
+  *'find interface'*) sleep 300 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  # Per-pod path: the pod section's 3s run into the lookup.
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *')" \
+    COZY_DATAPLANE_BUDGET=6 COZY_DATAPLANE_LB_RESERVE=3 \
+    "$real_timeout" 60 "$SCRIPT" "$d/pod" >"$d/log" 2>&1
+  f="$d/pod/pod-tenant-test_wedged.txt"
+  grep -q 'the OVS interface lookup for iface-id=wedged.tenant-test was cut off at the deadline: the pod section ran out of its share' "$f"
+  # LB path: the LB section's 4s run into the endpoint lookup.
+  STUB_NO_POD=1 PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *')" \
+    COZY_DATAPLANE_BUDGET=4 COZY_DATAPLANE_LB_RESERVE=4 \
+    "$real_timeout" 60 "$SCRIPT" "$d/lb" >>"$d/log" 2>&1
+  g="$d/lb/lb-tenant_web.txt"
+  grep -q 'the OVS interface lookup for iface-id=wedged.tenant-test on node node-a was cut off at the deadline: the LoadBalancer section ran out of its share' "$g"
+  if grep -q 'the lookup exited' "$f" "$g"; then
+    echo "a deadline cut was reported as a raw status:"
+    grep 'the lookup exited' "$f" "$g"
+    exit 1
+  fi
   rm -rf "$d"
 }
 
@@ -3238,7 +3459,7 @@ exit 0
 STUB
   chmod +x "$d/bin/kubectl"
   dp_cut_timeout "$d/bin"
-  PATH="$d/bin:$PATH" DP_CUT='*app=ovs*' timeout 90 "$SCRIPT" "$d/cut" >"$d/log" 2>&1
+  timeout 90 env PATH="$d/bin:$PATH" DP_CUT='*app=ovs*' "$SCRIPT" "$d/cut" >"$d/log" 2>&1
   f="$d/cut/lb-tenant_web.txt"
   # Positive control: the endpoint side ran on the fallback.
   grep -q 'iface=genev_sys_6081' "$d/cut/lb-tenant_web.tcpdump-endpoint.txt"

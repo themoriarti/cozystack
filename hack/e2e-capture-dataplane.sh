@@ -225,8 +225,8 @@ lb_announcer_node() {
 }
 
 # lb_capture_decision: stdin = one probe outcome token per line ("ok" / "fail" /
-# "unknown" / "spent"; the last two mean the probe could not be run at all, and
-# "spent" that the wall-clock budget refused it, so both weigh the same here).
+# "unknown" / "spent"; the last two mean the probe reached no verdict, and
+# "spent" that the wall-clock budget stopped it, so both weigh the same here).
 # Emits the gate decision for the heavy per-node capture:
 #   - "capture" when at least one probe ran, none succeeded, and at least one
 #     genuinely failed (the LB IP is unreachable -- the symptom we want
@@ -607,6 +607,11 @@ dp_new_run() {
 # Empty if mktemp fails; the notes then omit kubectl's message rather than
 # inventing one.
 DP_ERR=$(mktemp "${TMPDIR:-/tmp}/dataplane-read.XXXXXX" 2>/dev/null) || DP_ERR=""
+# Where a read that writes into its own block sends stderr: the scratch file
+# when there is one, the block itself when there is not. The reads open it for
+# append and empty the scratch file first themselves: a truncating open of
+# /dev/stdout reopens the block's file on Linux and would cut it to nothing.
+DP_BLOCK_ERR=${DP_ERR:-/dev/stdout}
 if [ -s "$NOTES" ]; then
   printf -- '--- new capture run ---\n' >> "$NOTES" 2>/dev/null || true
 fi
@@ -931,6 +936,27 @@ capture_node() {
   } >> "$_cn_nf" 2>&1 || true
 }
 
+# dp_block_outcome <status> <what> <secs> -- what a read writing into a shared
+# block adds after its output, from its stderr in DP_ERR. kubectl's own stderr
+# goes into the block as it came, whole: a degraded apiserver throttles
+# clients, and the error that matters can follow lines of throttling notices.
+# The two reads of the Ready block share it, so a failure then gets one line
+# that names the read. dp_run's own marker sits in DP_ERR too, unnamed, and is
+# left out, so a cut is reported once.
+#
+# Without a scratch file the reads send stderr into the block instead
+# (DP_BLOCK_ERR), so kubectl's words survive; dp_run's marker then sits
+# beside the named line, which is the cost of having nowhere else to put it.
+dp_block_outcome() {
+  if [ -n "$DP_ERR" ] && [ -s "$DP_ERR" ]; then
+    grep -v -e '^(cut off ' -e '^(not started: ' "$DP_ERR" 2>/dev/null || true
+  fi
+  if [ "$1" -ne 0 ]; then
+    echo "($2 $(dp_read_outcome "$1" "$3" "$DP_TIMEOUT"))"
+  fi
+  return 0
+}
+
 # capture_pod_dataplane <ns> <pod> <podip> <node> <label> [scope] -- the
 # pod-specific captures for ONE pod on <node>.
 #
@@ -989,13 +1015,15 @@ capture_pod_dataplane() {
     echo
     echo "=== pod Ready conditions + recent probe events ==="
     _cpd_b=$(dp_clip "$DP_READ_TIMEOUT")
+    [ -z "$DP_ERR" ] || : > "$DP_ERR"
     dp_run "$_cpd_b" kubectl get pod -n "$_cpd_ns" "$_cpd_pod" \
-      -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' 2>&1 \
-      || echo "(reading this pod's Ready conditions $(dp_read_outcome "$?" "$_cpd_b" "$DP_TIMEOUT"))"
+      -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' 2>>"$DP_BLOCK_ERR"
+    dp_block_outcome "$?" "reading this pod's Ready conditions" "$_cpd_b"
     _cpd_b=$(dp_clip "$DP_READ_TIMEOUT")
+    [ -z "$DP_ERR" ] || : > "$DP_ERR"
     dp_run "$_cpd_b" kubectl get events -n "$_cpd_ns" --field-selector "involvedObject.name=$_cpd_pod" \
-      -o jsonpath='{range .items[*]}{.lastTimestamp}{" "}{.reason}{": "}{.message}{"\n"}{end}' 2>&1 \
-      || echo "(reading this pod's events $(dp_read_outcome "$?" "$_cpd_b" "$DP_TIMEOUT"))"
+      -o jsonpath='{range .items[*]}{.lastTimestamp}{" "}{.reason}{": "}{.message}{"\n"}{end}' 2>>"$DP_BLOCK_ERR"
+    dp_block_outcome "$?" "reading this pod's events" "$_cpd_b"
   fi
 
   if [ -z "$_cpd_ip" ]; then
@@ -1263,13 +1291,9 @@ host_http_probe() {
   # capture-or-skip this token changes nothing. It exists for the caller's
   # reason line, which is the only place the distinction reaches a reader.
   #
-  # A third token, "spent", marks a probe the wall-clock budget refused: dp_run
-  # declined the lookup or the exec. Neither the lookup nor the node is the
-  # cause then, and the caller says so. An exec cut at the deadline itself
-  # leaves no token, but the probes after it are refused and leave this one.
-  # A lookup cut by a bound the deadline had shortened counts the same way: it
-  # says nothing about the cni-server -- the rule the pod_on_node memo applies
-  # to such a cutoff.
+  # A third token, "spent", marks a probe the wall-clock budget stopped: dp_run
+  # refused the lookup or the exec, or cut one of them at the deadline. Neither
+  # the lookup nor the node is the cause then, and the caller says so.
   if [ "$_hp_rc" -eq "$DP_RC_SPENT" ] || [ "$_hp_rc" -eq "$DP_RC_BUDGET_CUT" ]; then
     echo spent
     return 0
@@ -1586,8 +1610,8 @@ capture_lb_datapath() {
         # the outcome set is the only place the two routes to an unknown verdict
         # stay apart, and the reason line has to name a cause that was actually
         # observed. host_http_probe emits an explicit unknown only when the
-        # cni-server lookup did not answer; everything else that stops a probe
-        # emits nothing.
+        # cni-server lookup did not answer, and "spent" only when the budget
+        # stopped the probe; everything else that stops a probe emits nothing.
         _outcomes=$( { host_http_probe "$_probenode" "$_lbip" "$_lbport"
                        host_http_probe "$_probenode" "$_lbip" "$_lbport"
                        host_http_probe "$_probenode" "$_lbip" "$_lbport"; } )
