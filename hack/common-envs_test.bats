@@ -120,7 +120,7 @@
   if echo "$out" | grep -q -- '--platform'; then echo "FAIL: LOAD=1 passes a platform, so buildx builds an index it cannot load"; false; fi
 }
 
-@test "CACHE_TAG moves the default cache ref and an explicit cache tag still wins" {
+@test "CACHE_TAG moves the cache ref of every image" {
   # The arm64 leg writes its own mode=max cache. Sharing the amd64 ref would
   # make every write from one leg evict the other's layers.
   out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b WRITE_CACHE=1)
@@ -129,14 +129,13 @@
   out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b WRITE_CACHE=1 CACHE_TAG=buildcache-arm64)
   echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/cozystack-controller:buildcache-arm64 '
   echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/cozystack-controller:buildcache-arm64,'
-  # The second argument of cache-args names a per-iteration cache; CACHE_TAG
-  # must not override it.
+  # No per-call tag may bypass CACHE_TAG, or both legs write one cache ref.
   tmp=$(mktemp -d)
   printf 'include %s/hack/common-envs.mk\nprobe:\n\t@echo $(call cache-args,img,percall)\n' "$(pwd)" > "$tmp/Makefile"
   out=$(make -s -C "$tmp" probe COZYSTACK_VERSION=0 WRITE_CACHE=1 CACHE_TAG=buildcache-arm64)
   rm -rf "$tmp"
-  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/img:percall '
-  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/img:percall,'
+  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/img:buildcache-arm64 '
+  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/img:buildcache-arm64,'
 }
 
 @test "the kamaji provider image is pushed under the build's IMAGE_TAG like every other image" {

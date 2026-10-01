@@ -123,21 +123,19 @@ define image-tags
 $(foreach r,$(call image-tag-refs,$(1),$(2)),--tag $(r))$(call oci-output,$(1))$(if $(and $(strip $(PUSHED_TAGS_LOG)),$(if $(strip $(OCI_EXPORT_DIR)),,1)),$(shell printf '%s\n' $(call image-tag-refs,$(1),$(2)) >>'$(PUSHED_TAGS_LOG)'))
 endef
 
-# cache-args <image-name> [<cache-tag>]
+# cache-args <image-name>
 # Expands to buildx cache flags for one image:
 #   --cache-from is always emitted (a missing cache 404s harmlessly -> cold build)
 #   --cache-to is emitted only when WRITE_CACHE=1 (main/release), writing mode=max
 #     so ALL stages are cached -- including the multistage `builder` layers that
 #     `--cache-to type=inline` could never export. oci-mediatypes + image-manifest
 #     keep the cache manifest portable across registries (OCIR/ghcr/ECR).
-# <cache-tag> defaults to $(CACHE_TAG); pass an explicit tag for images that build
-# a distinct artifact per loop iteration (e.g. ubuntu-container-disk per k8s ver).
 # CACHE_TAG lets a build for another platform keep a cache of its own
 # (buildcache-arm64) instead of overwriting the amd64 one with every write.
 # $(comma) (defined above) escapes the literal commas in the --cache-to value so
 # make does not mis-parse them as $(if ...) argument separators.
 CACHE_TAG ?= buildcache
-cache-args = --cache-from type=registry,ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),$(CACHE_TAG))$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),$(CACHE_TAG))$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true)
+cache-args = --cache-from type=registry,ref=$(CACHE_REGISTRY)/$(1):$(CACHE_TAG)$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(CACHE_TAG)$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true)
 
 ifeq ($(COZYSTACK_VERSION),)
     $(shell git remote add upstream https://github.com/cozystack/cozystack.git || true)
