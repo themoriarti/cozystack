@@ -202,7 +202,9 @@ jobs:
 
             // 5. Apply kind/* from type.
             if (type) {
-              if (typeToKind[type]) {
+              // Object.hasOwn: a title typed or scoped `constructor` would otherwise
+              // resolve to an Object.prototype member instead of to nothing.
+              if (Object.hasOwn(typeToKind, type)) {
                 toAdd.add(typeToKind[type]);
               } else {
                 core.warning(`type "${type}" has no kind/* mapping — typo or new type? See .github/workflows/pr-labeler.yaml typeToKind`);
@@ -215,7 +217,7 @@ jobs:
               .map(s => s.trim())
               .filter(Boolean);
             for (const s of scopes) {
-              if (scopeToArea[s]) {
+              if (Object.hasOwn(scopeToArea, s)) {
                 toAdd.add(scopeToArea[s]);
               } else {
                 core.warning(`scope "${s}" has no area/* mapping — consider extending scopeToArea in .github/workflows/pr-labeler.yaml if it recurs`);
