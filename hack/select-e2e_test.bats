@@ -876,8 +876,9 @@ assert_full_suite() {
 @test "a path owned by several sources counts as covered if any one is" {
     # system/postgres-operator belongs to two PackageSources: cozystack.monitoring
     # and cozystack.postgres-operator, which reaches postgres-application,
-    # harbor-application (Harbor uses postgres as its backing DB) and
-    # monitoring-application. Coverage is decided over the path's sources
+    # harbor-application (Harbor uses postgres as its backing DB),
+    # monitoring-application, and keycloak, which maps to the suites driving
+    # Keycloak clients. Coverage is decided over the path's sources
     # together, which is why the unit is the path and not the source — deciding
     # per source would escalate on a half that reaches nothing and run everything
     # for every change here. cozystack.monitoring maps to the monitoring
@@ -897,7 +898,7 @@ assert_full_suite() {
     [ "$owners" -ge 2 ]
     echo "packages/system/postgres-operator/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$output" = "harbor monitoring postgres" ]
+    [ "$output" = "harbor kubernetes-latest monitoring postgres" ]
     rm -rf "$tmp"
 }
 
@@ -932,6 +933,22 @@ assert_full_suite() {
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_selection "an ingress-nginx change must exercise every installed copy" \
         "$output" "gateway kubernetes-latest kubernetes-previous"
+    rm -rf "$tmp"
+}
+
+@test "a keycloak change selects both suites that drive Keycloak clients" {
+    # monitoring and kubernetes-latest both create a KeycloakClient and assert
+    # it is removed again, which goes through the operator's finalizer. Only
+    # monitoring-application declares the keycloak-operator edge, so the graph
+    # alone reaches monitoring and drops the tenant Kubernetes OIDC lifecycle.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    for path in packages/system/keycloak/values.yaml packages/system/keycloak-operator/values.yaml; do
+        echo "$path" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+        assert_selection "a change to $path must run every Keycloak client lifecycle" \
+            "$output" "kubernetes-latest monitoring"
+    done
     rm -rf "$tmp"
 }
 
