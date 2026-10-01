@@ -37,7 +37,7 @@ migrations:
 bundles:
   system:
     enabled: false
-    variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "distro-full"
+    variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "isp-slim", "isp-slim-generic", "isp-hosted-slim"
   iaas:
     enabled: false
     # gpu-operator variant selector — applies when cozystack.gpu-operator is
@@ -107,16 +107,15 @@ networking:
   #
   # The mechanism is datapath-specific (selected by bundles.system.variant):
   #
-  #   * kubeovn-cilium (isp-full, the default) and kubeovn-cilium-generic
+  #   * kubeovn-cilium (isp-full) and kubeovn-cilium-generic
   #     (isp-full-generic): KubeOVN owns the datapath; its Geneve overlay is
   #     encrypted with IPsec (kube-ovn ENABLE_OVN_IPSEC). KubeOVN's own
   #     controller provisions the IPsec CA and per-node certificates through
   #     the Kubernetes CSR API — no cert-manager wiring is required. This is
   #     the path this toggle drives today.
-  #   * cilium / cilium-generic (Cilium owns the datapath): Cilium-native
-  #     WireGuard/IPsec is the right mechanism there, but the platform system
-  #     bundle does not select those variants, so this toggle does not reach
-  #     them yet.
+  #   * cilium / cilium-generic (Cilium owns the datapath; isp-slim,
+  #     isp-slim-generic): Cilium-native WireGuard/IPsec is the right mechanism
+  #     there, but it is not wired yet, so the slim variants refuse this toggle.
   #   * cilium-kilo: Kilo already establishes a WireGuard mesh, but only at
   #     meshGranularity=location — it encrypts CROSS-LOCATION traffic and
   #     leaves intra-location pod-to-pod in cleartext by design. This toggle
@@ -129,7 +128,7 @@ networking:
   # inter-node overlay tunnels — same-node pod-to-pod traffic never leaves the
   # host and is not tunneled or encrypted. Flipping this on an existing
   # cluster triggers a rollout of the CNI components. On variants without a
-  # cozystack-managed encryptable datapath (e.g. isp-hosted / noop) the toggle
+  # cozystack-managed encryptable datapath (isp-hosted, isp-hosted-slim / noop) the toggle
   # has no effect.
   encryption:
     enabled: false
@@ -610,8 +609,8 @@ gateway:
   # Cluster-wide: maps to Cilium's enable-gateway-api-alpn agent config, so
   # it covers the root and every tenant Gateway at once — there is no
   # per-Gateway granularity in the dataplane. Only effective on bundles
-  # where cozystack manages Cilium (isp-full, isp-full-generic); on
-  # isp-hosted the hosting-side CNI owns this setting. Flipping it re-rolls
+  # where cozystack manages Cilium (isp-full*, isp-slim*); on
+  # isp-hosted* the hosting-side CNI owns this setting. Flipping it re-rolls
   # the cilium DaemonSet on the next platform upgrade (rollOutCiliumPods),
   # the same disruption profile as any cilium config change.
   http2: true
