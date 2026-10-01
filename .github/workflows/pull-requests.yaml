@@ -318,8 +318,8 @@ jobs:
         run: |
           helm plugin list 2>/dev/null | grep -q unittest \
             || helm plugin install https://github.com/helm-unittest/helm-unittest
-      # One make process owns all four runner CPUs. Each BATS file is a separate
-      # prerequisite, so the long tail no longer runs as one nine-minute shell
+      # The make processes share one four-slot jobserver. Each BATS file is a
+      # separate target, so the long tail no longer runs as one nine-minute shell
       # loop; Helm and Go targets share the same bounded pool. Output stays
       # grouped by target instead of four test logs interleaving.
       #
