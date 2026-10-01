@@ -270,7 +270,9 @@ tests:
     asserts:
       - notExists:
           path: spec.unsafeFlags
-        documentIndex: 0
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
 
   - it: does not set unsafeFlags when replicas is 5
     release:
@@ -283,7 +285,9 @@ tests:
     asserts:
       - notExists:
           path: spec.unsafeFlags
-        documentIndex: 0
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
 
   ###########################
   # Replica Set Mode        #
@@ -354,7 +358,9 @@ tests:
     asserts:
       - notExists:
           path: spec.replsets[0].volumeSpec.persistentVolumeClaim.storageClassName
-        documentIndex: 0
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
 
   ###########################
   # Replica set expose      #
@@ -544,7 +550,9 @@ tests:
     asserts:
       - notExists:
           path: spec.users
-        documentIndex: 0
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
 
   - it: configures users with admin role
     release:
