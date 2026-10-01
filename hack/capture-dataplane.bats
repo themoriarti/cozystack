@@ -1496,12 +1496,10 @@ STUB
 }
 
 @test "an LB whose probe never ran is not recorded as reachable" {
-  # Fifth site of the same class, and the last one the bounds made reachable.
-  # host_http_probe resolves a cni-server first; a cut-off lookup used to emit
-  # no probe outcome at all, which the decision helper read as "nothing failed"
-  # and the artifact stamped as reachable -- a verdict about an address the
-  # script never touched. At merge base the script never got this far: the
-  # unbounded lookup hung until the caller's backstop killed it.
+  # host_http_probe resolves a cni-server first, and a lookup cut off at its
+  # own bound leaves no probe outcome. Read as "nothing failed", that would
+  # stamp the address reachable in the artifact -- a verdict about an address
+  # the script never touched.
   d=$(mktemp -d)
   mkdir -p "$d/bin"
   cat >"$d/bin/kubectl" <<'STUB'
@@ -2201,6 +2199,13 @@ STUB
   # ... and the LoadBalancer section still had the reserve to start in.
   grep -q 'probing 1 LoadBalancer service' "$d/log"
   grep -q 'the 8s budget is spent; tenant/web and any LoadBalancer after it NOT probed' "$d/log"
+  # ... and neither walk then calls itself complete.
+  if grep -q 'capture complete' "$d/log"; then
+    echo "a walk the budget stopped called itself complete:"
+    cat "$d/log"
+    exit 1
+  fi
+  grep -q 'LoadBalancer-datapath capture stopped early' "$d/log"
   # A cut read names the bound it actually ran under, not the configured 20s.
   if grep -q 'its own 20s timeout' "$d/out/capture-notes.txt"; then
     echo "a note quotes a bound the read never ran under:"
@@ -2405,6 +2410,46 @@ STUB
     cat "$f"
     exit 1
   fi
+  # The walk reached its end on its own, but the budget cut a call in its last
+  # LoadBalancer, so it is not complete either.
+  if grep -q 'LoadBalancer-datapath capture complete' "$d/log"; then
+    echo "an LB walk the budget cut called itself complete:"
+    cat "$d/log"
+    exit 1
+  fi
+  grep -q 'LoadBalancer-datapath capture cut short by the budget' "$d/log"
+  rm -rf "$d"
+}
+
+@test "an LB walk stopped at the capture cap does not call itself complete" {
+  # The cap break names what it left behind; the walk's closing line after it
+  # has to agree.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) exit 0 ;;
+  'get svc -A '*)
+    echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'
+    echo 'tenant|web2|LoadBalancer|192.0.2.11|80|30081|Cluster'
+    exit 0 ;;
+  *endpointslices*) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *'nc -z'*) echo fail; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  COZY_DATAPLANE_MAX_LBS=1 timeout 90 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1
+  # Positive control: the cap fired.
+  grep -q 'reached MAX_LBS=1 captured cap' "$d/log"
+  if grep -q 'LoadBalancer-datapath capture complete' "$d/log"; then
+    echo "an LB walk stopped at the cap called itself complete:"
+    cat "$d/log"
+    exit 1
+  fi
+  grep -q 'LoadBalancer-datapath capture stopped early' "$d/log"
   rm -rf "$d"
 }
 
@@ -2549,6 +2594,13 @@ STUB
   # Positive control: the conntrack block of the affected pod was reached.
   grep -q '^=== host netns: kernel conntrack for 10.0.0.1' "$d/out/pod-tenant-test_wedged.txt"
   grep -q 'the pod section ran out of its share of the 6s wall-clock budget' "$d/out/capture-notes.txt"
+  # The walk ended on its own, but its last pod was cut, so it is not complete.
+  if grep -q 'host->pod data-plane capture complete' "$d/out/capture-notes.txt"; then
+    echo "a walk whose last pod the deadline cut called itself complete:"
+    cat "$d/out/capture-notes.txt"
+    exit 1
+  fi
+  grep -q 'host->pod data-plane capture cut short by the budget' "$d/out/capture-notes.txt"
   rm -rf "$d"
 }
 

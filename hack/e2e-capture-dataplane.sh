@@ -502,10 +502,25 @@ dp_clip() {
 # last, nothing is refused after it. The line names the section because the
 # pod section's deadline is not the run's: the LoadBalancer section still
 # starts calls after it.
+dp_spent_note() {
+  printf '%s' "[capture-dataplane] the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget (run started at epoch ${DP_T0}); a call running then was cut at the deadline, its calls after that were not started, and each block they left empty says so"
+}
 dp_note_spent() {
-  _dns_note="[capture-dataplane] the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget (run started at epoch ${DP_T0}); a call running then was cut at the deadline, its calls after that were not started, and each block they left empty says so"
+  _dns_note=$(dp_spent_note)
   if ! grep -qxF "$_dns_note" "$NOTES" 2>/dev/null; then
     printf '%s\n' "$_dns_note" >> "$NOTES" 2>/dev/null || true
+  fi
+}
+
+# dp_walk_end <verdict> -- the word a walk closes on. A walk that ended on its
+# own is still not complete when the budget cut a call inside it: the section
+# note for this run says so, and its text is the evidence, since the clock read
+# after the loop can pass the deadline without any call having been cut.
+dp_walk_end() {
+  if [ "$1" = complete ] && grep -qxF "$(dp_spent_note)" "$NOTES" 2>/dev/null; then
+    printf '%s' "cut short by the budget -- see the ${DP_SECTION} line above"
+  else
+    printf '%s' "$1"
   fi
 }
 
@@ -1190,7 +1205,7 @@ else
     capture_pod_dataplane "$ns" "$pod" "$podip" "$node" "NotReady, Ready=$_ready" >> "$pf" 2>&1 || true
     capture_pod_reference "$node" "$pf"
   done
-  log "host->pod data-plane capture $_walk_end"
+  log "host->pod data-plane capture $(dp_walk_end "$_walk_end")"
   }
 fi
 
@@ -1442,12 +1457,14 @@ capture_lb_datapath() {
   # captured. The gate lives on the capture branch (lb_budget_ok), not here.
   _captured=0
   printf '%s\n' "$_lbs" | {
+    _lb_walk_end=complete
     while IFS='|' read -r _ns _name _type _lbip _port _np _etp; do
       [ -n "$_lbip" ] || continue
       # Past the deadline every lookup below refuses to start, and an LB whose
       # probe never ran would be written up as if its lookups had not answered.
       if [ "$(dp_clip 1)" -le 0 ]; then
         log "the ${DP_BUDGET}s budget is spent; $_ns/$_name and any LoadBalancer after it NOT probed"
+        _lb_walk_end="stopped early -- see the line above"
         break
       fi
       _lbport="${_port:-0}"
@@ -1601,6 +1618,7 @@ capture_lb_datapath() {
       if [ "$(lb_budget_ok "$_captured" "$MAX_LBS")" != "yes" ]; then
         echo "probe: LB IP unreachable from node $_probenode but MAX_LBS=$MAX_LBS captured cap reached -- NOT characterised" >> "$_of" 2>&1 || true
         log "reached MAX_LBS=$MAX_LBS captured cap; further unreachable LB(s) NOT characterised"
+        _lb_walk_end="stopped early -- see the line above"
         break
       fi
       _captured=$((_captured + 1))
@@ -1700,7 +1718,7 @@ capture_lb_datapath() {
       #   caller of this diagnostic has; the host-side ANNOUNCER/ENDPOINT split
       #   already localises the failing hop to host-cilium vs kube-ovn delivery.
     done
-    log "LoadBalancer-datapath capture complete"
+    log "LoadBalancer-datapath capture $(dp_walk_end "$_lb_walk_end")"
   }
 }
 
