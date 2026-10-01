@@ -702,6 +702,12 @@ tests:
       - contains:
           path: spec.dnsNames
           content: "rfr-my-redis.tenant-test.svc.cluster.local"
+      - notContains:
+          path: spec.dnsNames
+          content: "my-redis."
+      - notContains:
+          path: spec.dnsNames
+          content: "my-redis.example.com"
 
   # ------------------------------------------------------------------
   # Null and empty forms. The `default (dict)` guard in _tls.tpl covers a nil
