@@ -515,10 +515,12 @@ dp_note_spent() {
 # dp_walk_end <verdict> -- the word a walk closes on. A walk that ended on its
 # own is still not complete when the budget cut a call inside it: the section
 # note for this run says so, and its text is the evidence, since the clock read
-# after the loop can pass the deadline without any call having been cut.
+# after the loop can pass the deadline without any call having been cut. The
+# pointer names the file: the closing line reaches the job log too, and the
+# section note does not, since dp_run writes it from inside captured output.
 dp_walk_end() {
   if [ "$1" = complete ] && grep -qxF "$(dp_spent_note)" "$NOTES" 2>/dev/null; then
-    printf '%s' "cut short by the budget -- see the ${DP_SECTION} line above"
+    printf '%s' "cut short by the budget -- see capture-notes.txt"
   else
     printf '%s' "$1"
   fi

@@ -2417,7 +2417,9 @@ STUB
     cat "$d/log"
     exit 1
   fi
-  grep -q 'LoadBalancer-datapath capture cut short by the budget' "$d/log"
+  # The closing line reaches the job log, where the section line it points to
+  # does not, so it points at the file that holds it.
+  grep -q 'LoadBalancer-datapath capture cut short by the budget -- see capture-notes.txt' "$d/log"
   rm -rf "$d"
 }
 
@@ -2567,10 +2569,10 @@ STUB
 }
 
 @test "a pod section whose last call the deadline cut says so in the notes" {
-  # The section note used to be written only when a call was refused. When the
-  # call the deadline cuts is the section's last, nothing is refused after it,
-  # the LoadBalancer section starts on a fresh deadline, and the truncated
-  # capture carried no word about the budget.
+  # When the call the deadline cuts is the section's last, nothing is refused
+  # after it and the LoadBalancer section starts on a fresh deadline, so the
+  # cut itself has to write the section note or the truncated capture carries
+  # no word about the budget.
   d=$(mktemp -d)
   mkdir -p "$d/bin"
   cat >"$d/bin/kubectl" <<'STUB'
@@ -2653,6 +2655,57 @@ STUB
   PATH="$d/bin:$PATH" COZY_DATAPLANE_BUDGET=5 COZY_DATAPLANE_LB_RESERVE=5 \
     timeout 30 "$SCRIPT" "$d/out" >"$d/log" 2>&1
   grep -q 'COZY_DATAPLANE_LB_RESERVE=5s leaves nothing of the 5s budget for the pod section' "$d/out/capture-notes.txt"
+  rm -rf "$d"
+}
+
+@test "a budget knob that is not a whole number of seconds is named and replaced" {
+  # The budget and the reserve are used in shell arithmetic, so a value that is
+  # not a number has to be replaced before it gets there, and the replacement
+  # named, or the bound in effect is mistaken for the one asked for.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$d/bin/kubectl"
+  chmod +x "$d/bin/kubectl"
+  rc=0
+  COZY_DATAPLANE_BUDGET=abc COZY_DATAPLANE_LB_RESERVE=x \
+    timeout 30 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "a bad budget knob broke the run (exit $rc):"; cat "$d/log"; exit 1; }
+  grep -q "COZY_DATAPLANE_BUDGET='abc' is not a whole number of seconds; using 270s" "$d/out/capture-notes.txt"
+  grep -q "COZY_DATAPLANE_LB_RESERVE='x' is not a whole number of seconds; using 90s" "$d/out/capture-notes.txt"
+  # Positive control: the run reached its end on the defaults.
+  grep -q 'no Service type=LoadBalancer' "$d/log"
+  rm -rf "$d"
+}
+
+@test "without a timeout binary the reads still run and the notes say they are unbounded" {
+  # dp_run runs a call unbounded when `timeout` is missing rather than letting
+  # every call exit 127, which would report kubectl failing although kubectl
+  # never ran. The budget then only decides whether a call starts, and the
+  # notes say so.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  for t in awk sed date grep mktemp tr cut head tail wc cat rm mkdir sleep env; do
+    ln -s "$(command -v "$t")" "$d/bin/$t"
+  done
+  printf '#!/bin/sh\necho "$*" >>"$STUB_CALLS"\nexit 0\n' >"$d/bin/kubectl"
+  chmod +x "$d/bin/kubectl"
+  # Positive control: the shim PATH really has no timeout on it.
+  if PATH="$d/bin" command -v timeout >/dev/null 2>&1; then
+    echo "the test PATH still carries a timeout binary"
+    exit 1
+  fi
+  rc=0
+  real_timeout=$(command -v timeout)
+  STUB_CALLS="$d/calls" PATH="$d/bin" "$real_timeout" 30 /bin/sh "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the run without timeout failed (exit $rc):"; cat "$d/log"; exit 1; }
+  grep -q 'no timeout binary on PATH: calls run unbounded' "$d/out/capture-notes.txt"
+  grep -q '^get pods -A ' "$d/calls"
+  grep -q '^get svc -A ' "$d/calls"
+  if grep -q 'exited 127' "$d/out/capture-notes.txt"; then
+    echo "a missing timeout was reported as kubectl failing:"
+    cat "$d/out/capture-notes.txt"
+    exit 1
+  fi
   rm -rf "$d"
 }
 
