@@ -2193,6 +2193,44 @@ STUB
   rm -rf "$d"
 }
 
+@test "a read the deadline cut off names the budget, not a bound it never reached" {
+  # The Ready-conditions read of the affected pod hangs into the pod section's
+  # deadline. Its own note and the block it sits in must both name the budget;
+  # quoting the shortened bound as the read's own timeout gives one block two
+  # reasons for one cut.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get svc -A '*) exit 0 ;;
+  'get pod -n tenant-test wedged '*) sleep 300 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *')" \
+    COZY_DATAPLANE_BUDGET=6 COZY_DATAPLANE_LB_RESERVE=3 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  f="$d/out/pod-tenant-test_wedged.txt"
+  block=$(awk '/^=== pod Ready conditions/ { on = 1; next } on && /^=== / { exit } on { print }' "$f")
+  # Positive control: the block exists.
+  grep -q '^=== pod Ready conditions' "$f"
+  case "$block" in
+    *"(reading this pod's Ready conditions was cut off at the deadline: the wall-clock budget of its section ran out)"*) : ;;
+    *) echo "the read the deadline cut does not name the budget:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  case "$block" in
+    *'cut off by its own'*) echo "the block blames a bound of its own:"; printf '%s\n' "$block"; exit 1 ;;
+  esac
+  rm -rf "$d"
+}
+
 @test "an affected node gets the cilium service map with no LoadBalancer in the cluster" {
   # The service map describes every service translation on the node, ClusterIP
   # included. A pod that cannot reach 10.96.0.1 is a ClusterIP failure with no
@@ -2273,13 +2311,13 @@ STUB
     exit 1
   fi
   grep -q 'LoadBalancer-datapath capture stopped early' "$d/log"
-  # A cut read names the bound it actually ran under, not the configured 20s.
+  # A read the deadline cut names the deadline, not the configured 20s bound.
   if grep -q 'its own 20s timeout' "$d/out/capture-notes.txt"; then
     echo "a note quotes a bound the read never ran under:"
     cat "$d/out/capture-notes.txt"
     exit 1
   fi
-  grep -q 'cut off by its own [1-8]s timeout' "$d/out/capture-notes.txt"
+  grep -q 'was cut off at the deadline: the wall-clock budget of its section ran out' "$d/out/capture-notes.txt"
   rm -rf "$d"
 }
 
@@ -2470,7 +2508,7 @@ STUB
   [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
   f="$d/out/lb-tenant_web.txt"
   # Positive control: the lookup was cut under a shortened bound.
-  grep -q 'looking up the pod matching app=kube-ovn-cni on node node-a was cut off by its own [1-4]s timeout' "$d/log"
+  grep -q 'looking up the pod matching app=kube-ovn-cni on node node-a was cut off at the deadline' "$d/log"
   grep -q "no probe completed from node-a -- the LoadBalancer section's share of the budget ran out" "$f"
   if grep -q 'for another the cni-server lookup did not answer' "$f"; then
     echo "a lookup the deadline cut was reported as a second cause:"
@@ -2957,7 +2995,7 @@ STUB
     "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
   # Positive control: the first lookup was cut under a shortened bound.
-  grep -q 'looking up the pod matching k8s-app=cilium on node node-a was cut off by its own [1-6]s timeout' "$d/log"
+  grep -q 'looking up the pod matching k8s-app=cilium on node node-a was cut off at the deadline' "$d/log"
   n=$(wc -l <"$d/calls" | tr -d ' ')
   if [ "$n" -lt 2 ]; then
     echo "the LB section reused a cutoff from a shortened bound (cilium lookups: $n):"

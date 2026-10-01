@@ -358,15 +358,17 @@ dp_cutoff_desc() {
 # The status dp_run returns for a read it refused to start is a third case, and
 # it is not a cutoff either: nothing was asked, so nothing was cut.
 DP_RC_SPENT=75
-# pod_on_node's status for a lookup cut by a bound the deadline had shortened.
-# Its note still reads as a cutoff; this status lets the callers that write an
-# absence into the artifact name the budget rather than the cluster. It is
-# decided by dp_budget_cut as the lookup returns, not when its status is read
-# later, since other work may spend the budget in between.
+# dp_run's status for a call the deadline cut off, in place of the 124 or 137
+# its shortened bound produced, so a reader of the status names the budget
+# rather than a timeout the call never reached. It is decided by dp_budget_cut
+# as the call returns, not when the status is read later, since other work may
+# spend the budget in between.
 DP_RC_BUDGET_CUT=76
 dp_read_outcome() {
   if [ "${1:-}" = "$DP_RC_SPENT" ]; then
     printf '%s' "was not started: the wall-clock budget of its section was already spent"
+  elif [ "${1:-}" = "$DP_RC_BUDGET_CUT" ]; then
+    printf '%s' "was cut off at the deadline: the wall-clock budget of its section ran out"
   elif [ "${1:-}" = "124" ] || [ "${1:-}" = "137" ]; then
     printf '%s' "was cut off by $(dp_cutoff_desc "$1" "$2" "$3")"
   elif [ -n "${4:-}" ] && [ -s "${4:-}" ]; then
@@ -562,6 +564,7 @@ dp_run() {
   if dp_budget_cut "$_dr_rc" "$_dr_s" "$_dr_left"; then
     printf '%s\n' "(cut off at the deadline: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)" >&2
     dp_note_spent
+    return "$DP_RC_BUDGET_CUT"
   elif [ "$_dr_rc" -eq 124 ] || [ "$_dr_rc" -eq 137 ]; then
     # The same reading the notes give a read: kubectl exec passes a remote
     # command's own 124 through unchanged, so that one cannot be told from
@@ -692,7 +695,6 @@ pod_on_node() {
   # as a failed read. [*] yields nothing and exits 0, so a non-zero status again
   # means something actually went wrong.
   _pon_b=$(dp_clip "$DP_READ_TIMEOUT")
-  _pon_left=$((DP_DEADLINE - $(date +%s)))
   _pon=$(dp_run "$_pon_b" kubectl get pod -n "$1" -l "$2" --field-selector "spec.nodeName=$3" \
     -o jsonpath='{.items[*].metadata.name}' 2>"${DP_ERR:-/dev/null}")
   _pon_rc=$?
@@ -718,9 +720,6 @@ pod_on_node() {
       fi ;;
   esac
   printf '%s' "${_pon%% *}"
-  if dp_budget_cut "$_pon_rc" "$_pon_b" "$_pon_left"; then
-    return "$DP_RC_BUDGET_CUT"
-  fi
   return "$_pon_rc"
 }
 
@@ -1057,6 +1056,8 @@ capture_pod_dataplane() {
       echo "ovs interface = $_cpd_ovsif"
       dp_run "$(dp_clip 20)" kubectl exec -n "$KUBEOVN_NS" "$_cpd_ovs" -c openvswitch -- \
         ovs-vsctl get interface "$_cpd_ovsif" external_ids:ovn-installed external_ids:ovn-installed-ts 2>&1 || true
+    elif [ "$_cpd_ovsif_rc" -eq "$DP_RC_BUDGET_CUT" ]; then
+      echo "(the OVS interface lookup for iface-id=$_cpd_pod.$_cpd_ns was cut off at the deadline: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)"
     elif [ "$_cpd_ovsif_rc" -eq "$DP_RC_SPENT" ]; then
       echo "(not started: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)"
     elif [ "$_cpd_ovsif_rc" -ne 0 ]; then
@@ -1292,7 +1293,7 @@ host_http_probe() {
       fi
     " 2>/dev/null)
   _hp_xrc=$?
-  if [ -z "$_hp_out" ] && [ "$_hp_xrc" -eq "$DP_RC_SPENT" ]; then
+  if [ -z "$_hp_out" ] && { [ "$_hp_xrc" -eq "$DP_RC_SPENT" ] || [ "$_hp_xrc" -eq "$DP_RC_BUDGET_CUT" ]; }; then
     echo spent
     return 0
   fi
@@ -1332,6 +1333,8 @@ ovs_iface_for() {
     printf '%s\n' "$_oi_name"
   elif [ "$_oi_rc" -eq 0 ]; then
     echo "(no OVS interface with iface-id=$2 on node $1; $_oi_fallback)" >> "$3" 2>/dev/null || true
+  elif [ "$_oi_rc" -eq "$DP_RC_BUDGET_CUT" ]; then
+    echo "(the OVS interface lookup for iface-id=$2 on node $1 was cut off at the deadline: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget; $_oi_fallback)" >> "$3" 2>/dev/null || true
   elif [ "$_oi_rc" -eq "$DP_RC_SPENT" ]; then
     echo "(the OVS interface for iface-id=$2 on node $1 was not looked up: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget; $_oi_fallback)" >> "$3" 2>/dev/null || true
   else
