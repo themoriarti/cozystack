@@ -48,11 +48,11 @@ spec:
         resource:
           apiVersion: apps/v1
           kind: Deployment
+          # Readiness is covered by the test-system HelmRelease above, so this only
+          # checks the Deployment carries the nested release's instance label.
           metadata:
             labels:
               app.kubernetes.io/instance: test-system
-          status:
-            readyReplicas: 1
 ---
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
@@ -100,8 +100,8 @@ spec:
         resource:
           apiVersion: apps/v1
           kind: Deployment
+          # Readiness is covered by the test-prefix-system HelmRelease above, so this
+          # only checks the Deployment carries the nested release's instance label.
           metadata:
             labels:
               app.kubernetes.io/instance: test-prefix-system
-          status:
-            readyReplicas: 1

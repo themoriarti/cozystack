@@ -105,13 +105,14 @@ spec:
             name: qdrant-test
           # Pins the label the catch collector selects on. Asserts are subset
           # matches, so this costs nothing and turns a silent drift of the
-          # instance label into a red step instead of an empty capture.
+          # instance label into a red step instead of an empty capture. Readiness
+          # is covered by the qdrant-test-system HelmRelease above.
           spec:
             selector:
               matchLabels:
                 app.kubernetes.io/instance: qdrant-test-system
-          status:
-            readyReplicas: 1
+    # Stays: the reclaim step below only proves the PVC was reclaimed if it was
+    # seen here first, an `error` on a PVC that never existed passes as well.
     - assert:
         timeout: 2m
         resource:
