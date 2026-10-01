@@ -358,6 +358,12 @@ dp_cutoff_desc() {
 # The status dp_run returns for a read it refused to start is a third case, and
 # it is not a cutoff either: nothing was asked, so nothing was cut.
 DP_RC_SPENT=75
+# pod_on_node's status for a lookup cut by a bound the deadline had shortened.
+# Its note still reads as a cutoff; this status lets the callers that write an
+# absence into the artifact name the budget rather than the cluster. It is
+# decided from the bound the lookup ran under, not from the clock when the
+# status is read, since other work may spend the budget in between.
+DP_RC_BUDGET_CUT=76
 dp_read_outcome() {
   if [ "${1:-}" = "$DP_RC_SPENT" ]; then
     printf '%s' "was not started: the wall-clock budget of its section was already spent"
@@ -488,20 +494,38 @@ dp_clip() {
 # The two OVS interface lookups discard stderr and read the status themselves
 # instead; the LB probe discards it too and reports a refusal through its
 # "spent" outcome.
+#
 # capture-notes.txt gets one line per section and run, matched on the section
 # name and the run's start time, since the budget can run out inside a capture
-# the loops never decline. The line names the section because the pod
-# section's deadline is not the run's: the LoadBalancer section still starts
-# calls after it.
+# the loops never decline. It is written on the first call the deadline cuts
+# as well as on the first one it refuses: when the cut call is the section's
+# last, nothing is refused after it. The line names the section because the
+# pod section's deadline is not the run's: the LoadBalancer section still
+# starts calls after it.
+dp_note_spent() {
+  _dns_note="[capture-dataplane] the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget (run started at epoch ${DP_T0}); a call running then was cut at the deadline, its calls after that were not started, and each block they left empty says so"
+  if ! grep -qxF "$_dns_note" "$NOTES" 2>/dev/null; then
+    printf '%s\n' "$_dns_note" >> "$NOTES" 2>/dev/null || true
+  fi
+}
+
+# dp_cut_by_budget <status> -- true when <status> is a cutoff and the deadline
+# has passed. Only meaningful right after the call that returned <status>:
+# read later, other work may have spent the budget in between, which is why
+# pod_on_node decides the same question from its bound instead.
+dp_cut_by_budget() {
+  case "$1" in
+    124 | 137) [ "$(dp_clip 1)" -le 0 ] ;;
+    *) return 1 ;;
+  esac
+}
+
 dp_run() {
   _dr_s=$1
   shift
   if [ "$_dr_s" -le 0 ]; then
     printf '%s\n' "(not started: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)" >&2
-    _dr_note="[capture-dataplane] the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget (run started at epoch ${DP_T0}); its calls after that were not started, and each block they left empty says so"
-    if ! grep -qxF "$_dr_note" "$NOTES" 2>/dev/null; then
-      printf '%s\n' "$_dr_note" >> "$NOTES" 2>/dev/null || true
-    fi
+    dp_note_spent
     return "$DP_RC_SPENT"
   fi
   if [ -n "$DP_TIMEOUT" ]; then
@@ -509,6 +533,11 @@ dp_run() {
   else
     "$@"
   fi
+  _dr_rc=$?
+  if dp_cut_by_budget "$_dr_rc"; then
+    dp_note_spent
+  fi
+  return "$_dr_rc"
 }
 
 command -v kubectl >/dev/null 2>&1 || exit 0
@@ -656,6 +685,9 @@ pod_on_node() {
       fi ;;
   esac
   printf '%s' "${_pon%% *}"
+  case "$_pon_rc" in
+    124 | 137) [ "$_pon_b" -lt "$DP_READ_TIMEOUT" ] && return "$DP_RC_BUDGET_CUT" ;;
+  esac
   return "$_pon_rc"
 }
 
@@ -766,6 +798,8 @@ capture_node() {
       echo
       if [ "$_cn_agent_ok" -eq 0 ]; then
         echo "(no cilium-agent pod found on node $_cn_node)"
+      elif [ "$_cn_agent_ok" -eq "$DP_RC_BUDGET_CUT" ]; then
+        echo "(whether a cilium-agent runs on node $_cn_node is unknown: the lookup was cut when the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)"
       elif [ "$_cn_agent_ok" -eq "$DP_RC_SPENT" ]; then
         echo "(whether a cilium-agent runs on node $_cn_node was not asked: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)"
       else
@@ -808,6 +842,8 @@ capture_node() {
       echo
       if [ "$_cn_ovs_ok" -eq 0 ]; then
         echo "(no ovs pod found on node $_cn_node)"
+      elif [ "$_cn_ovs_ok" -eq "$DP_RC_BUDGET_CUT" ]; then
+        echo "(whether an ovs pod runs on node $_cn_node is unknown: the lookup was cut when the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)"
       elif [ "$_cn_ovs_ok" -eq "$DP_RC_SPENT" ]; then
         echo "(whether an ovs pod runs on node $_cn_node was not asked: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget)"
       else
@@ -852,6 +888,8 @@ capture_node() {
       echo
       if [ "$_cn_cni_ok" -eq 0 ]; then
         echo "(no kube-ovn-cni pod found on node $_cn_node -- host netns capture skipped)"
+      elif [ "$_cn_cni_ok" -eq "$DP_RC_BUDGET_CUT" ]; then
+        echo "(whether a kube-ovn-cni pod runs on node $_cn_node is unknown: the lookup was cut when the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget; host netns capture skipped)"
       elif [ "$_cn_cni_ok" -eq "$DP_RC_SPENT" ]; then
         echo "(whether a kube-ovn-cni pod runs on node $_cn_node was not asked: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget; host netns capture skipped)"
       else
@@ -1192,17 +1230,13 @@ host_http_probe() {
   # declined the lookup or the exec. Neither the lookup nor the node is the
   # cause then, and the caller says so. An exec cut at the deadline itself
   # leaves no token, but the probes after it are refused and leave this one.
-  # A lookup cut off once the deadline has passed counts the same way: its
-  # bound was the one the deadline shortened, so it says nothing about the
-  # cni-server -- the rule the pod_on_node memo applies to such a cutoff.
-  case "$_hp_rc" in
-    "$DP_RC_SPENT") echo spent; return 0 ;;
-    124 | 137)
-      if [ "$(dp_clip 1)" -le 0 ]; then
-        echo spent
-        return 0
-      fi ;;
-  esac
+  # A lookup cut by a bound the deadline had shortened counts the same way: it
+  # says nothing about the cni-server -- the rule the pod_on_node memo applies
+  # to such a cutoff.
+  if [ "$_hp_rc" -eq "$DP_RC_SPENT" ] || [ "$_hp_rc" -eq "$DP_RC_BUDGET_CUT" ]; then
+    echo spent
+    return 0
+  fi
   if [ "$_hp_rc" -ne 0 ]; then
     echo unknown
     return 0
@@ -1245,6 +1279,8 @@ ovs_iface_for() {
   if [ -z "$_oi_ovs" ]; then
     if [ "$_oi_rc" -eq 0 ]; then
       echo "(no ovs pod found on node $1; $_oi_fallback)" >> "$3" 2>/dev/null || true
+    elif [ "$_oi_rc" -eq "$DP_RC_BUDGET_CUT" ]; then
+      echo "(whether an ovs pod runs on node $1 is unknown: the lookup was cut when the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget; $_oi_fallback)" >> "$3" 2>/dev/null || true
     elif [ "$_oi_rc" -eq "$DP_RC_SPENT" ]; then
       echo "(whether an ovs pod runs on node $1 was not asked: the ${DP_SECTION} ran out of its share of the ${DP_BUDGET}s wall-clock budget; $_oi_fallback)" >> "$3" 2>/dev/null || true
     else
@@ -1568,7 +1604,7 @@ capture_lb_datapath() {
       log "LB $_ns/$_name ($_lbip) UNREACHABLE -- capturing announcer/endpoint datapath"
       {
         echo
-        echo "probe: LB IP unreachable from node $_probenode (every probe failed) -- heavy capture follows"
+        echo "probe: LB IP unreachable from node $_probenode (no probe succeeded and at least one failed) -- heavy capture follows"
       } >> "$_of" 2>&1 || true
 
       # Static host-side captures on each hop.

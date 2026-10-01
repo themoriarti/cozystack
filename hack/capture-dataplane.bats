@@ -2442,11 +2442,83 @@ STUB
   rm -rf "$d"
 }
 
+@test "a lookup cut by its own full bound is not blamed on a budget that ran out later" {
+  # Whether the budget cut a lookup is a fact about the lookup's own bound,
+  # not about the clock when its status is read. Here the ovs lookup hits its
+  # full 2s bound with time to spare, and only then do the agent execs run the
+  # pod section into its deadline.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get svc -A '*) exit 0 ;;
+  *'k8s-app=cilium'*) echo 'cilium-xyz'; exit 0 ;;
+  *'app=ovs'*|*cilium-dbg*) sleep 300 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *')" \
+    COZY_DATAPLANE_READ_TIMEOUT=2 COZY_DATAPLANE_BUDGET=12 COZY_DATAPLANE_LB_RESERVE=3 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  f="$d/out/node-node-a.txt"
+  # Positive controls: the ovs lookup hit its full bound, and the pod section
+  # did run out later.
+  grep -q 'looking up the pod matching app=ovs on node node-a was cut off by its own 2s timeout' "$d/log"
+  grep -q 'the pod section ran out of its share of the 12s wall-clock budget' "$d/out/capture-notes.txt"
+  grep -q 'could not determine whether an ovs pod runs on node node-a -- the lookup did not answer' "$f"
+  if grep -q 'whether an ovs pod runs on node node-a is unknown: the lookup was cut when' "$f"; then
+    echo "a lookup cut by its own bound was blamed on the budget:"
+    cat "$f"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "a pod section whose last call the deadline cut says so in the notes" {
+  # The section note used to be written only when a call was refused. When the
+  # call the deadline cuts is the section's last, nothing is refused after it,
+  # the LoadBalancer section starts on a fresh deadline, and the truncated
+  # capture carried no word about the budget.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  'get svc -A '*) exit 0 ;;
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+  *conntrack*) sleep 300 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  rc=0
+  PATH="$d/bin:$PATH" DP_REAL_TIMEOUT="$real_timeout" DP_PASS="$(printf '%s\n' '*kubectl get pods -A *' '*kubectl get svc -A *')" \
+    COZY_DATAPLANE_BUDGET=6 COZY_DATAPLANE_LB_RESERVE=3 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  # Positive control: the conntrack block of the affected pod was reached.
+  grep -q '^=== host netns: kernel conntrack for 10.0.0.1' "$d/out/pod-tenant-test_wedged.txt"
+  grep -q 'the pod section ran out of its share of the 6s wall-clock budget' "$d/out/capture-notes.txt"
+  rm -rf "$d"
+}
+
 @test "a node lookup refused for a spent budget is not called unanswered" {
-  # The node capture writes an absence three ways: none, unknown because the
-  # lookup did not answer, and -- once the budget runs out inside it -- not
-  # asked at all. The first lookup here hangs into the pod section's deadline,
-  # so the ones after it are refused.
+  # The node capture writes an absence four ways: none, unknown because the
+  # lookup did not answer, unknown because the deadline cut it, and not asked
+  # at all once the budget is spent. The first lookup here hangs into the pod
+  # section's deadline, so the ones after it are refused. A cut at the full
+  # bound is the case "did not answer" is kept for, and the cut-off node lookup
+  # test above covers it.
   d=$(mktemp -d)
   mkdir -p "$d/bin"
   cat >"$d/bin/kubectl" <<'STUB'
@@ -2466,10 +2538,11 @@ STUB
     "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
   f="$d/out/node-node-a.txt"
-  # Positive control: the lookup that hung is reported as not answering.
-  grep -q 'could not determine whether a cilium-agent runs on node node-a -- the lookup did not answer' "$f"
-  if grep -q 'could not determine whether an ovs pod runs on node node-a -- the lookup did not answer' "$f"; then
-    echo "a refused lookup was called unanswered:"
+  # The lookup the deadline cut names the budget ...
+  grep -q 'whether a cilium-agent runs on node node-a is unknown: the lookup was cut when the pod section ran out of its share' "$f"
+  # ... and neither it nor the refused one is called unanswered.
+  if grep -q 'the lookup did not answer' "$f"; then
+    echo "a lookup the budget stopped was called unanswered:"
     cat "$f"
     exit 1
   fi
