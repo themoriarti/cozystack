@@ -448,9 +448,10 @@ cozy_wait_schedulable_node() {
 # autoPlace=3 places one replica per node) plus two 21 GiB CDI scratch
 # PVCs (worst case both landing on the same node via the local
 # storageClass) yields a ~82 GiB per-satellite peak footprint; 90 GiB
-# default threshold covers that with margin. The wait is bounded and
-# authoritative: cleanup propagates its timeout so the next suite cannot start
-# on storage whose reclamation was never observed.
+# default threshold covers that with margin. That makes it a precondition of
+# the replicated suite rather than a cleanup criterion: volumes earlier suites
+# legitimately keep can hold a node below it after this suite reclaimed
+# everything it used, which only the pre-suite baseline can tell apart.
 cozy_wait_linstor_pool_free() {
   _min_free_gib="${1:-90}"
   _timeout="${2:-300}"
@@ -496,14 +497,15 @@ cozy_wait_linstor_pool_free() {
   done
 }
 
-# Capture the local lane's per-node free-capacity baseline after stale tenant
-# cleanup and before creating this suite's workers. Chainsaw executes `try` and
-# `finally` in separate shells, so the small state file is the hand-off between
-# them. An absolute threshold cannot describe this lane: persistent platform
-# PVCs legitimately leave one pool far below 90 GiB, while all three sparse
-# pools also share one runner filesystem beneath ZFS.
+_cozy_linstor_pool_baseline_file() {
+  printf '%s\n' "${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
+}
+
+# Capture the per-node free-capacity baseline after stale tenant cleanup and
+# before creating this suite's workers. Chainsaw executes `try` and `finally` in
+# separate shells, so the small state file is the hand-off between them.
 cozy_capture_linstor_pool_baseline() {
-  _baseline_file="${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
+  _baseline_file=$(_cozy_linstor_pool_baseline_file)
   _baseline_dir=${_baseline_file%/*}
   [ "$_baseline_dir" != "$_baseline_file" ] || _baseline_dir=.
   mkdir -p "$_baseline_dir"
@@ -515,26 +517,29 @@ cozy_capture_linstor_pool_baseline() {
     sort
   ' 2>/dev/null) || _baseline=""
   if [ -z "$_baseline" ]; then
-    echo "» ERROR: could not record the local LINSTOR pool baseline; physical ZFS reclamation would be unverifiable" >&2
+    echo "» ERROR: could not record the LINSTOR pool baseline; physical ZFS reclamation would be unverifiable" >&2
     return 1
   fi
   _baseline_nodes=$(printf '%s\n' "$_baseline" | awk -F: 'NF == 2 { print $1 }' | sort | tr '\n' ' ')
   if [ "$_baseline_nodes" != "srv1 srv2 srv3 " ] \
       || ! cozy_linstor_pools_at_baseline "$_baseline" "$_baseline" 0; then
-    echo "» ERROR: local LINSTOR pool baseline is incomplete or malformed (expected numeric rows for srv1, srv2 and srv3): ${_baseline:-<empty>}" >&2
+    echo "» ERROR: LINSTOR pool baseline is incomplete or malformed (expected numeric rows for srv1, srv2 and srv3): ${_baseline:-<empty>}" >&2
     return 1
   fi
   printf '%s\n' "$_baseline" >"$_baseline_file"
-  echo "» local LINSTOR pool baseline recorded:"
+  echo "» LINSTOR pool baseline recorded:"
   printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /'
 }
 
-# Pure comparison used by the local-pool reclamation loop. Both captures contain
+# Pure comparison used by the pool reclamation loop. Both captures contain
 # `node:free_capacity_kib` rows. Every node present in the baseline must still be
 # present and may fall short only by the small caller-provided metadata tolerance.
 # The 512 MiB default covers the ~0.27 GiB free-capacity drift measured between
 # two otherwise-clean container suites, while still rejecting the smallest known
-# leaked test volume (the 1 GiB ClickHouse keeper PVC).
+# leaked test volume (the 1 GiB ClickHouse keeper PVC). In the replicated lane
+# the drift from a baseline to its cleanup has not been measured; its pools are
+# thick ZFS as well, and the cleanups of the two kubernetes suites in the
+# 2026-09-30 nightly left srv2 about 1 MiB apart.
 cozy_linstor_pools_at_baseline() {
   _baseline_rows="$1"
   _current_rows="$2"
@@ -562,10 +567,12 @@ EOF
 cozy_wait_linstor_pool_baseline() {
   _timeout="${1:-300}"
   _tolerance_kib="${2:-524288}"
-  _baseline_file="${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
+  _baseline_file=$(_cozy_linstor_pool_baseline_file)
+  # Returns 2 here and 1 on a timeout, so the caller can tell an unchecked
+  # reclamation from a failed one.
   if [ ! -s "$_baseline_file" ]; then
-    echo "» ERROR: no local LINSTOR pool baseline was recorded; physical ZFS reclamation is unknown" >&2
-    return 1
+    echo "» ERROR: no LINSTOR pool baseline was recorded for this suite, so it stopped before creating its tenant; reclamation was not checked" >&2
+    return 2
   fi
   _baseline=$(cat "$_baseline_file")
   _deadline=$(( $(date +%s) + _timeout ))
@@ -577,30 +584,17 @@ cozy_wait_linstor_pool_baseline() {
       sort
     ' 2>/dev/null) || _current=""
     if cozy_linstor_pools_at_baseline "$_baseline" "$_current" "$_tolerance_kib"; then
-      echo "» local LINSTOR pools returned to their pre-suite baseline"
+      echo "» LINSTOR pools returned to their pre-suite baseline"
       return 0
     fi
     if [ "$(date +%s)" -ge "$_deadline" ]; then
-      echo "» ERROR: local LINSTOR pools did not return to their pre-suite baseline within ${_timeout}s; a worker or CDI scratch volume may still occupy ZFS space" >&2
+      echo "» ERROR: LINSTOR pools did not return to their pre-suite baseline within ${_timeout}s; a worker or CDI scratch volume may still occupy ZFS space" >&2
       printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /' >&2
       printf '%s\n' "${_current:-<the LINSTOR pool probe returned nothing>}" | sed 's/^/  current-free-kib: /' >&2
       return 1
     fi
     sleep 5
   done
-}
-
-# The absolute 90 GiB threshold describes only the replicated lane's DRBD
-# teardown. The local lane instead waits for the exact capacity it had before
-# this Kubernetes suite, which detects its own leaked worker/scratch volumes
-# without requiring persistent platform volumes to disappear.
-cozy_wait_linstor_pool_reclaimed() {
-  _storage_class=$(cozy_e2e_storage_class) || return 1
-  if [ "$_storage_class" = local ]; then
-    cozy_wait_linstor_pool_baseline "${2:-300}" 524288
-    return $?
-  fi
-  cozy_wait_linstor_pool_free "${1:-90}" "${2:-300}"
 }
 
 # Unconditional cleanup hook, invoked from the kubernetes-* tests' Chainsaw
@@ -666,13 +660,15 @@ cozy_cleanup() {
     echo "» ERROR: cleanup has no test name; scoped tenant drain cannot be verified" >&2
     cleanup_failed=1
   fi
-  # In the replicated lane, wait for the DRBD-safe absolute threshold. In the
-  # local lane, wait for this suite's saved per-node baseline instead: that still
-  # catches delayed physical teardown without requiring platform PVCs to vanish.
-  if ! cozy_wait_linstor_pool_reclaimed 90 300; then
+  # Wait for this suite's saved per-node baseline: that catches delayed physical
+  # teardown, DRBD's included, without requiring volumes the suite did not
+  # create to vanish.
+  local pool_rc=0
+  cozy_wait_linstor_pool_baseline 300 || pool_rc=$?
+  if [ "$pool_rc" -eq 1 ]; then
     echo "» ERROR: LINSTOR capacity did not return to the pre-suite level" >&2
-    cleanup_failed=1
   fi
+  [ "$pool_rc" -eq 0 ] || cleanup_failed=1
   return "$cleanup_failed"
 }
 
@@ -5042,6 +5038,9 @@ run_kubernetes_test() {
     # The previous-version suite leaves it empty because OIDC is feature
     # coverage, not a compatibility matrix that justifies another upgrade.
     local enable_oidc="${5:-}"
+    # The previous suite's baseline must not survive into this suite's cleanup
+    # when this run fails before recording its own.
+    rm -f -- "$(_cozy_linstor_pool_baseline_file)" || return 1
     local storage_class
     storage_class=$(cozy_e2e_storage_class) || return 1
     local k8s_version
@@ -5075,15 +5074,18 @@ run_kubernetes_test() {
     return 1
   fi
 
-  # The local lane cannot use the replicated lane's absolute free-capacity
-  # threshold because persistent platform volumes already put one pool below it.
+  # The replicated suite needs the absolute floor free before it starts (see
+  # cozy_wait_linstor_pool_free); the local lane's platform volumes already put
+  # one pool below it, so it has no such precondition.
+  if [ "$storage_class" = replicated ] && ! cozy_wait_linstor_pool_free 90 300; then
+    echo "» ERROR: ${test_name} has created nothing yet and its LINSTOR pool precondition failed: either a pool is below the 90 GiB this suite needs, held by earlier suites or the platform, or the pools could not be read. Either way it is an environment failure rather than this suite's" >&2
+    return 1
+  fi
   # Save the post-stale-cleanup state for the separate Chainsaw `finally` shell;
   # cleanup later verifies that this suite returned every node to these figures.
-  if [ "$storage_class" = local ]; then
-    if ! cozy_capture_linstor_pool_baseline; then
-      echo "cannot verify local LINSTOR reclamation without a complete baseline" >&2
-      return 1
-    fi
+  if ! cozy_capture_linstor_pool_baseline; then
+    echo "cannot verify LINSTOR reclamation without a complete baseline" >&2
+    return 1
   fi
 
   # Compose the optional ouroboros addon block. Indentation matches the

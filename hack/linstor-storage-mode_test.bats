@@ -10,6 +10,25 @@ E2E_POST_INSTALL_PREP_LIB=true . "$POST_PREP"
 
 kubectl() { printf '%s\n' "$*"; }
 
+# The pool waits poll against a wall-clock deadline. Each `date` call moves this
+# clock a minute on, so a wait that cannot succeed runs out within a few polls.
+# The suite also runs kubectl through `timeout` and `sh -c`, which bypass the
+# shell function, so a kubectl that refuses to run goes first on PATH.
+fake_linstor_clock() {
+  clock_file="_out/tmp/linstor-clock-$$"
+  mkdir -p _out/tmp/linstor-bin
+  printf '#!/bin/sh\necho "unstubbed kubectl $*" >&2\nexit 97\n' >_out/tmp/linstor-bin/kubectl
+  chmod +x _out/tmp/linstor-bin/kubectl
+  PATH="$PWD/_out/tmp/linstor-bin:$PATH"
+  printf '0\n' >"$clock_file"
+  date() {
+    _now=$(cat "$clock_file")
+    printf '%s\n' "$((_now + 60))" >"$clock_file"
+    printf '%s\n' "$_now"
+  }
+  sleep() { :; }
+}
+
 @test "QEMU mode creates data from the satellite block device" {
   unset COZY_LINSTOR_DRBD_ENABLED
   command=$(create_linstor_storage_pool srv2)
@@ -106,34 +125,162 @@ kubectl() { printf '%s\n' "$*"; }
   fi
 }
 
-@test "local storage uses its saved LINSTOR pool baseline" {
-  # shellcheck source=/dev/null
-  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
-  COZY_E2E_STORAGE_CLASS=local
-  cozy_wait_linstor_pool_free() { printf 'unexpected pool wait\n'; return 99; }
-  cozy_wait_linstor_pool_baseline() { printf 'baseline-wait:%s:%s\n' "$1" "$2"; }
-
-  output=$(cozy_wait_linstor_pool_reclaimed 90 300)
-
-  if printf '%s\n' "$output" | grep -Fq 'unexpected pool wait'; then
-    echo "local storage entered the replicated-capacity wait" >&2
-    return 1
-  fi
-  [ "$output" = 'baseline-wait:300:524288' ]
-}
-
-@test "replicated storage retains the LINSTOR free-capacity barrier" {
+@test "replicated cleanup holds LINSTOR capacity to the pre-suite baseline, not to an absolute floor" {
   # shellcheck source=/dev/null
   . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
   COZY_E2E_STORAGE_CLASS=replicated
-  cozy_wait_linstor_pool_free() { printf 'pool-wait:%s:%s\n' "$1" "$2"; }
+  COZY_LINSTOR_POOL_BASELINE_FILE="_out/tmp/linstor-baseline-$$"
+  mkdir -p _out/tmp
+  # srv2 sits at 83 GiB both before and after the suite, below the 90 GiB that
+  # used to be demanded of every node, because earlier suites hold the space.
+  pools=$(printf 'srv1:92452208\nsrv2:87127923\nsrv3:133999575')
+  printf '%s\n' "$pools" >"$COZY_LINSTOR_POOL_BASELINE_FILE"
+  # The baseline probe reads node:kib rows; the absolute-floor probe reads the
+  # smallest pool as kib:node. Each gets its own shape, so a cleanup that went
+  # back to the floor fails on srv2's 83 GiB rather than on a parse error.
+  kubectl() {
+    case "$*" in
+      *'free_capacity):'*) printf '87127923:srv2\n' ;;
+      *linstor*) printf '%s\n' "$pools" ;;
+    esac
+    return 0
+  }
+  cozy_wait_tenant_drained() { return 0; }
+  fake_linstor_clock
 
-  output=$(cozy_wait_linstor_pool_reclaimed 91 17)
+  rc=0
+  cozy_cleanup test-latest-version || rc=$?
+  rm -f "$COZY_LINSTOR_POOL_BASELINE_FILE" "$clock_file"
 
-  [ "$output" = 'pool-wait:91:17' ]
+  if [ "$rc" -ne 0 ]; then
+    echo "replicated cleanup failed although every pool is back at its pre-suite free capacity" >&2
+    return 1
+  fi
 }
 
-@test "local pool baseline comparison is per-node and tolerates only metadata drift" {
+@test "replicated Kubernetes suite records a LINSTOR baseline before creating the tenant" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=replicated
+  COZY_LINSTOR_POOL_BASELINE_FILE="_out/tmp/linstor-baseline-$$"
+  yq() { printf 'v1.33.12\n'; }
+  # The first apply creates the tenant. Exiting the command substitution there
+  # also keeps the run away from the `sh -c` loops further on, which would
+  # call the real kubectl.
+  kubectl() {
+    case "$*" in apply*) printf 'UNEXPECTED_TENANT_APPLY\n'; exit 99 ;; esac
+    return 0
+  }
+  cozy_wait_tenant_drained() { return 0; }
+  cozy_wait_linstor_pool_free() { return 0; }
+  cozy_capture_linstor_pool_baseline() { printf 'BASELINE_CAPTURED\n'; return 42; }
+  fake_linstor_clock
+
+  rc=0
+  output=$(run_kubernetes_test '.' test-latest-version 59991) || rc=$?
+  rm -f "$clock_file"
+
+  if ! printf '%s\n' "$output" | grep -Fq BASELINE_CAPTURED; then
+    echo "replicated suite went on without recording a pre-suite LINSTOR baseline" >&2
+    return 1
+  fi
+  if [ "$rc" -eq 0 ] || printf '%s\n' "$output" | grep -Fq UNEXPECTED_TENANT_APPLY; then
+    echo "replicated suite continued after the baseline capture failed" >&2
+    return 1
+  fi
+}
+
+@test "replicated suite starting below the LINSTOR pool floor stops early and blames the environment" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=replicated
+  COZY_LINSTOR_POOL_BASELINE_FILE="_out/tmp/linstor-baseline-$$"
+  yq() { printf 'v1.33.12\n'; }
+  kubectl() {
+    case "$*" in
+      *machine-readable*) printf '87127923:srv2\n' ;;
+      *'sp l'*) printf '| data | srv2 | ZFS | data | 83.09 GiB | 199 GiB |\n' ;;
+      apply*) printf 'UNEXPECTED_TENANT_APPLY\n'; exit 99 ;;
+    esac
+    return 0
+  }
+  cozy_wait_tenant_drained() { return 0; }
+  cozy_capture_linstor_pool_baseline() { return 0; }
+  fake_linstor_clock
+
+  rc=0
+  output=$(run_kubernetes_test '.' test-latest-version 59991 2>&1) || rc=$?
+  rm -f "$clock_file"
+
+  if [ "$rc" -eq 0 ] || printf '%s\n' "$output" | grep -Fq UNEXPECTED_TENANT_APPLY; then
+    echo "suite went on to create its tenant with srv2 below the pool floor" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$output" | grep -Fq 'earlier suites'; then
+    echo "the low-pool failure does not name the environment as its cause" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$output" | grep -Fq '83.09 GiB'; then
+    echo "the low-pool failure does not print the per-node pool table" >&2
+    return 1
+  fi
+}
+
+@test "local Kubernetes suite does not demand the replicated lane's pool floor" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=local
+  COZY_LINSTOR_POOL_BASELINE_FILE="_out/tmp/linstor-baseline-$$"
+  yq() { printf 'v1.33.12\n'; }
+  kubectl() {
+    case "$*" in apply*) printf 'TENANT_APPLY_REACHED\n'; exit 0 ;; esac
+    return 0
+  }
+  cozy_wait_tenant_drained() { return 0; }
+  cozy_wait_linstor_pool_free() { printf 'UNEXPECTED_FLOOR\n'; return 99; }
+  cozy_capture_linstor_pool_baseline() { return 0; }
+  fake_linstor_clock
+
+  output=$(run_kubernetes_test '.' test-latest-version 59991 2>&1) || true
+  rm -f "$clock_file"
+
+  if printf '%s\n' "$output" | grep -Fq UNEXPECTED_FLOOR; then
+    echo "local suite waited for the 90 GiB floor that its platform volumes keep one pool below" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$output" | grep -Fq TENANT_APPLY_REACHED; then
+    echo "local suite stopped before creating its tenant: $output" >&2
+    return 1
+  fi
+}
+
+@test "a suite that fails before recording its baseline cannot reuse the previous suite's" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_LINSTOR_POOL_BASELINE_FILE="_out/tmp/linstor-baseline-$$"
+  mkdir -p _out/tmp
+  pools=$(printf 'srv1:92452208\nsrv2:87127923\nsrv3:133999575')
+  printf '%s\n' "$pools" >"$COZY_LINSTOR_POOL_BASELINE_FILE"
+  yq() { printf 'v1.33.12\n'; }
+  kubectl() {
+    case "$*" in *linstor*) printf '%s\n' "$pools" ;; esac
+    return 0
+  }
+  cozy_wait_tenant_drained() { return 1; }
+  run_kubernetes_test '.' test-latest-version 59991 >/dev/null 2>&1 || true
+  fake_linstor_clock
+
+  rc=0
+  cozy_wait_linstor_pool_baseline 0 >/dev/null 2>&1 || rc=$?
+  rm -f "$COZY_LINSTOR_POOL_BASELINE_FILE" "$clock_file"
+
+  if [ "$rc" -eq 0 ]; then
+    echo "cleanup verified reclamation against the previous suite's baseline" >&2
+    return 1
+  fi
+}
+
+@test "pool baseline comparison is per-node and tolerates only metadata drift" {
   # shellcheck source=/dev/null
   . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
   baseline=$(printf 'srv1:67108864\nsrv2:20787200\nsrv3:60817408')
@@ -152,7 +299,7 @@ kubectl() { printf '%s\n' "$*"; }
   fi
 }
 
-@test "local pool baseline capture persists all three numeric satellite rows" {
+@test "pool baseline capture persists all three numeric satellite rows" {
   # shellcheck source=/dev/null
   . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
   COZY_LINSTOR_POOL_BASELINE_FILE="_out/tmp/linstor-baseline-$$"
@@ -163,18 +310,41 @@ kubectl() { printf '%s\n' "$*"; }
   rm -f "$COZY_LINSTOR_POOL_BASELINE_FILE"
 
   [ "$captured" = "$(printf 'srv3:60817408\nsrv1:67108864\nsrv2:20787200')" ]
-  printf '%s\n' "$output" | grep -Fq 'local LINSTOR pool baseline recorded'
+  printf '%s\n' "$output" | grep -Fq 'LINSTOR pool baseline recorded'
 }
 
-@test "Kubernetes cleanup fails when local LINSTOR capacity is not reclaimed" {
+@test "Kubernetes cleanup fails when LINSTOR capacity is not reclaimed" {
   # shellcheck source=/dev/null
   . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
   kubectl() { return 0; }
   cozy_wait_tenant_drained() { return 0; }
-  cozy_wait_linstor_pool_reclaimed() { return 42; }
+  cozy_wait_linstor_pool_baseline() { return 42; }
 
   if cozy_cleanup test-latest-version; then
     echo "cleanup hid the failed LINSTOR reclamation barrier" >&2
+    return 1
+  fi
+}
+
+@test "cleanup of a suite that never recorded a baseline does not report a leak" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_LINSTOR_POOL_BASELINE_FILE="_out/tmp/linstor-baseline-absent-$$"
+  rm -f "$COZY_LINSTOR_POOL_BASELINE_FILE"
+  kubectl() { return 0; }
+  cozy_wait_tenant_drained() { return 0; }
+  fake_linstor_clock
+
+  rc=0
+  output=$(cozy_cleanup test-latest-version 2>&1) || rc=$?
+  rm -f "$clock_file"
+
+  if [ "$rc" -eq 0 ]; then
+    echo "cleanup passed with LINSTOR reclamation unchecked" >&2
+    return 1
+  fi
+  if printf '%s\n' "$output" | grep -Fq 'did not return to the pre-suite level'; then
+    echo "cleanup blamed the suite for a leak although it stopped before recording a baseline: $output" >&2
     return 1
   fi
 }
@@ -183,14 +353,17 @@ kubectl() { printf '%s\n' "$*"; }
   # shellcheck source=/dev/null
   . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
   COZY_E2E_STORAGE_CLASS=local
+  COZY_LINSTOR_POOL_BASELINE_FILE="_out/tmp/linstor-baseline-$$"
   yq() { printf 'v1.33.12\n'; }
   kubectl() { return 0; }
   cozy_wait_tenant_drained() { return 0; }
   cozy_capture_linstor_pool_baseline() { return 42; }
   helm() { printf 'UNEXPECTED_HELM_CALL\n'; return 99; }
+  fake_linstor_clock
 
   rc=0
   output=$(run_kubernetes_test '.' test-latest-version 59991) || rc=$?
+  rm -f "$clock_file"
 
   if [ "$rc" -eq 0 ]; then
     echo "suite accepted a failed local LINSTOR baseline capture" >&2
