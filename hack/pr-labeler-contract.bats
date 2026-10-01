@@ -95,6 +95,18 @@ constructor: x	area/uncategorized
 EOF
 }
 
+# One stripped prefix left the second one to be parsed as a bracket scope, which
+# dropped the real scope and the kind, and the area/release from the first strip
+# suppressed the uncategorized signal.
+@test "every leading backport prefix is stripped before the title is parsed" {
+  need_node
+  expect_labels <<'EOF'
+[Backport release-1.3] fix(linstor): x	area/release,area/storage,kind/bug
+[Backport release-1.2] [Backport release-1.3] fix(linstor): x	area/release,area/storage,kind/bug
+[Backport release-1.2] [Backport release-1.3] [Backport release-1.4] feat(linstor): x	area/release,area/storage,kind/feature
+EOF
+}
+
 @test "an unmapped scope still falls back to area/uncategorized" {
   need_node
   expect_labels <<'EOF'

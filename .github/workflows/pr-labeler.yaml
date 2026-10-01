@@ -173,10 +173,10 @@ jobs:
             const existing = new Set((pr.labels || []).map(l => l.name));
             const toAdd = new Set();
 
-            // 1. Strip "[Backport release-1.x]" prefix if present.
-            const backportMatch = title.match(/^\[Backport ([^\]]+)\]\s+(.+)$/);
-            const cleanTitle = backportMatch ? backportMatch[2] : title;
-            if (backportMatch) {
+            // 1. Strip every leading "[Backport release-1.x]" prefix: a backport of
+            // a backport carries two, and a leftover one would be parsed as the scope.
+            const cleanTitle = title.replace(/^(?:\[Backport [^\]]+\]\s+)+/, '');
+            if (cleanTitle !== title) {
               toAdd.add('area/release');
             }
 
