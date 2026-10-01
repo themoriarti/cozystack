@@ -324,7 +324,7 @@
       }
     },
     "tracingStorages": {
-      "description": "Configuration of traces storage instances. Empty by default (tracing off): no backend and no trace collector are rendered. Adding an entry provisions a VictoriaTraces backend and, while tracingCollector.enabled is true, deploys the OTLP collector in front of it. A tenant with shared-central tracing (the Tenant's tracingCentral) gets the collector without an entry, which then exports to the shared store; entries still listed keep their store and datasource, so traces stored before the switch stay readable until the entry is removed.",
+      "description": "Configuration of traces storage instances. Empty by default (tracing off): no backend and no trace collector are rendered. Adding an entry provisions a VictoriaTraces backend and, while tracingCollector.enabled is true, deploys the OTLP collector in front of it. A tenant with shared-central tracing (the Tenant's tracingCentral) gets the collector, while tracingCollector.enabled is true, without an entry, which then exports to the shared store; entries still listed keep their store and datasource, so traces stored before the switch stay readable until the entry is removed.",
       "type": "array",
       "default": [],
       "items": {
