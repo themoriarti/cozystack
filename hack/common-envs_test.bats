@@ -120,6 +120,27 @@
   if echo "$out" | grep -q -- '--platform'; then echo "FAIL: LOAD=1 passes a platform, so buildx builds an index it cannot load"; false; fi
 }
 
+@test "LOAD and PUSH from the environment reach buildx, and LOAD=1 alone does not push" {
+  out=$(LOAD=1 PUSH=0 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=0 --load=1' || { echo "FAIL: environment LOAD=1 PUSH=0 ignored"; false; }
+  if echo "$out" | grep -q -- '--platform'; then echo "FAIL: environment LOAD=1 still builds a multi-arch index"; false; fi
+  out=$(LOAD=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=0 --load=1' || { echo "FAIL: LOAD=1 alone pushes"; false; }
+  # An explicit PUSH still wins over the LOAD-derived default.
+  out=$(LOAD=1 PUSH=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=1 --load=1'
+  # The fork export must keep beating an environment PUSH=1.
+  out=$(PUSH=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b OCI_EXPORT_DIR=/tmp/ocitest)
+  echo "$out" | grep -q -- '--push=0 --load=0'
+}
+
+@test "an empty PUSH or LOAD in the environment falls back to the default" {
+  out=$(PUSH= LOAD= make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=1 --load=0' || { echo "FAIL: empty PUSH/LOAD reach buildx as empty flags"; false; }
+  out=$(PUSH= LOAD=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=0 --load=1'
+}
+
 @test "CACHE_TAG moves the cache ref of every image" {
   # The arm64 leg writes its own mode=max cache. Sharing the amd64 ref would
   # make every write from one leg evict the other's layers.

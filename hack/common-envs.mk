@@ -18,7 +18,7 @@ CACHE_REGISTRY ?= $(REGISTRY)
 # that does not collide between concurrent builds:
 #   * pull-requests.yaml -> pr-<N>-<sha>
 #   * tags.yaml          -> <ref_name>           (e.g. v1.5.0)
-#   * local              -> dev                  (with PUSH=0 by default)
+#   * local              -> dev                  (pushes unless PUSH=0; LOAD=1 defaults PUSH to 0)
 IMAGE_TAG ?= dev
 
 # Opt-in extra tags. Workflows set these explicitly; defaults are off so a
@@ -34,8 +34,11 @@ PUBLISH_FLOATING  ?= 0
 # never race on the cache manifest (the 409 collisions PR #2711 fixed for tags).
 WRITE_CACHE ?= 0
 
-PUSH := 1
-LOAD := 0
+# Environment and command line both override these, and an empty value from the
+# environment counts as unset. LOAD=1 loads into the local docker store, so PUSH
+# follows it to 0 unless PUSH is set too.
+LOAD := $(or $(strip $(LOAD)),0)
+PUSH := $(or $(strip $(PUSH)),$(if $(filter 1,$(LOAD)),0,1))
 
 # OCI_EXPORT_DIR: when set, build every image to a per-image OCI archive
 # (<dir>/<name>.oci.tar) instead of pushing or loading it. Fork PRs use this:
