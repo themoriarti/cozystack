@@ -361,8 +361,8 @@ DP_RC_SPENT=75
 # pod_on_node's status for a lookup cut by a bound the deadline had shortened.
 # Its note still reads as a cutoff; this status lets the callers that write an
 # absence into the artifact name the budget rather than the cluster. It is
-# decided from the bound the lookup ran under, not from the clock when the
-# status is read, since other work may spend the budget in between.
+# decided by dp_budget_cut as the lookup returns, not when its status is read
+# later, since other work may spend the budget in between.
 DP_RC_BUDGET_CUT=76
 dp_read_outcome() {
   if [ "${1:-}" = "$DP_RC_SPENT" ]; then
@@ -482,6 +482,20 @@ dp_clip() {
   if [ "$_dc_left" -lt "$1" ]; then printf '%s' "$_dc_left"; else printf '%s' "$1"; fi
 }
 
+# dp_budget_cut <status> <bound> <left> -- true when a call that returned
+# <status> under <bound>, started with <left> seconds before the deadline, was
+# stopped by the deadline rather than by itself. All three have to hold: a
+# cutoff status, a bound that reached the deadline, and a deadline that has
+# now passed. The bound alone misses a call killed early -- an OOM-killed
+# remote process comes back as 137 -- and the clock alone misses a call whose
+# own bound fired just past a deadline it never reached. Without `timeout`
+# no bound ever fires, so a 124 or 137 then is never the budget's.
+dp_budget_cut() {
+  [ -n "$DP_TIMEOUT" ] || return 1
+  case "$1" in 124 | 137) ;; *) return 1 ;; esac
+  [ "$2" -ge "$3" ] && [ "$(dp_clip 1)" -le 0 ]
+}
+
 # dp_run <secs> <cmd...> -- the one way this script runs kubectl. <secs> is
 # already clipped (callers pass "$(dp_clip N)"); a bound of zero or less means
 # the budget is spent, and the call is not started. The guard in
@@ -526,17 +540,6 @@ dp_walk_end() {
   fi
 }
 
-# dp_cut_by_budget <status> -- true when <status> is a cutoff and the deadline
-# has passed. Only meaningful right after the call that returned <status>:
-# read later, other work may have spent the budget in between, which is why
-# pod_on_node decides the same question from its bound instead.
-dp_cut_by_budget() {
-  case "$1" in
-    124 | 137) [ "$(dp_clip 1)" -le 0 ] ;;
-    *) return 1 ;;
-  esac
-}
-
 dp_run() {
   _dr_s=$1
   shift
@@ -545,13 +548,14 @@ dp_run() {
     dp_note_spent
     return "$DP_RC_SPENT"
   fi
+  _dr_left=$((DP_DEADLINE - $(date +%s)))
   if [ -n "$DP_TIMEOUT" ]; then
     timeout -k "$DP_READ_GRACE" "$_dr_s" "$@"
   else
     "$@"
   fi
   _dr_rc=$?
-  if dp_cut_by_budget "$_dr_rc"; then
+  if dp_budget_cut "$_dr_rc" "$_dr_s" "$_dr_left"; then
     dp_note_spent
   fi
   return "$_dr_rc"
@@ -678,6 +682,7 @@ pod_on_node() {
   # as a failed read. [*] yields nothing and exits 0, so a non-zero status again
   # means something actually went wrong.
   _pon_b=$(dp_clip "$DP_READ_TIMEOUT")
+  _pon_left=$((DP_DEADLINE - $(date +%s)))
   _pon=$(dp_run "$_pon_b" kubectl get pod -n "$1" -l "$2" --field-selector "spec.nodeName=$3" \
     -o jsonpath='{.items[*].metadata.name}' 2>"${DP_ERR:-/dev/null}")
   _pon_rc=$?
@@ -703,9 +708,9 @@ pod_on_node() {
       fi ;;
   esac
   printf '%s' "${_pon%% *}"
-  case "$_pon_rc" in
-    124 | 137) [ "$_pon_b" -lt "$DP_READ_TIMEOUT" ] && return "$DP_RC_BUDGET_CUT" ;;
-  esac
+  if dp_budget_cut "$_pon_rc" "$_pon_b" "$_pon_left"; then
+    return "$DP_RC_BUDGET_CUT"
+  fi
   return "$_pon_rc"
 }
 

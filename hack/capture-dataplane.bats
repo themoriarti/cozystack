@@ -2528,6 +2528,99 @@ STUB
   rm -rf "$d"
 }
 
+@test "a call killed early under a bound cut to the deadline is not blamed on the budget" {
+  # The other half of the same rule: a bound that reaches the deadline is not
+  # enough either, the deadline also has to have passed. Here the pod list runs
+  # under a bound cut to the pod section's 4s and is killed at once -- what an
+  # OOM-killed remote process returns through kubectl exec -- long before the
+  # deadline arrives.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) exit 137 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  rc=0
+  PATH="$d/bin:$PATH" COZY_DATAPLANE_BUDGET=94 COZY_DATAPLANE_LB_RESERVE=90 \
+    timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  notes="$d/out/capture-notes.txt"
+  # Positive control: the list's own outcome was noted.
+  grep -q 'listing pods was cut off by a SIGKILL' "$notes"
+  if grep -q 'the pod section ran out of its share' "$notes"; then
+    echo "a call killed before the deadline was blamed on the budget:"
+    cat "$notes"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "a node lookup killed early under a bound cut to the deadline is not blamed on the budget" {
+  # The lookup side of the rule above: the pod section is 4s long, so every
+  # node lookup runs under a bound cut to the deadline, and this one is killed
+  # at once. The budget did not stop it.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
+  *'k8s-app=cilium'*) exit 137 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  rc=0
+  PATH="$d/bin:$PATH" COZY_DATAPLANE_BUDGET=94 COZY_DATAPLANE_LB_RESERVE=90 \
+    timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  f="$d/out/node-node-a.txt"
+  grep -q 'could not determine whether a cilium-agent runs on node node-a -- the lookup did not answer' "$f"
+  if grep -q 'the lookup was cut when' "$f"; then
+    echo "a lookup killed before the deadline was blamed on the budget:"
+    cat "$f"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "a call cut by its own bound just past the deadline is not blamed on the budget" {
+  # Whether the budget cut a call is decided by the bound it ran under: only a
+  # bound that reached the deadline can be the deadline's. Here the pod list
+  # runs under its own 3s bound, well inside the pod section's 4s, and comes
+  # back from its kill grace after the deadline has passed; the clock after the
+  # call would blame the budget for what its own bound did.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  cat >"$d/bin/timeout" <<SHIM
+#!/bin/sh
+case "\$*" in
+  *'kubectl get pods -A '*) sleep 5; exit 137 ;;
+esac
+exec "$real_timeout" "\$@"
+SHIM
+  chmod +x "$d/bin/kubectl" "$d/bin/timeout"
+  rc=0
+  PATH="$d/bin:$PATH" COZY_DATAPLANE_LIST_TIMEOUT=3 COZY_DATAPLANE_BUDGET=94 COZY_DATAPLANE_LB_RESERVE=90 \
+    "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  notes="$d/out/capture-notes.txt"
+  # Positive control: the list was cut, and reported against its own bound.
+  grep -q 'listing pods was cut off by a SIGKILL -- the kill grace of its own 3s timeout' "$notes"
+  if grep -q 'the pod section ran out of its share' "$notes"; then
+    echo "a call's own cutoff was blamed on the budget:"
+    cat "$notes"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
 @test "a pod walk that stopped early does not call itself complete" {
   # Both ways out of the walk before its end -- the pod cap and the pod
   # section's share of the budget -- name what they left behind, and the line
@@ -2602,7 +2695,7 @@ STUB
     cat "$d/out/capture-notes.txt"
     exit 1
   fi
-  grep -q 'host->pod data-plane capture cut short by the budget' "$d/out/capture-notes.txt"
+  grep -q 'host->pod data-plane capture cut short by the budget -- see capture-notes.txt' "$d/out/capture-notes.txt"
   rm -rf "$d"
 }
 
@@ -2704,6 +2797,39 @@ STUB
   if grep -q 'exited 127' "$d/out/capture-notes.txt"; then
     echo "a missing timeout was reported as kubectl failing:"
     cat "$d/out/capture-notes.txt"
+    exit 1
+  fi
+  rm -rf "$d"
+}
+
+@test "without a timeout binary a killed call past the deadline is not blamed on the budget" {
+  # With no `timeout` on PATH nothing bounds a call, so a 137 is a signal from
+  # outside -- here a call that comes back killed after the 4s pod section has
+  # ended -- and never the deadline's doing, however the clock reads.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  for t in awk sed date grep mktemp tr cut head tail wc cat rm mkdir sleep env; do
+    ln -s "$(command -v "$t")" "$d/bin/$t"
+  done
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*) sleep 5; exit 137 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  rc=0
+  PATH="$d/bin" COZY_DATAPLANE_BUDGET=94 COZY_DATAPLANE_LB_RESERVE=90 \
+    "$real_timeout" 60 /bin/sh "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
+  notes="$d/out/capture-notes.txt"
+  # Positive control: the list's own outcome names an outside signal.
+  grep -q 'listing pods was cut off by a signal from outside this script, which ran this read unbounded' "$notes"
+  if grep -q 'the pod section ran out of its share' "$notes"; then
+    echo "an unbounded call's kill was blamed on the budget:"
+    cat "$notes"
     exit 1
   fi
   rm -rf "$d"
