@@ -31,7 +31,7 @@
 # expanded, but not which side is which, and reading a whole-tree diff off a trace
 # line is exactly the moment a test stops being worth having.
 full_suite_list() {
-    find hack/e2e-chainsaw -mindepth 2 \
+    find hack/e2e-chainsaw -mindepth 2 \( ! -type d -o -name chainsaw-test.yaml -o -name chainsaw-test.yml \) \
       | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/(.*/)?(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' \
       | sort -u | paste -sd ' ' -
 }
@@ -830,9 +830,22 @@ assert_full_suite() {
     : > "$tmp/tree/hack/e2e-chainsaw/gamma/01-assert.yml"
     # Not a step file: the number has to lead the name.
     : > "$tmp/tree/hack/e2e-chainsaw/delta/install-01.yaml"
+    # Nor is a name with no number at all.
+    : > "$tmp/tree/hack/e2e-chainsaw/delta/-install.yaml"
+    # Not a step file either: Chainsaw skips directories. It keeps a symlink,
+    # though, because a symlink's directory entry is not a directory.
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/theta/01-x.yaml" "$tmp/tree/hack/e2e-chainsaw/iota" \
+        "$tmp/tree/hack/e2e-chainsaw/kappa"
+    ln -s ../alpha/chainsaw-test.yaml "$tmp/tree/hack/e2e-chainsaw/iota/01-link.yaml"
+    # Step files spelled .yml alone make a suite too.
+    : > "$tmp/tree/hack/e2e-chainsaw/kappa/01-install.yml"
+    # A directory named chainsaw-test.yaml is still read by Chainsaw, which
+    # then fails loudly, so its suite stays listed.
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/lambda/chainsaw-test.yaml" \
+        "$tmp/tree/hack/e2e-chainsaw/mu/chainsaw-test.yml"
     echo go.mod > "$tmp/diff"
     output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources" 2>/dev/null)
-    assert_selection "the full suite must include a step-file suite" "$output" "alpha gamma"
+    assert_selection "the full suite must include a step-file suite" "$output" "alpha gamma iota kappa lambda mu"
     echo hack/e2e-chainsaw/gamma/01-install.yaml > "$tmp/diff"
     output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources")
     assert_selection "a per-suite edit must select a step-file suite" "$output" "gamma"

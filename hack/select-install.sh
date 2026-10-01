@@ -108,7 +108,7 @@ deps_of() {
 # spelled. It is captured on its own because a pipeline reports sort's status,
 # and a failed listing must not read as an empty suites dir.
 discover_suites() {
-  found=$(cd "$1" && find . -mindepth 2) || return 1
+  found=$(cd "$1" && find . -mindepth 2 \( ! -type d -o -name chainsaw-test.yaml -o -name chainsaw-test.yml \)) || return 1
   printf '%s\n' "$found" \
     | sed -nE 's,^\./([^/]+)/(.*/)?(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' | sort -u
 }

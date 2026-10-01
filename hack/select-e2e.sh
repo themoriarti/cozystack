@@ -163,20 +163,24 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|packages/tests/|hack/[^/]+\.bats$|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$|packages/system/\.gitattributes$|packages/system/(backup-controller|backupstrategy-controller)/definitions/\.gitattributes$)'
 
 # All known Chainsaw suites: every dir directly under hack/e2e-chainsaw/ in
-# which Chainsaw v0.2.15 would find a Test (pkg/discovery/load.go). A Test is a
-# chainsaw-test.yaml, or chainsaw-test.yml when the .yaml is absent, or, with
-# neither, files named like 01-install.yaml, which Chainsaw turns into a Test on
-# its own. Chainsaw walks every subdirectory of the dir it is handed, so a Test
-# in a top-level dir or anywhere below it belongs to that dir. A suite that
-# runs but is never listed is never selected. A parked
-# chainsaw-test.yaml.disabled matches none of these.
+# which Chainsaw v0.2.15 would find a Test (pkg/discovery/load.go and step.go).
+# A Test is a chainsaw-test.yaml, or chainsaw-test.yml when the .yaml is absent,
+# or, with neither, files named like 01-install.yaml, which Chainsaw turns into
+# a Test on its own. Chainsaw walks every subdirectory of the dir it is handed
+# (pkg/utils/fs/discover.go), so a Test in a top-level dir or anywhere below it
+# belongs to that dir. A suite that runs but is never listed is never selected.
+# A parked chainsaw-test.yaml.disabled matches none of these. A step-file name
+# counts unless the entry is a directory (TryFindStepFiles), so a symlink counts
+# and `-type f` would be too narrow. A chainsaw-test.y*ml counts whatever its
+# type: Chainsaw stats it and fails loudly on a directory, and leaving that
+# suite out would hide the failure instead.
 #
 # Captured before the sed/sort rather than piped straight into them: a pipeline
 # carries its LAST command's status, so `$(find ... | sed | sort)` would report
 # sort's success whatever find did — the same blindness handled for yq below,
 # and worse here, because this list is what every escalation prints. Errors go
 # to stderr rather than /dev/null for the same reason.
-if ! suite_files=$(find hack/e2e-chainsaw -mindepth 2); then
+if ! suite_files=$(find hack/e2e-chainsaw -mindepth 2 \( ! -type d -o -name chainsaw-test.yaml -o -name chainsaw-test.yml \)); then
   echo "select-e2e: find failed listing the Chainsaw suites under hack/e2e-chainsaw — nothing can be decided without that list" >&2
   exit 1
 fi
