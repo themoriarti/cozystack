@@ -61,7 +61,7 @@ assert_full_suite() {
 @test "operator diff selects all dependent app suites" {
     # postgres-operator is depended on by postgres-application, harbor-application
     # (Harbor uses postgres as its backing DB), and monitoring-application (Grafana
-    # DB). monitoring has no chainsaw suite so it's filtered out by the selector.
+    # DB), each of which has a chainsaw suite.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/postgres-operator/values.yaml" > "$tmp/diff"
@@ -874,14 +874,18 @@ assert_full_suite() {
 }
 
 @test "a path owned by several sources counts as covered if any one is" {
-    # system/postgres-operator belongs to two PackageSources: cozystack.monitoring,
-    # which reaches no runnable suite, and cozystack.postgres-operator, which
-    # reaches postgres-application and harbor-application (Harbor uses postgres as
-    # its backing DB). Coverage is decided over the path's sources together, which
-    # is why the unit is the path and not the source — deciding per source would
-    # escalate on the monitoring half and run everything for every change here.
+    # system/postgres-operator belongs to two PackageSources: cozystack.monitoring
+    # and cozystack.postgres-operator, which reaches postgres-application,
+    # harbor-application (Harbor uses postgres as its backing DB) and
+    # monitoring-application. Coverage is decided over the path's sources
+    # together, which is why the unit is the path and not the source — deciding
+    # per source would escalate on a half that reaches nothing and run everything
+    # for every change here. cozystack.monitoring maps to the monitoring
+    # suite by name, so it is renamed below to a source that reaches no suite,
+    # which is the half this test needs.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
+    yq -i '.metadata.name = "cozystack.monitoring-stack"' "$tmp/sources/monitoring.yaml"
     # Guard the premise. Filter outside yq: a trailing `| $n` re-emits the
     # binding whether or not the select() matched, so counting that way returns
     # every source in the graph and can never fail. Route the yq output through
@@ -893,7 +897,7 @@ assert_full_suite() {
     [ "$owners" -ge 2 ]
     echo "packages/system/postgres-operator/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$output" = "harbor postgres" ]
+    [ "$output" = "harbor monitoring postgres" ]
     rm -rf "$tmp"
 }
 
