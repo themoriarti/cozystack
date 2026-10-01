@@ -2481,6 +2481,46 @@ STUB
   rm -rf "$d"
 }
 
+@test "a pod walk that stopped early does not call itself complete" {
+  # Both ways out of the walk before its end -- the pod cap and the pod
+  # section's share of the budget -- name what they left behind, and the line
+  # after them must not then call the capture complete.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  'get pods -A '*)
+    echo 'tenant-test|wedged-a|10.0.0.1|node-a|False|Running||eol'
+    echo 'tenant-test|wedged-b|10.0.0.2|node-b|False|Running||eol'
+    exit 0 ;;
+  # Hangs only when the test asks it to, so the budget run spends the pod
+  # section's share before the walk starts.
+  *'app=ovn-central'*) [ -n "${STUB_HANG:-}" ] && sleep 300 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  real_timeout=$(command -v timeout)
+  dp_cut_timeout "$d/bin"
+  COZY_DATAPLANE_MAX_PODS=1 "$real_timeout" 60 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/cap" >"$d/log" 2>&1
+  # Positive controls: the cap fired, and the budget ran out before the walk.
+  grep -q 'reached MAX_PODS=1 cap' "$d/cap/capture-notes.txt"
+  STUB_HANG=1 DP_REAL_TIMEOUT="$real_timeout" DP_PASS='*kubectl get pods -A *' \
+    COZY_DATAPLANE_BUDGET=4 COZY_DATAPLANE_LB_RESERVE=1 \
+    "$real_timeout" 60 env PATH="$d/bin:$PATH" "$SCRIPT" "$d/budget" >>"$d/log" 2>&1
+  grep -q "the pod section's share of the 4s budget is spent" "$d/budget/capture-notes.txt"
+  for notes in "$d/cap/capture-notes.txt" "$d/budget/capture-notes.txt"; do
+    if grep -q 'host->pod data-plane capture complete' "$notes"; then
+      echo "a walk that stopped early called itself complete:"
+      cat "$notes"
+      exit 1
+    fi
+    grep -q 'host->pod data-plane capture stopped early' "$notes"
+  done
+  rm -rf "$d"
+}
+
 @test "a pod section whose last call the deadline cut says so in the notes" {
   # The section note used to be written only when a call was refused. When the
   # call the deadline cuts is the section's last, nothing is refused after it,

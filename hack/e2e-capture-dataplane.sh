@@ -553,9 +553,10 @@ mkdir -p "$OUT" 2>/dev/null || exit 0
 # one's.
 NOTES="$OUT/capture-notes.txt"
 
-# dp_new_run <file> -- the separator every per-run file carries between runs,
-# written only when the file already holds an earlier one. Each capture file is
-# appended to rather than truncated, for the reason the notes are.
+# dp_new_run <file> -- the separator the per-pod, per-node, per-LB and tcpdump
+# files carry between runs, written only when the file already holds an
+# earlier one. Those files are appended to rather than truncated, for the
+# reason the notes are.
 dp_new_run() {
   if [ -s "$1" ]; then
     printf -- '--- new capture run ---\n' >> "$1" 2>/dev/null || true
@@ -1157,11 +1158,13 @@ else
 
   i=0
   printf '%s\n' "$affected" | {
+  _walk_end=complete
   while IFS='|' read -r ns pod podip node _ready _phase _hostnet _eol; do
     [ -n "$ns" ] && [ -n "$pod" ] && [ -n "$node" ] || continue
     i=$((i + 1))
     if [ "$i" -gt "$MAX_PODS" ]; then
       log "reached MAX_PODS=$MAX_PODS cap; $((ncount - MAX_PODS)) more affected pod(s) NOT captured"
+      _walk_end="stopped early -- see the line above"
       break
     fi
     # Declined out loud rather than walked: past the deadline every call below
@@ -1169,6 +1172,7 @@ else
     # nothing.
     if [ "$(dp_clip 1)" -le 0 ]; then
       log "the pod section's share of the ${DP_BUDGET}s budget is spent; $((ncount - i + 1)) affected pod(s) NOT captured"
+      _walk_end="stopped early -- see the line above"
       break
     fi
 
@@ -1186,7 +1190,7 @@ else
     capture_pod_dataplane "$ns" "$pod" "$podip" "$node" "NotReady, Ready=$_ready" >> "$pf" 2>&1 || true
     capture_pod_reference "$node" "$pf"
   done
-  log "host->pod data-plane capture complete"
+  log "host->pod data-plane capture $_walk_end"
   }
 fi
 
