@@ -141,6 +141,13 @@
   echo "$out" | grep -q -- '--push=0 --load=1'
 }
 
+@test "talos publishes nothing to the registry with PUSH=0" {
+  out=$(make -n -B -C packages/core/talos image-talos PUSH=0 PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0)
+  echo "$out" | grep -q 'docker://'
+  pushes=$(echo "$out" | grep 'docker://' | grep -vF '[ "0" = "1" ]' || true)
+  if [ -n "$pushes" ]; then echo "FAIL: talos pushes with PUSH=0: $pushes"; false; fi
+}
+
 @test "CACHE_TAG moves the cache ref of every image" {
   # The arm64 leg writes its own mode=max cache. Sharing the amd64 ref would
   # make every write from one leg evict the other's layers.
