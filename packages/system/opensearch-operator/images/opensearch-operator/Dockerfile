@@ -78,16 +78,23 @@ RUN curl -sSL https://github.com/opensearch-project/opensearch-k8s-operator/arch
 COPY patches /patches
 RUN git apply /patches/*.diff
 
-WORKDIR /workspace/opensearch-operator
-
-# The patches carry their own tests and nothing else in this repository runs
-# them: the build below compiles main.go, so a test file that had stopped
-# compiling, or stopped asserting, would still produce an image. These two
-# package trees are the ones the patches touch, and both run without a cluster.
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. Each package is tested from its own directory:
+# that finds the module it belongs to, and an empty list runs nothing.
+# The list is read into a variable first: a for loop drops the exit status
+# of a command substitution, so a patch git cannot read would leave the list
+# empty and the step green.
+# controllers/ is left out: its suite is envtest, which execs etcd and
+# kube-apiserver binaries the builder does not carry.
 # -race is on because the timeout tests run a listener in one goroutine and
 # inspect what it accepted from another: an unsynchronised access there passes
 # the plain run, so nothing else would catch it. The builder has cgo and gcc.
-RUN go test -race ./opensearch-gateway/... ./pkg/reconcilers/...
+RUN files=$(git apply --numstat /patches/*.diff) || exit 1; \
+    for dir in $(printf '%s\n' "$files" | cut -f3 | grep '\.go$' | xargs -r -n1 dirname | sort -u | grep -vx 'opensearch-operator/controllers'); do \
+      (cd "$dir" && go test -race .) || exit 1; \
+    done
+
+WORKDIR /workspace/opensearch-operator
 
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -a -o manager main.go
 
