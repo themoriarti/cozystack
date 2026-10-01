@@ -119,11 +119,12 @@ oci-output = $(if $(strip $(OCI_EXPORT_DIR)), --output type=oci$(comma)dest=$(OC
 # line. hack/stitch-multiarch.sh moves exactly those tags onto the multi-arch
 # index; no ref in the tree names a versioned tag, so this is how it learns
 # one was pushed. The append happens when the recipe is expanded, `make -n`
-# included, and is skipped under OCI_EXPORT_DIR, which pushes nothing.
+# included, and is skipped when the build pushes nothing (PUSH other than 1, or
+# OCI_EXPORT_DIR).
 image-tag-refs = $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(strip $(OCI_EXPORT_DIR)),,$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), $(REGISTRY)/$(1):latest))
 
 define image-tags
-$(foreach r,$(call image-tag-refs,$(1),$(2)),--tag $(r))$(call oci-output,$(1))$(if $(and $(strip $(PUSHED_TAGS_LOG)),$(if $(strip $(OCI_EXPORT_DIR)),,1)),$(shell printf '%s\n' $(call image-tag-refs,$(1),$(2)) >>'$(PUSHED_TAGS_LOG)'))
+$(foreach r,$(call image-tag-refs,$(1),$(2)),--tag $(r))$(call oci-output,$(1))$(if $(and $(strip $(PUSHED_TAGS_LOG)),$(filter 1,$(PUSH)),$(if $(strip $(OCI_EXPORT_DIR)),,1)),$(shell printf '%s\n' $(call image-tag-refs,$(1),$(2)) >>'$(PUSHED_TAGS_LOG)'))
 endef
 
 # cache-args <image-name>

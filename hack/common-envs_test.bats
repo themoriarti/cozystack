@@ -185,7 +185,7 @@
   if echo "$tags" | grep -q -- '-$'; then echo "FAIL: a tag ends in '-': $tags"; false; fi
 }
 
-@test "image-tags records every tag it pushes in PUSHED_TAGS_LOG, and nothing when unset or exporting" {
+@test "image-tags records every tag it pushes in PUSHED_TAGS_LOG, and nothing when unset, exporting or not pushing" {
   # The stitch moves exactly these tags onto the multi-arch index. A component
   # version pushed under PUBLISH_VERSIONED=1 is named by no ref in the tree, so
   # a tag missing here would stay on the amd64-only image.
@@ -200,6 +200,10 @@
   make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc BUILDER=b \
     OCI_EXPORT_DIR=/tmp/ocitest PUSHED_TAGS_LOG="$tmp/export-log" >/dev/null
   [ ! -e "$tmp/export-log" ]
+  # A build that does not push must not hand its tags to the stitch.
+  LOAD=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc BUILDER=b \
+    PUSHED_TAGS_LOG="$tmp/load-log" >/dev/null
+  if [ -s "$tmp/load-log" ]; then echo "FAIL: LOAD=1 logs tags it never pushed: $(cat "$tmp/load-log")"; false; fi
   rm -rf "$tmp"
 }
 
