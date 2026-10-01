@@ -451,7 +451,10 @@ cozy_wait_schedulable_node() {
 # default threshold covers that with margin. That makes it a precondition of
 # the replicated suite rather than a cleanup criterion: volumes earlier suites
 # legitimately keep can hold a node below it after this suite reclaimed
-# everything it used, which only the pre-suite baseline can tell apart.
+# everything it used, which only the pre-suite baseline can tell apart. It reads
+# the free capacity LINSTOR caches for thick pools (see
+# _cozy_linstor_pool_datasets), so it can understate a pool whose last destroy
+# was still freeing blocks when the satellite reported.
 cozy_wait_linstor_pool_free() {
   _min_free_gib="${1:-90}"
   _timeout="${2:-300}"
@@ -501,8 +504,43 @@ _cozy_linstor_pool_baseline_file() {
   printf '%s\n' "${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
 }
 
-# Capture the per-node free-capacity baseline after stale tenant cleanup and
-# before creating this suite's workers. Chainsaw executes `try` and `finally` in
+# Print every ZFS dataset under each node's LINSTOR storage pool as
+# `node dataset` rows, the pool's own root included, so a node whose pool holds
+# no volume still shows up as read. The names come from `zfs list` on the
+# satellite rather than from LINSTOR's free capacity: on a node with only thick
+# pools `linstor sp l` serves the figure cached at the satellite's last report,
+# which can be taken while `zfs destroy` is still freeing blocks in the
+# background, so a pool can read hundreds of MiB short of its baseline until
+# some later report with nothing left on it. A destroyed dataset's name is gone
+# by the time `zfs destroy` returns. The zpool is read off the pool's
+# `StorDriver/StorPoolName` property, under which LINSTOR stores the zpool of
+# both ZFS drivers, because it differs by lane: `data` on QEMU nodes,
+# `data-srvN` in container mode, where every node's pool is imported into one
+# shared kernel. Every read carries its own ceiling, so a wedged controller or
+# satellite fails the poll within 35s instead of holding the caller for good.
+_cozy_linstor_pool_datasets() {
+  _pools=$(timeout -k 5 30 kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
+    linstor --machine-readable sp l 2>/dev/null |
+    jq -r "first | .[] | select(.provider_kind | test(\"^ZFS\")) | \"\(.node_name) \(.props[\"StorDriver/StorPoolName\"] // \"\")\""
+  ' 2>/dev/null) || return 1
+  [ -n "$_pools" ] || return 1
+  _satellites=$(timeout -k 5 30 kubectl -n cozy-linstor get pods -l app.kubernetes.io/component=linstor-satellite \
+    -o jsonpath='{range .items[*]}{.spec.nodeName} {.metadata.name}{"\n"}{end}' 2>/dev/null) || return 1
+  while read -r _node _zpool; do
+    [ -n "$_node" ] && [ -n "$_zpool" ] || return 1
+    _pod=$(printf '%s\n' "$_satellites" | awk -v node="$_node" '$1 == node { print $2; exit }')
+    [ -n "$_pod" ] || return 1
+    _datasets=$(timeout -k 5 30 kubectl -n cozy-linstor exec "$_pod" --container=linstor-satellite -- \
+      zfs list -H -o name -t filesystem,volume,snapshot -r "$_zpool" </dev/null 2>/dev/null) || return 1
+    [ -n "$_datasets" ] || return 1
+    printf '%s\n' "$_datasets" | awk -v node="$_node" '{ print node " " $0 }'
+  done <<EOF
+$_pools
+EOF
+}
+
+# Capture the per-node dataset baseline after stale tenant cleanup and before
+# creating this suite's workers. Chainsaw executes `try` and `finally` in
 # separate shells, so the small state file is the hand-off between them.
 cozy_capture_linstor_pool_baseline() {
   _baseline_file=$(_cozy_linstor_pool_baseline_file)
@@ -511,62 +549,45 @@ cozy_capture_linstor_pool_baseline() {
   mkdir -p "$_baseline_dir"
   : >"$_baseline_file"
 
-  _baseline=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
-    linstor --machine-readable sp l 2>/dev/null |
-    jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.node_name):\(.free_capacity)\"" |
-    sort
-  ' 2>/dev/null) || _baseline=""
+  _baseline=$(_cozy_linstor_pool_datasets) || _baseline=""
   if [ -z "$_baseline" ]; then
-    echo "» ERROR: could not record the LINSTOR pool baseline; physical ZFS reclamation would be unverifiable" >&2
+    echo "» ERROR: could not record the LINSTOR pool baseline; reclamation of this suite's volumes would be unverifiable" >&2
     return 1
   fi
-  _baseline_nodes=$(printf '%s\n' "$_baseline" | awk -F: 'NF == 2 { print $1 }' | sort | tr '\n' ' ')
+  _baseline_nodes=$(printf '%s\n' "$_baseline" | awk '{ print $1 }' | sort -u | tr '\n' ' ')
   if [ "$_baseline_nodes" != "srv1 srv2 srv3 " ] \
-      || ! cozy_linstor_pools_at_baseline "$_baseline" "$_baseline" 0; then
-    echo "» ERROR: LINSTOR pool baseline is incomplete or malformed (expected numeric rows for srv1, srv2 and srv3): ${_baseline:-<empty>}" >&2
+      || printf '%s\n' "$_baseline" | awk 'NF != 2 { bad = 1 } END { exit !bad }'; then
+    echo "» ERROR: LINSTOR pool baseline is incomplete or malformed (expected 'node dataset' rows for srv1, srv2 and srv3): ${_baseline}" >&2
     return 1
   fi
   printf '%s\n' "$_baseline" >"$_baseline_file"
   echo "» LINSTOR pool baseline recorded:"
-  printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /'
+  printf '%s\n' "$_baseline" | sed 's/^/  baseline-dataset: /'
 }
 
-# Pure comparison used by the pool reclamation loop. Both captures contain
-# `node:free_capacity_kib` rows. Every node present in the baseline must still be
-# present and may fall short only by the small caller-provided metadata tolerance.
-# The 512 MiB default covers the ~0.27 GiB free-capacity drift measured between
-# two otherwise-clean container suites, while still rejecting the smallest known
-# leaked test volume (the 1 GiB ClickHouse keeper PVC). In the replicated lane
-# the drift from a baseline to its cleanup has not been measured; its pools are
-# thick ZFS as well, and the cleanups of the two kubernetes suites in the
-# 2026-09-30 nightly left srv2 about 1 MiB apart.
-cozy_linstor_pools_at_baseline() {
-  _baseline_rows="$1"
-  _current_rows="$2"
-  _tolerance_kib="${3:-524288}"
-  [ -n "$_baseline_rows" ] && [ -n "$_current_rows" ] || return 1
-  case "$_tolerance_kib" in
-    '' | *[!0-9]*) return 1 ;;
-  esac
-
-  while IFS=: read -r _baseline_node _baseline_kib; do
-    [ -n "$_baseline_node" ] && [ -n "$_baseline_kib" ] || return 1
-    _current_kib=$(printf '%s\n' "$_current_rows" | awk -F: -v node="$_baseline_node" '$1 == node { print $2; exit }')
-    [ -n "$_current_kib" ] || return 1
-    case "$_baseline_kib" in '' | *[!0-9]*) return 1 ;; esac
-    case "$_current_kib" in '' | *[!0-9]*) return 1 ;; esac
-    if [ "$(( _current_kib + _tolerance_kib ))" -lt "$_baseline_kib" ]; then
-      return 1
-    fi
-  done <<EOF
-$_baseline_rows
-EOF
-  return 0
+# Pure comparison of two `node dataset` listings. Prints `new <node> <dataset>`
+# for each dataset the current listing has and the baseline does not, and
+# `unread <node>` for each baseline node the current listing lacks, and fails
+# when it printed anything. A baseline dataset that is gone is not a finding:
+# the suite may have reclaimed something an earlier one left.
+cozy_linstor_pool_new_datasets() {
+  [ -n "$1" ] && [ -n "$2" ] || return 1
+  {
+    printf '%s\n' "$1"
+    printf '%s\n' '--'
+    printf '%s\n' "$2"
+  } | awk '
+    !current && $0 == "--" { current = 1; next }
+    !current { seen[$0] = 1; base[$1] = 1; next }
+    { read_nodes[$1] = 1; if (!($0 in seen)) { print "new " $0; bad = 1 } }
+    END {
+      for (node in base) if (!(node in read_nodes)) { print "unread " node; bad = 1 }
+      exit bad
+    }'
 }
 
 cozy_wait_linstor_pool_baseline() {
   _timeout="${1:-300}"
-  _tolerance_kib="${2:-524288}"
   _baseline_file=$(_cozy_linstor_pool_baseline_file)
   # Returns 2 here and 1 on a timeout, so the caller can tell an unchecked
   # reclamation from a failed one.
@@ -577,20 +598,20 @@ cozy_wait_linstor_pool_baseline() {
   _baseline=$(cat "$_baseline_file")
   _deadline=$(( $(date +%s) + _timeout ))
   _current=""
+  _residue=""
   while :; do
-    _current=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
-      linstor --machine-readable sp l 2>/dev/null |
-      jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.node_name):\(.free_capacity)\"" |
-      sort
-    ' 2>/dev/null) || _current=""
-    if cozy_linstor_pools_at_baseline "$_baseline" "$_current" "$_tolerance_kib"; then
-      echo "» LINSTOR pools returned to their pre-suite baseline"
+    _current=$(_cozy_linstor_pool_datasets) || _current=""
+    if [ -n "$_current" ] && _residue=$(cozy_linstor_pool_new_datasets "$_baseline" "$_current"); then
+      echo "» LINSTOR pools hold no dataset beyond their pre-suite baseline"
       return 0
     fi
     if [ "$(date +%s)" -ge "$_deadline" ]; then
       echo "» ERROR: LINSTOR pools did not return to their pre-suite baseline within ${_timeout}s; a worker or CDI scratch volume may still occupy ZFS space" >&2
-      printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /' >&2
-      printf '%s\n' "${_current:-<the LINSTOR pool probe returned nothing>}" | sed 's/^/  current-free-kib: /' >&2
+      if [ -z "$_current" ]; then
+        echo "  linstor-pool: the dataset probe returned nothing" >&2
+      else
+        printf '%s\n' "$_residue" | sed 's/^/  linstor-pool: /' >&2
+      fi
       return 1
     fi
     sleep 5
@@ -660,13 +681,13 @@ cozy_cleanup() {
     echo "» ERROR: cleanup has no test name; scoped tenant drain cannot be verified" >&2
     cleanup_failed=1
   fi
-  # Wait for this suite's saved per-node baseline: that catches delayed physical
-  # teardown, DRBD's included, without requiring volumes the suite did not
-  # create to vanish.
+  # Wait for this suite's saved per-node baseline: that catches a volume LINSTOR
+  # has not destroyed yet, or never will, without requiring volumes the suite
+  # did not create to vanish. Blocks a destroy is still freeing do not count.
   local pool_rc=0
   cozy_wait_linstor_pool_baseline 300 || pool_rc=$?
   if [ "$pool_rc" -eq 1 ]; then
-    echo "» ERROR: LINSTOR capacity did not return to the pre-suite level" >&2
+    echo "» ERROR: LINSTOR pools did not return to the pre-suite level" >&2
   fi
   [ "$pool_rc" -eq 0 ] || cleanup_failed=1
   return "$cleanup_failed"
@@ -5082,7 +5103,7 @@ run_kubernetes_test() {
     return 1
   fi
   # Save the post-stale-cleanup state for the separate Chainsaw `finally` shell;
-  # cleanup later verifies that this suite returned every node to these figures.
+  # cleanup later verifies that this suite left no dataset outside this listing.
   if ! cozy_capture_linstor_pool_baseline; then
     echo "cannot verify LINSTOR reclamation without a complete baseline" >&2
     return 1
