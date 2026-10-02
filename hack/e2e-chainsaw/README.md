@@ -18,7 +18,7 @@ hack/e2e-chainsaw/
 └── ...
 ```
 
-Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`.
+Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`, `seaweedfs`.
 
 ## What Chainsaw buys over the BATS suite
 
@@ -54,7 +54,7 @@ Declarative suites assert on `status.conditions` and concrete fields. Inherently
 
 ## Running locally
 
-Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` additionally needs `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`harbor` need `jq`.
+Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` and `seaweedfs` additionally need `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`harbor` need `jq`.
 
 ```bash
 # install chainsaw
