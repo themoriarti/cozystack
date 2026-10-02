@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -279,5 +280,53 @@ func TestPackageSourceCRDHasUpgradeCRDsEnum(t *testing.T) {
 		if !got[want] {
 			t.Errorf("enum value %q missing from upgradeCRDs; got %v", want, got)
 		}
+	}
+}
+
+// TestGoldenImageHelmReleasesWaitForImport builds the HelmRelease spec from
+// each shipped golden image catalog. Its DataVolumes start importing at
+// install, and without the gate the release is Ready before any image exists.
+func TestGoldenImageHelmReleasesWaitForImport(t *testing.T) {
+	want := []kustomize.CustomHealthCheck{{
+		APIVersion: "cdi.kubevirt.io/v1beta1",
+		Kind:       "DataVolume",
+		HealthCheckExpressions: kustomize.HealthCheckExpressions{
+			Failed:  "has(status.phase) && status.phase == 'Failed'",
+			Current: "has(status.phase) && status.phase == 'Succeeded'",
+		},
+	}}
+	for _, component := range []string{"vm-default-images", "kubernetes-worker-image"} {
+		t.Run(component, func(t *testing.T) {
+			path := filepath.Join("..", "..", "packages", "core", "platform", "sources", component+".yaml")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			var ps cozyv1alpha1.PackageSource
+			if err := yaml.Unmarshal(data, &ps); err != nil {
+				t.Fatalf("unmarshal %s: %v", path, err)
+			}
+
+			var install *cozyv1alpha1.ComponentInstall
+			for _, v := range ps.Spec.Variants {
+				for _, c := range v.Components {
+					if c.Name == component {
+						install = c.Install
+					}
+				}
+			}
+			if install == nil {
+				t.Fatalf("%s: component %s has no install block", path, component)
+			}
+
+			spec := (&PackageReconciler{}).buildHelmReleaseSpec(install, "x")
+
+			if !reflect.DeepEqual(spec.HealthCheckExprs, want) {
+				t.Errorf("HealthCheckExprs = %+v, want %+v", spec.HealthCheckExprs, want)
+			}
+			if spec.WaitStrategy == nil || spec.WaitStrategy.Name != helmv2.WaitStrategyPoller {
+				t.Errorf("WaitStrategy = %+v, want poller: the expressions are not evaluated under any other strategy", spec.WaitStrategy)
+			}
+		})
 	}
 }

@@ -15,6 +15,13 @@
 ## `cozystack.kubernetes-worker-image` to `bundles.enabledPackages` in the Cozystack
 ## config; without it no golden is created and every worker imports over HTTP.
 ##
+## The package reports Ready only once every golden in images[] has imported. One
+## golden that cannot be fetched keeps the whole package not Ready, retrying with
+## no time limit, until it imports or its entry is removed. A golden that reached
+## phase Failed does not import again by itself: delete it and the next retry
+## recreates it. Pools do not wait on that status: they read each golden
+## directly, as described below.
+##
 ## A tenant node group opts into a clone explicitly by setting `osImage.builtin`
 ## (optionally overriding schematicID/version) on its own `KubernetesNodes` resource
 ## -- one per pool since the Phase 2 split, NOT `nodeGroups` on the parent `Kubernetes`
