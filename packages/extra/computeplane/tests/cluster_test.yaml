@@ -40,6 +40,15 @@ tests:
           path: spec.chartRef.kind
           value: ExternalArtifact
 
+  - it: withholds the admin kubeconfig from the tenant's dashboard Role
+    documentSelector:
+      path: metadata.name
+      value: computeplane-cluster
+    asserts:
+      - equal:
+          path: spec.values.withholdAdminKubeconfig
+          value: true
+
   - it: pins the Cozystack-enablement addons as inline values
     documentSelector:
       path: metadata.name
