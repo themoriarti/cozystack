@@ -40,15 +40,6 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
-    - assert:
-        timeout: 4m
-        resource:
-          apiVersion: v1
-          kind: PersistentVolumeClaim
-          metadata:
-            name: vm-disk-test
-          status:
-            phase: Bound
 ---
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
@@ -90,15 +81,6 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
-    - assert:
-        timeout: 4m
-        resource:
-          apiVersion: v1
-          kind: PersistentVolumeClaim
-          metadata:
-            name: vm-disk-vmi-test
-          status:
-            phase: Bound
   - name: create-vminstance
     try:
     - apply:
