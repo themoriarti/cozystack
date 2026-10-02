@@ -1,7 +1,8 @@
-# Chainsaw port of hack/e2e-apps/vminstance.bats. Two scenarios: a standalone
-# VMDisk, and a VMInstance booting from its own VMDisk. Both download the Ubuntu
-# noble cloud image, so the readiness timeouts are generous. Chainsaw deletes
-# the VMDisk/VMInstance CRs it applied at cleanup.
+# Chainsaw port of hack/e2e-apps/vminstance.bats. Scenarios: a standalone
+# VMDisk, a VMDisk whose import can never finish, and a VMInstance booting from
+# its own VMDisk. The first and the last download the Ubuntu noble cloud image,
+# so the readiness timeouts are generous. Chainsaw deletes the VMDisk/VMInstance
+# CRs it applied at cleanup.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -20,20 +21,8 @@ spec:
         file: vmdisk.yaml
   - name: wait-vmdisk-ready
     try:
-    # 11m: above the 600s install timeout cozystack-api gives this release;
-    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
     - assert:
         timeout: 11m
-        resource:
-          apiVersion: helm.toolkit.fluxcd.io/v2
-          kind: HelmRelease
-          metadata:
-            name: vm-disk-test
-          status:
-            (conditions[?type == 'Ready']):
-            - status: "True"
-    - assert:
-        timeout: 5m
         resource:
           apiVersion: cdi.kubevirt.io/v1beta1
           kind: DataVolume
@@ -42,6 +31,66 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMDisk
+          metadata:
+            name: test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+            (conditions[?type == 'WorkloadsReady']):
+            - status: "True"
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: vmdisk-unreachable
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolume
+      name: vm-disk-unreachable
+  steps:
+  - name: create-vmdisk
+    try:
+    - apply:
+        file: vmdisk-unreachable.yaml
+  # Checks that a disk whose import cannot complete has a Ready release and
+  # is reported not operational. A DataVolume that has not started yet is not
+  # operational either, so the VMDisk assert follows the importer's first
+  # failure: CDI reports it as Running=False with the terminated container's
+  # reason, Error.
+  - name: wait-workloads-not-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-unreachable
+          status:
+            (conditions[?type == 'Running']):
+            - status: "False"
+              reason: Error
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMDisk
+          metadata:
+            name: unreachable
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+            (conditions[?type == 'WorkloadsReady']):
+            - status: "False"
+              reason: DataVolumeNotReady
 ---
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
@@ -63,19 +112,8 @@ spec:
     try:
     - apply:
         file: vmdisk-vmi.yaml
-    # Same 11m as vm-disk-test above.
     - assert:
         timeout: 11m
-        resource:
-          apiVersion: helm.toolkit.fluxcd.io/v2
-          kind: HelmRelease
-          metadata:
-            name: vm-disk-vmi-test
-          status:
-            (conditions[?type == 'Ready']):
-            - status: "True"
-    - assert:
-        timeout: 5m
         resource:
           apiVersion: cdi.kubevirt.io/v1beta1
           kind: DataVolume
@@ -83,6 +121,18 @@ spec:
             name: vm-disk-vmi-test
           status:
             (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMDisk
+          metadata:
+            name: vmi-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+            (conditions[?type == 'WorkloadsReady']):
             - status: "True"
   - name: create-vminstance
     try:
