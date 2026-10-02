@@ -106,6 +106,26 @@ tests:
           path: data["config.yaml"]
           pattern: "(?m)^    rate: 99420$"
 
+  # int64 returns 0 for digits beyond int64, which the processor refuses at
+  # start; the platform never writes such a value, but a collector that cannot
+  # start would take the tenant's tracing down with it.
+  - it: falls back to the default rate on digits beyond int64
+    template: templates/vtraces/collector.yaml
+    set:
+      _cluster:
+        tracing-central-tenant-bytes-per-second: "99999999999999999999"
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    rate: 99420$"
+
   - it: falls back to the default rate on 0
     template: templates/vtraces/collector.yaml
     set:

@@ -671,9 +671,10 @@ monitoring:
   # tenant writes at most the disk cap of a default 10Gi store, counted
   # uncompressed, and the store keeps it compressed. Each collector pod
   # starts with a full bucket, so a pod start lets up to 4 MiB through above
-  # the rate. Raise it with the store's size. A change upgrades every release
-  # in every tenant once, since it travels in the cozystack-values Secret
-  # they all read.
+  # the rate. Raise it with the store's size, as a whole number up to
+  # 1099511627776 (1 TiB/s); anything else fails the render. A change
+  # upgrades every release in every tenant once, since it travels in the
+  # cozystack-values Secret they all read.
   tracingCentralTenantBytesPerSecond: 0
 # Backup storage overrides for the platform-managed cozy-default BackupClass.
 # Everything set here is forwarded verbatim into the emitted

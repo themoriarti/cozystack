@@ -61,7 +61,7 @@
        rate. */ -}}
 {{- $tenantRate := int64 99420 -}}
 {{- $configured := toString (index (.Values._cluster | default dict) "tracing-central-tenant-bytes-per-second" | default "") -}}
-{{- if regexMatch "^[1-9][0-9]*$" $configured }}{{ $tenantRate = int64 $configured }}{{ end -}}
+{{- if regexMatch "^[1-9][0-9]{0,12}$" $configured }}{{ $tenantRate = int64 $configured }}{{ end -}}
 {{- $replicas := int64 $c.replicas -}}
 {{- $rate = div (add $tenantRate (sub $replicas 1)) $replicas -}}
 {{- $burst = max 4194304 $rate -}}

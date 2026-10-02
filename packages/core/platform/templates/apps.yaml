@@ -257,16 +257,22 @@ stringData:
              to. Only written when set: every release in every tenant reads
              this Secret, and a key appearing would upgrade all of them. */}}
       {{- /* Helm reads a number from values as a float64, so a whole number
-             is checked as one and written back as int64 digits. */}}
+             is checked as one and written back as int64 digits. Sprig's int64
+             reads a leading zero as octal and returns 0 on a parse error, so a
+             string is converted only once it is plain decimal digits. The
+             ceiling (1 TiB/s) keeps every value exact as a float64 and keeps
+             the collector's per-replica split clear of int64 overflow. */}}
+      {{- $tracingMax := 1099511627776 }}
       {{- $tracingRaw := dig "tracingCentralTenantBytesPerSecond" 0 (.Values.monitoring | default dict) }}
       {{- $tracingRate := -1 }}
       {{- if kindIs "string" $tracingRaw }}
-      {{-   if regexMatch "^[0-9]+$" $tracingRaw }}{{ $tracingRate = int64 $tracingRaw }}{{ end }}
+      {{-   if regexMatch "^(0|[1-9][0-9]{0,12})$" $tracingRaw }}{{ $tracingRate = int64 $tracingRaw }}{{ end }}
       {{- else if or (kindIs "float64" $tracingRaw) (kindIs "int64" $tracingRaw) (kindIs "int" $tracingRaw) }}
-      {{-   if eq (floor (float64 $tracingRaw)) (float64 $tracingRaw) }}{{ $tracingRate = int64 $tracingRaw }}{{ end }}
+      {{-   $f := float64 $tracingRaw }}
+      {{-   if eq (floor $f) $f }}{{ $tracingRate = int64 $tracingRaw }}{{ end }}
       {{- end }}
-      {{- if lt (int64 $tracingRate) 0 }}
-      {{-   fail (printf "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second, or 0 for the default; got %v" $tracingRaw) }}
+      {{- if or (lt (int64 $tracingRate) 0) (gt (int64 $tracingRate) (int64 $tracingMax)) }}
+      {{-   fail (printf "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second, at most %d, or 0 for the default; got %v" $tracingMax $tracingRaw) }}
       {{- end }}
       {{- if gt (int64 $tracingRate) 0 }}
       tracing-central-tenant-bytes-per-second: {{ int64 $tracingRate | quote }}
