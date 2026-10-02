@@ -954,16 +954,17 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
-@test "a seaweedfs change selects every suite that uses tenant-root's object storage" {
-    # cozystack.seaweedfs-application used to map to a seaweedfs suite that does
-    # not exist, so every seaweedfs change ran the whole suite. bucket is not the
-    # only suite it can break. The backup round-trips write to the same instance
-    # through the in-cluster seaweedfs-s3 endpoint, most of them verifying its
-    # CA, which bucket skips; harbor gets its registry storage from a BucketClaim
-    # served by the seaweedfs COSI driver, and no graph edge links the two. The
-    # expected set is read off the suites' own yaml rather than written here, so
-    # a new suite that names the endpoint or a BucketClaim there and is left out
-    # of src_to_suites goes red. A suite reaching seaweedfs only through a
+@test "a seaweedfs change selects every suite that uses seaweedfs object storage" {
+    # cozystack.seaweedfs-application used to map to a seaweedfs suite that did
+    # not exist, so every seaweedfs change ran the whole suite. The seaweedfs
+    # suite, which runs an instance of its own, is not the only one it can
+    # break. bucket drives tenant-root's instance, the backup round-trips write
+    # to that instance through the in-cluster seaweedfs-s3 endpoint, most of
+    # them verifying its CA, which bucket skips; harbor gets its registry
+    # storage from a BucketClaim served by the seaweedfs COSI driver, and no
+    # graph edge links the two. The expected set is read off the suites' own
+    # yaml rather than written here, so a new suite that names the endpoint or
+    # a BucketClaim there and is left out of src_to_suites goes red. A suite reaching seaweedfs only through a
     # sourced script is invisible to the scan; the round-trips pass S3_ENDPOINT
     # in their yaml, which is what makes it hold today. Comment lines are
     # skipped, which is what keeps etcd out: its round-trip is gated off in CI
