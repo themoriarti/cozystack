@@ -31,6 +31,18 @@ spec:
     try:
     - apply:
         file: kafka.yaml
+    # Both node pools set deleteClaim: false, so the volumes outlive the app
+    # and would hold their LINSTOR space for every later suite. Chainsaw runs
+    # a step's cleanup ops after this step's cleaner has deleted the app, on a
+    # failed run as well. A volume a terminating broker still mounts finishes
+    # deleting once that pod is gone, and the delete waits for that.
+    cleanup:
+    - delete:
+        ref:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          labels:
+            strimzi.io/cluster: kafka-test
 
   - name: wait-ready
     try:
@@ -299,6 +311,20 @@ spec:
           set -eu
           cd ../../..
           NAMESPACE="$NAMESPACE" examples/backups/kafka/cleanup.sh
+    # cleanup.sh leaves the volumes, which deleteClaim: false keeps past each
+    # app's uninstall, so they go here, after both apps are gone.
+    - delete:
+        ref:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          labels:
+            strimzi.io/cluster: kafka-kafka-test
+    - delete:
+        ref:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          labels:
+            strimzi.io/cluster: kafka-kafka-restore
 
   # cleanup.sh above deleted both Kafka apps and waited for them to go, so their
   # uninstalls have run, and the node pools the migration hook created outside
