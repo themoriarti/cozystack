@@ -101,3 +101,25 @@ tests:
       - equal:
           path: spec.healthCheckExprs[2].failed
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  # The shared-central vmauth carries the same operator status contract. Every
+  # central tenant writes and reads through it, so a failed vmauth must not
+  # leave tenant-root's release Ready; outside a hosting tenant-root no VMAuth
+  # is in the inventory and the entry is inert.
+  - it: gates readiness on the VMAuth status.updateStatus
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[3].apiVersion
+          value: operator.victoriametrics.com/v1beta1
+      - equal:
+          path: spec.healthCheckExprs[3].kind
+          value: VMAuth
+      - equal:
+          path: spec.healthCheckExprs[3].current
+          value: "has(status.updateStatus) && status.updateStatus == 'operational'"
+      - equal:
+          path: spec.healthCheckExprs[3].inProgress
+          value: "has(status.updateStatus) && status.updateStatus == 'expanding'"
+      - equal:
+          path: spec.healthCheckExprs[3].failed
+          value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"

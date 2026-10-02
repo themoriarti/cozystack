@@ -92,3 +92,11 @@ false
 {{- if .Values.gateway -}}true{{- else -}}false{{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{- /* The shared-central tracing hops out of a tenant: an opted-in tenant with
+       Monitoring (which deploys the collector and Grafana that use them),
+       never tenant-root, which hosts the shared store. Both egress rules read
+       this one condition so the write and read paths cannot be split. */}}
+{{- define "tenant.tracingCentralEgress" -}}
+{{- if and (ne (include "tenant.name" .) "tenant-root") .Values.tracingCentral .Values.monitoring -}}true{{- end -}}
+{{- end -}}
