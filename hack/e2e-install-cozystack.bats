@@ -240,11 +240,13 @@
   case "$storage_class" in
     replicated) ;;
     local)
-      # VictoriaLogs is the only root-tenant install workload that explicitly
+      # The Tenant patch below leaves root monitoring off, so VictoriaLogs does
+      # not render in this run; the override is here for a run that turns it
+      # on. VictoriaLogs is the only root-tenant workload that explicitly
       # defaults to replicated instead of inheriting the cluster's default
-      # StorageClass. The container lane has no DRBD and intentionally exposes
-      # only local. Put the override in the values Secret BEFORE monitoring is
-      # enabled, so the monitoring HelmRelease's first render creates local
+      # StorageClass, and the container lane has no DRBD and intentionally
+      # exposes only local. The override goes into the values Secret before the
+      # Tenant patch, so the monitoring HelmRelease's first render creates local
       # claims. Patching that HelmRelease after creation races the operator: a
       # replicated PVC can be created first, and storageClassName is immutable.
       # Flux drift detection is disabled, so the owning cozystack-basics release
@@ -268,11 +270,17 @@
       ;;
   esac
 
-  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
+  # Root monitoring stays off: no suite inspects the tenant-root instance, and
+  # its bring-up (VictoriaMetrics, VictoriaLogs, Grafana and its CNPG database)
+  # competes with the rest of the install for node capacity, so a slow start
+  # could fail a pull request that never touched monitoring. The monitoring
+  # package itself stays installed, because tenant-application declares
+  # dependsOn cozystack.monitoring-application.
+  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":false,"etcd":true,"isolated":true, "seaweedfs": true}}'
 
-  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
+  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
   # tenant-root parent HR only flips Ready after every child HR is Ready,
-  # so listing all four top-level children plus the parent gives precise
+  # so listing the children this patch enables plus the parent gives precise
   # failure messages without redundant separate waits. seaweedfs now
   # installs as a serial chain seaweedfs-db (CNPG bootstrap) ->
   # seaweedfs-system (master raft quorum) -> seaweedfs wrapper, which
@@ -281,7 +289,7 @@
   # parent's Ready can land past the HR's single 15m timeout window; the HR
   # re-reconciles every 1m until it converges, so this wait is 20m to observe
   # that eventual Ready rather than expiring first.
-  kubectl wait hr/etcd hr/ingress hr/monitoring hr/seaweedfs hr/tenant-root \
+  kubectl wait hr/etcd hr/ingress hr/seaweedfs hr/tenant-root \
     -n tenant-root --timeout=20m --for=condition=ready
 
 
@@ -301,78 +309,6 @@
   kubectl -n tenant-root wait pod \
     -l app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator \
     --for=condition=ready --timeout=10m
-
-  # VictoriaMetrics components. vmalert/vmalertmanager, vlclusters/generic and
-  # vmcluster/shortterm+longterm are all vm-operator-managed resources that flip
-  # updateStatus=operational only once their workloads are scheduled and Ready.
-  # During platform bring-up they contend for node resources with the rest of
-  # the install, so convergence is load-sensitive: on a calm sandbox each reaches
-  # operational in under a second, but under install-time load (concurrent e2e
-  # sandboxes on one runner) monitoring bring-up is slow. vmalert already uses a
-  # 15m budget; vlclusters and vmcluster used 10m, so this block carried a
-  # 10m/15m split even though all three contend for the same node capacity and a
-  # slow VictoriaLogs bring-up can fail the install on a PR that never touched
-  # monitoring. Unify the block on one 15m budget (near-zero cost in the happy
-  # path, comfortably inside the E2E job budget) and dump live status on timeout
-  # so a genuine stuck-not-slow regression stays legible instead of surfacing as
-  # a bare "timed out" line.
-  timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  timeout 60 sh -ec 'until kubectl get vmalertmanager/alertmanager -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vmalert/vmalert-shortterm, vmalertmanager/alertmanager did not reach updateStatus=operational ==="
-    kubectl get vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get vlclusters/generic -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vlclusters/generic did not reach updateStatus=operational ==="
-    kubectl get vlclusters/generic -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vmcluster/shortterm,longterm did not reach updateStatus=operational ==="
-    kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-
-  # Grafana. The grafana-db CNPG cluster and the grafana-deployment Deployment
-  # complete the tenant-root monitoring bring-up and contend for the same node
-  # resources as the VictoriaMetrics stack above during install. Under
-  # install-time load (concurrent e2e sandboxes on one runner) either can be slow
-  # and fail the install on a PR that never touched monitoring, so both move from
-  # their 10m budget to the same uniform 15m as the vm-operator waits above and
-  # dump live status on timeout to keep a genuine stuck-not-slow regression
-  # legible instead of surfacing as a bare "timed out" line.
-  timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=15m || {
-    echo "=== clusters.postgresql.cnpg.io/grafana-db did not reach condition=ready ==="
-    kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=15m || {
-    echo "=== deploy/grafana-deployment did not reach condition=available ==="
-    kubectl get deploy/grafana-deployment -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-
-  # Verify Grafana via ingress
-  ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-  if ! curl -sS -k "https://${ingress_ip}" -H 'Host: grafana.example.org' --max-time 30 | grep -q Found; then
-    echo "Failed to access Grafana via ingress at ${ingress_ip}" >&2
-    exit 1
-  fi
 }
 
 @test "Keycloak OIDC stack is healthy" {
