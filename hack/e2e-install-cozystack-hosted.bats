@@ -68,8 +68,15 @@
   # The variant's promise is that nothing in it needs Cilium or a
   # Cozystack-provided StorageClass. A green install proves that only if those
   # were really absent while it converged.
-  if kubectl get crd ciliumnetworkpolicies.cilium.io >/dev/null 2>&1; then
-    echo "Cilium CRDs are installed; the lane no longer tests a cluster without them" >&2
+  # Any CRD in the group counts, not only the policy kinds. The premise is a
+  # cluster with no Cilium at all, and a partial set breaks it even where the
+  # tenant guard, which needs both policy kinds, would still skip its policies.
+  # Read before counting, so a failed list fails the test instead of counting
+  # as zero.
+  crd_groups="$(kubectl get crd -o jsonpath='{range .items[*]}{.spec.group}{"\n"}{end}')"
+  cilium_crds="$(printf '%s\n' "$crd_groups" | grep -cx 'cilium\.io' || true)"
+  if [ "$cilium_crds" -ne 0 ]; then
+    echo "$cilium_crds cilium.io CRDs are installed; the lane no longer tests a cluster without them" >&2
     exit 1
   fi
   for sc in replicated local; do

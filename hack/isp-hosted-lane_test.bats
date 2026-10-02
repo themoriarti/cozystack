@@ -67,3 +67,50 @@ TESTING_MAKEFILE="$REPO_ROOT/packages/core/testing/Makefile"
   grep -Eq '^[[:space:]]+KIND_NODE_IMAGE: "?kindest/node:v[0-9.]+@sha256:[0-9a-f]{64}"?$' "$WORKFLOW"
   grep -Fq 'sha256sum --check' "$WORKFLOW"
 }
+
+# Runs the install suite's no-Cilium check against a stubbed kubectl. The copy
+# drops the e2e- prefix so hack/cozytest.sh arms no cluster captures, which
+# would otherwise run the stub as if it were a cluster.
+@test "the suite's no-Cilium check fails on any cilium.io CRD, not only CiliumNetworkPolicy" {
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/bin"
+  cp "$INSTALL" "$tmp/hosted.bats"
+  printf '%s\n' \
+    '#!/bin/sh' \
+    '[ "$1 $2" = "get storageclass" ] && exit 1' \
+    '[ "$1 $2" = "get crd" ] || exit 2' \
+    'shift 2' \
+    '[ -n "$FAKE_LIST_FAILS" ] && exit 1' \
+    'case "$*" in' \
+    '  -o\ jsonpath=*) for n in $FAKE_CRDS; do echo "${n#*.}"; done ;;' \
+    '  -*) exit 2 ;;' \
+    '  *) for n in $FAKE_CRDS; do [ "$n" = "$1" ] && exit 0; done; exit 1 ;;' \
+    'esac' > "$tmp/bin/kubectl"
+  chmod +x "$tmp/bin/kubectl"
+
+  rc=0
+  PATH="$tmp/bin:$PATH" FAKE_CRDS="packages.cozystack.io ciliumendpoints.cilium.io" COZY_REPORT_DIR="$tmp/report" COZYTEST_TRACE=0 \
+    "$REPO_ROOT/hack/cozytest.sh" "$tmp/hosted.bats" "The cluster carries none" > "$tmp/partial.log" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "the check passed with ciliumendpoints.cilium.io installed" >&2
+    exit 1
+  fi
+
+  rc=0
+  PATH="$tmp/bin:$PATH" FAKE_CRDS="" FAKE_LIST_FAILS=1 COZY_REPORT_DIR="$tmp/report" COZYTEST_TRACE=0 \
+    "$REPO_ROOT/hack/cozytest.sh" "$tmp/hosted.bats" "The cluster carries none" > "$tmp/unreadable.log" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "the check passed although the CRD list could not be read" >&2
+    exit 1
+  fi
+
+  rc=0
+  PATH="$tmp/bin:$PATH" FAKE_CRDS="packages.cozystack.io" COZY_REPORT_DIR="$tmp/report" COZYTEST_TRACE=0 \
+    "$REPO_ROOT/hack/cozytest.sh" "$tmp/hosted.bats" "The cluster carries none" > "$tmp/clean.log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ] || ! grep -q "Test OK" "$tmp/clean.log"; then
+    echo "the check did not pass on a cluster with no cilium.io CRD:" >&2
+    cat "$tmp/clean.log" >&2
+    exit 1
+  fi
+  rm -rf "$tmp"
+}
