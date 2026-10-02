@@ -36,6 +36,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     if (selectedTenant && tenants.some((t) => tenantDisplayName(t) === selectedTenant)) return
     const fallback =
       tenants.find((t) => tenantDisplayName(t) === "root") ?? tenants[0]
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- falls back to an existing tenant once the list has loaded
     setSelectedTenant(tenantDisplayName(fallback))
   }, [tenants, selectedTenant])
 

@@ -25,6 +25,7 @@ export function SourceWidget(props: WidgetProps) {
     const opt = value
       ? options.find((o: string) => value[o] !== undefined && value[o] !== null)
       : undefined
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-syncs the selected option when the value is loaded asynchronously
     setSelected(opt)
   }, [value])
 

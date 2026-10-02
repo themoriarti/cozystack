@@ -25,6 +25,7 @@ export function CommandPalette() {
   // Reset local state when palette closes
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resets the palette when it closes, whoever closed it
       setQuery("")
       setLevel({ type: "root" })
     }
