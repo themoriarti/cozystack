@@ -286,6 +286,9 @@ tests:
   #####################
 
   - it: does not set pitr when recoveryTime not specified
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDBRestore
     release:
       name: test-mongodb
       namespace: tenant-test

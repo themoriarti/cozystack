@@ -251,7 +251,9 @@ tests:
     asserts:
       - notExists:
           path: spec.general.additionalConfig
-        documentIndex: 0
+        documentSelector:
+          path: kind
+          value: OpenSearchCluster
 
   #####################
   # Node Pools        #
@@ -523,7 +525,9 @@ tests:
     asserts:
       - notExists:
           path: spec.dashboards
-        documentIndex: 0
+        documentSelector:
+          path: kind
+          value: OpenSearchCluster
 
   - it: renders dashboards when enabled
     release:
