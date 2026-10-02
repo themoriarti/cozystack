@@ -10,7 +10,7 @@ import {
   findImmutablePaths,
   type ImmutablePath,
 } from "../lib/immutable-paths.ts"
-import { customTemplates, customWidgets } from "./rjsf-templates.tsx"
+import { customTemplates, customWidgets } from "./rjsf-registry.ts"
 import { addDynamicOptionWidgets } from "../lib/dynamic-options.ts"
 import { AdditionalPropertiesField } from "./AdditionalPropertiesField.tsx"
 import { ResourceQuotasField } from "./ResourceQuotasField.tsx"
