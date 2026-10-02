@@ -28,6 +28,7 @@ GATEWAY_SUITE="hack/e2e-chainsaw/gateway/chainsaw-test.yaml"
 GATEWAY_STEP="parent-child-and-route-drive-listener-set"
 REDIS_SUITE="hack/e2e-chainsaw/redis/chainsaw-test.yaml"
 REDIS_STEP="verify-tenant-ca-projection"
+COMPUTEPLANE_SUITE="hack/e2e-chainsaw/computeplane/chainsaw-test.yaml"
 
 # Seconds the gateway op keeps above its summed waits for what carries no cap
 # of its own: three applies and one label read.
@@ -334,4 +335,16 @@ rc=0") printf '%s\n' "$rt_out" >&2; echo "the step passed with a hung read" >&2;
     case "$rt_out" in *"ran into its "[12]"s bound: -n tenant-test get secret redis-secure.tenant-ca"*) ;; *) printf '%s\n' "$rt_out" >&2; echo "the hung read did not name itself at the budget's bound" >&2; exit 1 ;; esac
     [ "$rt_took" -lt 15 ] || { echo "the step took ${rt_took}s against a 2s budget; the read was not clamped" >&2; exit 1; }
     rm -rf "$rt_dir"
+}
+
+@test "every kubectl in the computeplane scripts runs under its own timeout" {
+    # The suite's budget comments sum op ceilings and inner bounds, which hold
+    # only while no read can outlive them; kubectl's own --timeout does not
+    # count, it leaves the requests before the wait unbounded. Calls inside
+    # sourced helpers are the helpers' to bound and are not seen here.
+    cp_scripts=$(yq '.spec.steps[] | (.try[]?, .catch[]?, .finally[]?) | .script.content // ""' "$COMPUTEPLANE_SUITE")
+    printf '%s\n' "$cp_scripts" | grep -q 'kubectl ' || { echo "no kubectl found in the scripts of $COMPUTEPLANE_SUITE; the check reads nothing" >&2; exit 1; }
+    cp_bare=$(printf '%s\n' "$cp_scripts" | awk '/^[[:space:]]*#/ { next }
+      { line = " " $0; all = gsub(/[^-_[:alnum:]]kubectl /, "&", line); ok = gsub(/timeout (-k [0-9]+ )?([0-9]+|[$][(][(][^)]*[)][)]) kubectl /, "&", line); if (all != ok) print }')
+    [ -z "$cp_bare" ] || { printf '%s\n' "$cp_bare" >&2; echo "kubectl without a timeout in the computeplane scripts" >&2; exit 1; }
 }
