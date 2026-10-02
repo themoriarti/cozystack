@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/ptr"
@@ -1965,6 +1966,18 @@ func fakeDataVolumeInformer(t *testing.T, informers *informertest.FakeInformers)
 	return fi
 }
 
+// dataVolumeInformers seeds the DataVolume informer, because FakeInformers
+// creates every informer it builds itself already synced.
+func dataVolumeInformers(synced bool) (*informertest.FakeInformers, *controllertest.FakeInformer) {
+	fi := controllertest.NewFakeInformer()
+	if synced {
+		fi.Synced()
+	}
+	return &informertest.FakeInformers{
+		InformersByGVK: map[schema.GroupVersionKind]toolscache.SharedIndexInformer{dataVolumeGVK: fi},
+	}, fi
+}
+
 func TestTryStartDataVolumeWatch_WaitsUntilTheKindIsServed(t *testing.T) {
 	r := watchReconciler()
 	w := &startingWatcher{}
@@ -2025,9 +2038,7 @@ func TestWatchDataVolumes_StartsOnTheFirstReconcile(t *testing.T) {
 func TestTryStartDataVolumeWatch_UnsyncedSourceLeavesNoReaderAndRetries(t *testing.T) {
 	r := watchReconciler()
 	w := &startingWatcher{}
-	informers := &informertest.FakeInformers{}
-	fi := fakeDataVolumeInformer(t, informers)
-	fi.Synced = false
+	informers, fi := dataVolumeInformers(false)
 
 	for attempt := 0; attempt < 3; attempt++ {
 		done, err := r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, 50*time.Millisecond)
@@ -2036,9 +2047,7 @@ func TestTryStartDataVolumeWatch_UnsyncedSourceLeavesNoReaderAndRetries(t *testi
 		}
 	}
 
-	fi.SyncedLock.Lock()
-	fi.Synced = true
-	fi.SyncedLock.Unlock()
+	fi.Synced()
 
 	done, err := r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, time.Second)
 	if err != nil || !done || readerOf(r) == nil {
@@ -2054,8 +2063,7 @@ func TestTryStartDataVolumeWatch_UnsyncedSourceLeavesNoReaderAndRetries(t *testi
 // A stopping manager ends the sync wait, which says nothing about the informer.
 func TestTryStartDataVolumeWatch_StoppingManagerLeavesNoReader(t *testing.T) {
 	r := watchReconciler()
-	informers := &informertest.FakeInformers{}
-	fakeDataVolumeInformer(t, informers).Synced = false
+	informers, _ := dataVolumeInformers(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	done, err := r.tryStartDataVolumeWatch(ctx, servedMapper(), &startingWatcher{}, informers, time.Second)
@@ -2074,8 +2082,7 @@ func TestTryStartDataVolumeWatch_ReconcileBeforeTheReaderIsRetried(t *testing.T)
 	for _, synced := range []bool{true, false} {
 		t.Run(fmt.Sprintf("synced=%v", synced), func(t *testing.T) {
 			r := watchReconciler()
-			informers := &informertest.FakeInformers{}
-			fakeDataVolumeInformer(t, informers).Synced = synced
+			informers, _ := dataVolumeInformers(synced)
 			monitor := &cozyv1alpha1.WorkloadMonitor{ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"}}
 			var errDuringWatch error
 			w := &startingWatcher{}
