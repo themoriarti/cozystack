@@ -1,4 +1,4 @@
-{{- if include "tenant.tracingCentralEgress" . }}
+{{- if and (include "tenant.ciliumPolicies" .) (include "tenant.tracingCentralEgress" .) }}
 # Read hop of shared-central tracing: Grafana reaches the tenant-root vmauth,
 # never vtselect, which serves any account a client names.
 apiVersion: cilium.io/v2

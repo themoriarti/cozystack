@@ -1,4 +1,4 @@
-{{- if include "tenant.tracingCentralEgress" . }}
+{{- if and (include "tenant.ciliumPolicies" .) (include "tenant.tracingCentralEgress" .) }}
 # Write hop of shared-central tracing: the collector reaches the tenant-root
 # vmauth, never vtinsert, which takes the account from the writer's headers.
 # vmauth sets it from the tenant's VMUser login, so a pod that only carries
