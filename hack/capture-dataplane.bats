@@ -2917,9 +2917,11 @@ STUB
 @test "a call cut by its own bound just past the deadline is not blamed on the budget" {
   # Whether the budget cut a call is decided by the bound it ran under: only a
   # bound that reached the deadline can be the deadline's. Here the pod list
-  # runs under its own 3s bound, well inside the pod section's 4s, and comes
-  # back from its kill grace after the deadline has passed; the clock after the
-  # call would blame the budget for what its own bound did.
+  # runs under its own 3s bound inside the pod section's 10s and comes back
+  # from its kill grace after the deadline has passed; the clock after the call
+  # would blame the budget for what its own bound did. The 7s between the bound
+  # and the deadline keep a whole-second tick of `date +%s` between DP_T0 and
+  # the call from turning the bound into the deadline's.
   d=$(mktemp -d)
   mkdir -p "$d/bin"
   printf '#!/bin/sh\nexit 0\n' >"$d/bin/kubectl"
@@ -2927,13 +2929,13 @@ STUB
   cat >"$d/bin/timeout" <<SHIM
 #!/bin/sh
 case "\$*" in
-  *'kubectl get pods -A '*) sleep 5; exit 137 ;;
+  *'kubectl get pods -A '*) sleep 12; exit 137 ;;
 esac
 exec "$real_timeout" "\$@"
 SHIM
   chmod +x "$d/bin/kubectl" "$d/bin/timeout"
   rc=0
-  PATH="$d/bin:$PATH" COZY_DATAPLANE_LIST_TIMEOUT=3 COZY_DATAPLANE_BUDGET=94 COZY_DATAPLANE_LB_RESERVE=90 \
+  PATH="$d/bin:$PATH" COZY_DATAPLANE_LIST_TIMEOUT=3 COZY_DATAPLANE_BUDGET=100 COZY_DATAPLANE_LB_RESERVE=90 \
     "$real_timeout" 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || { echo "the collector did not finish on its own (exit $rc):"; cat "$d/log"; exit 1; }
   notes="$d/out/capture-notes.txt"
