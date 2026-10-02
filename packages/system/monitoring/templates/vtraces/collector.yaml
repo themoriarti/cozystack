@@ -132,8 +132,8 @@ exporters:
 {{- if $central }}
     auth:
       authenticator: basicauth/vmauth
-    # The VMUser allows four requests in flight per vmauth replica, shared with
-    # the tenant's Grafana reads; two senders keep writes under it.
+    # The write VMUser allows four requests in flight per vmauth replica; two
+    # senders keep writes under it.
     sending_queue:
       num_consumers: 2
 {{- end }}
@@ -193,7 +193,7 @@ spec:
         checksum/config: {{ include "monitoring.tracingCollectorConfig" . | sha256sum }}
         {{- if eq (include "monitoring.tracingCentral" .) "true" }}
         {{- /* The login is read from env at start, so a new one needs a new pod. */}}
-        checksum/credentials: {{ include "monitoring.tracingCentralPassword" . | sha256sum }}
+        checksum/credentials: {{ include "monitoring.tracingCentralPassword" (list . "traces-central-credentials") | sha256sum }}
         {{- end }}
     spec:
       securityContext:

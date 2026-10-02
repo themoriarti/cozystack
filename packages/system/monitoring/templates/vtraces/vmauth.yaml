@@ -29,7 +29,7 @@
 {{-     end }}
 {{-   end }}
 {{-   with $users }}
-{{-     fail (printf "monitoring: tenant-root cannot stop hosting shared-central tracing while these tenants still use it: %s. Turn tracingCentral off on them first, then wait until each has reconciled its Monitoring and its VMUser traces-central is gone." (join ", " (sortAlpha (uniq .)))) }}
+{{-     fail (printf "monitoring: tenant-root cannot stop hosting shared-central tracing while these tenants still use it: %s. Turn tracingCentral off on them first, then wait until each has reconciled its Monitoring and its VMUsers traces-central and traces-central-reader are gone." (join ", " (sortAlpha (uniq .)))) }}
 {{-   end }}
 {{- end }}
 {{- if include "monitoring.tracingCentralStore" . }}

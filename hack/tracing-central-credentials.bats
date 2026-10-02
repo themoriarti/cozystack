@@ -18,7 +18,7 @@ MONITORING_CHART=packages/system/monitoring
       --show-only templates/vtraces/collector.yaml \
       --set _namespace.tracingCentral=true --set _namespace.host=example.org \
       > "$out/render-$run.yaml"
-    password=$(yq eval 'select(.kind == "Secret") | .stringData.password' "$out/render-$run.yaml")
+    password=$(yq eval 'select(.kind == "Secret" and .metadata.name == "traces-central-credentials") | .stringData.password' "$out/render-$run.yaml")
     checksum=$(yq eval 'select(.kind == "Deployment") | .spec.template.metadata.annotations["checksum/credentials"]' "$out/render-$run.yaml")
     # Separate commands: under set -e a failure on the left of && is not fatal.
     [ -n "$password" ]
