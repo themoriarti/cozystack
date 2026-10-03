@@ -12,8 +12,20 @@ WORKDIR /source
 
 COPY patches /patches
 RUN git apply /patches/*.diff
+# The loop below runs this test: a patch touches pkg/controller.
 COPY tests/kubevirt_migration_test.go.txt /source/pkg/controller/kubevirt_migration_test.go
-RUN go test ./pkg/controller -run '^TestVMIMigrationSchedulingRetry$' -count=1
+
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. Each package is tested from its own directory:
+# that finds the module it belongs to, and an empty list runs nothing.
+# The list is read into a variable first: a for loop drops the exit status
+# of a command substitution, so a patch git cannot read would leave the list
+# empty and the step green.
+RUN files=$(git apply --numstat /patches/*.diff) || exit 1; \
+    for dir in $(printf '%s\n' "$files" | cut -f3 | grep '\.go$' | xargs -r -n1 dirname | sort -u); do \
+      (cd "$dir" && go test .) || exit 1; \
+    done
+
 # Upstream hardcodes GOARCH in each target: build-go is amd64 only, and
 # build-go-arm is its arm64 twin minus the `go mod tidy` and the test-server
 # binary, which this image never copies.
