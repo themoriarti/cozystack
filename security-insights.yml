@@ -42,7 +42,7 @@ project:
     comment: Report privately through GitHub Private Vulnerability Reporting at https://github.com/cozystack/cozystack/security/advisories/new. SECURITY.md lists the fallback channels, response targets and the 90-day disclosure window.
   documentation:
     detailed-guide: https://cozystack.io/docs/
-    quickstart-guide: https://cozystack.io/docs/getting-started/
+    quickstart-guide: https://cozystack.io/docs/v1.6/getting-started/
     code-of-conduct: https://github.com/cozystack/cozystack/blob/main/CODE_OF_CONDUCT.md
     release-process: https://github.com/cozystack/cozystack/blob/main/docs/release.md
     support-policy: https://github.com/cozystack/cozystack/blob/main/SECURITY.md#supported-versions
