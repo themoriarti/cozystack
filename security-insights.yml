@@ -129,7 +129,7 @@ repository:
         type: SAST
         rulesets: [default]
         integration:
-          adhoc: false
+          adhoc: true
           ci: true
           release: false
         results: {}
