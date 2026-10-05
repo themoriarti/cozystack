@@ -107,9 +107,16 @@ var guardConsumers = regexp.MustCompile(
 // arriving with the pin green over it.
 //
 // The spelling of `-o` and the quoting of the substitution are left free, for
-// the reason above; each is a case in the accept table below, so that "free"
-// is enforced rather than announced. A spelling absent from that table is one
-// nobody checked, not one known to be rejected.
+// the reason above. So is a `timeout` bound in front of kubectl, which limits
+// how long the read may hang and not what it reads. Each is a case in the
+// accept table below, so that "free" is enforced rather than announced. The
+// bound is spelled out rather than admitted as any text before kubectl,
+// because `$(echo kubectl ...)` names the expansion without running it and
+// hands the guard the command line as text. Nor is it admitted in front of the
+// wrapper: timeout runs a program, the wrapper is a shell function, and that
+// read fails every time. The name ends at a blank, so a command that only
+// starts with either name is not taken for it. A spelling absent from that
+// table is one nobody checked, not one known to be rejected.
 //
 // A form this pattern does not cover reddens rather than passing: the caller
 // test fails with the pattern printed. So the list is a record of what was
@@ -140,7 +147,7 @@ var guardConsumers = regexp.MustCompile(
 // unterminated is how a later rewrite reopens the other one.
 func sharedReadBy(local string) *regexp.Regexp {
 	return regexp.MustCompile(`(?m)^[ \t]*` + regexp.QuoteMeta(local) +
-		`="?\$\((?:_cozy_guard_)?kubectl[^)]*jsonpath=[^)]*\$\{?` + sharedName + `\b`)
+		`="?\$\((?:(?:timeout[ \t]+(?:-k[ \t]+[0-9]+[smhd]?[ \t]+)?[0-9]+[smhd]?[ \t]+)?kubectl|_cozy_guard_kubectl)[ \t][^)]*jsonpath=[^)]*\$\{?` + sharedName + `\b`)
 }
 
 // localFollowedByEquals counts occurrences of one named local followed by an
@@ -418,6 +425,11 @@ func TestGuardCallerReferencesTheSharedExpansion(t *testing.T) {
 				{"another local carries the shared read", "history_statuses", `  example=$(kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
 				{"a longer name starting with the shared one", "history_statuses", `  history_statuses=$(kubectl get hr -o"jsonpath=$HELMRELEASE_HISTORY_JSONPATH_OLD")`},
 				{"the same, braced", "history_statuses", `  history_statuses=$(kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH_OLD}")`},
+				{"kubectl only an argument", "history_statuses", `  history_statuses=$(echo kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
+				{"the same, behind a timeout", "history_statuses", `  history_statuses=$(timeout 30 echo kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
+				{"a timeout in front of the wrapper, which it cannot run", "_history", `  _history=$(timeout 30 _cozy_guard_kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
+				{"a command whose name only starts with kubectl", "history_statuses", `  history_statuses=$(kubectlx get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
+				{"a function whose name only starts with the wrapper's", "_history", `  _history=$(_cozy_guard_kubectl_v2 get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
 			} {
 				t.Run(tc.flaw, func(t *testing.T) {
 					if sharedReadBy(tc.local).MatchString(tc.line) {
@@ -438,6 +450,8 @@ func TestGuardCallerReferencesTheSharedExpansion(t *testing.T) {
 				{"spaced -o", "history_statuses", `  history_statuses=$(kubectl get hr -o jsonpath="${HELMRELEASE_HISTORY_JSONPATH}")`},
 				{"braceless expansion", "history_statuses", `  history_statuses=$(kubectl get hr -o"jsonpath=$HELMRELEASE_HISTORY_JSONPATH")`},
 				{"shipped form: through the bounded wrapper, continued", "_history", "  _history=$(_cozy_guard_kubectl get hr -n \"$_ns\" \"${_hr}\" \\\n    -o\"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}\") || _read_rc=$?"},
+				{"bounded by timeout", "statuses", `  statuses=$(timeout 30 kubectl get hr -o jsonpath="$HELMRELEASE_HISTORY_JSONPATH")`},
+				{"bounded with a kill grace", "statuses", `  statuses=$(timeout -k 5 30s kubectl get hr -o jsonpath="$HELMRELEASE_HISTORY_JSONPATH")`},
 			} {
 				t.Run(tc.spelling, func(t *testing.T) {
 					if !sharedReadBy(tc.local).MatchString(tc.line) {
