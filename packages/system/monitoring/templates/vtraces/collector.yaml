@@ -52,19 +52,30 @@
        Without one, or on a value that is not a positive number, the default
        holds: floor(2 vtstorage replicas * 80% of a 10Gi volume / 172800 s),
        at which one tenant writes at most a default store's disk cap,
-       uncompressed, over the two days VictoriaTraces always keeps. The rate is split across the replicas
-       the Service spreads its senders over. The limiter sees the requests the
-       receiver admits, so the receiver caps them at 4 MiB (decompressed for
-       HTTP) and burst is at least that, since a larger request would never
-       pass, and at least one second of rate. Each pod starts with a full
-       bucket, so the cap is also what a pod start lets through above the
-       rate. */ -}}
+       uncompressed and before sampling, over the two days VictoriaTraces
+       always keeps. The rate is split across the replicas the Service
+       spreads its senders over. The limiter sees the requests the receiver
+       admits, so the receiver caps them at 3 MiB (decompressed for HTTP). It
+       counts a request as the collector re-encodes it, which pdata makes
+       larger by writing the empty value of an attribute the wire may omit:
+       1.4x for a valid request of spans with empty-valued attributes. Burst
+       holds that at 3 MiB, since a request counted above burst never passes,
+       and is at least one second of rate. Requests the spec calls invalid,
+       spans without IDs, grow further and are refused for good. The limiter
+       runs right after memory_limiter, before the sampler adds a tracestate
+       to each span it keeps and resource/tenant an attribute to each
+       resource, either of which could push an admitted request past burst.
+       A refused request gets a 429 over OTLP/HTTP, which senders retry, and
+       RESOURCE_EXHAUSTED without RetryInfo over gRPC, which is final. Each pod
+       starts with a full bucket, so burst is also what a pod start lets
+       through above the rate. */ -}}
 {{- $tenantRate := int64 99420 -}}
 {{- $configured := toString (index (.Values._cluster | default dict) "tracing-central-tenant-bytes-per-second" | default "") -}}
 {{- if regexMatch "^[1-9][0-9]{0,12}$" $configured }}{{ $tenantRate = int64 $configured }}{{ end -}}
 {{- $replicas := int64 $c.replicas -}}
+{{- if gt $replicas 10 }}{{ fail (printf "monitoring: shared-central tracing allows at most 10 collector replicas (tracingCollector.replicas is %d): each replica starts with a full rate bucket, so more of them would let a tenant write further above its rate on every rollout." $replicas) }}{{ end -}}
 {{- $rate = div (add $tenantRate (sub $replicas 1)) $replicas -}}
-{{- $burst = max 4194304 $rate -}}
+{{- $burst = max 5242880 $rate -}}
 {{- else -}}
 {{- $backend := index .Values.tracingStorages 0 -}}
 {{- $mode := $backend.mode | default "cluster" -}}
@@ -76,12 +87,12 @@ receivers:
       grpc:
         endpoint: 0.0.0.0:4317
 {{- if $central }}
-        max_recv_msg_size_mib: 4
+        max_recv_msg_size_mib: 3
 {{- end }}
       http:
         endpoint: 0.0.0.0:4318
 {{- if $central }}
-        max_request_body_size: 4194304
+        max_request_body_size: 3145728
 {{- end }}
 processors:
   memory_limiter:
@@ -101,10 +112,7 @@ processors:
       - key: cozystack.tenant
         value: {{ .Release.Namespace }}
         action: upsert
-  # Holds the tenant to the rate the platform sets, so no tenant fills the
-  # shared store's disk cap faster than its retention frees it. A refused
-  # request gets a 429 over OTLP/HTTP, which senders retry; over gRPC it gets
-  # RESOURCE_EXHAUSTED without RetryInfo, which senders treat as final.
+  # Runs right after memory_limiter: a request later processors grew past burst would be refused for good.
   ratelimit/tenant:
     strategy: bytes
     rate: {{ $rate }}
@@ -151,7 +159,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, {{ if $central }}resource/tenant, {{ end }}probabilistic_sampler, {{ if $redact }}attributes/redact, {{ end }}{{ if $central }}ratelimit/tenant, {{ end }}batch]
+      processors: [memory_limiter, {{ if $central }}ratelimit/tenant, {{ end }}probabilistic_sampler, {{ if $redact }}attributes/redact, {{ end }}{{ if $central }}resource/tenant, {{ end }}batch]
       exporters: [otlphttp/victoriatraces]
 {{- end -}}
 {{- if and .Values.tracingCollector.enabled (or (include "monitoring.tracingCentral" .) (not (empty .Values.tracingStorages))) }}
