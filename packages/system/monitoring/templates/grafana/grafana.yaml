@@ -268,6 +268,17 @@ spec:
             - name: oidc-custom-ini
               secret:
                 secretName: {{ $customSecretRefName }}
+                {{- /* The tenant names the Secret; for a central tenant,
+                       mounting only the key Grafana reads keeps any other
+                       one, such as its collector's vmauth password, out of a
+                       pod that can reach the shared traces store. Other
+                       tenants keep the whole Secret, which an auth.ini
+                       reading a sibling key with $__file{} relies on. */}}
+                {{- if eq (include "monitoring.tracingCentral" $) "true" }}
+                items:
+                  - key: auth.ini
+                    path: auth.ini
+                {{- end }}
           {{- end }}
   {{- if ne $gatewayEnabled "true" }}
   ingress:

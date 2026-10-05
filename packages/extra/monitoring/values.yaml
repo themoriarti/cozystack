@@ -269,7 +269,7 @@ vmagent:
 
 ## @typedef {struct} OIDCCustomConfig - Tenant-supplied AuthN payload; consumed only when `mode: CustomConfig`. Exactly one of `config` or `secretRef.name` must be set.
 ## @field {OIDCCustomConfigInline} [config] - Inline map of `[auth.generic_oauth]` keys. Written verbatim into the Grafana CR `spec.config`. Mutually exclusive with `secretRef.name`.
-## @field {OIDCSecretRef} [secretRef] - Reference to a Secret holding an `auth.ini` fragment; mounted under `/etc/grafana/oidc` and loaded via `GF_PATHS_CUSTOM_INI`.
+## @field {OIDCSecretRef} [secretRef] - Reference to a Secret holding an `auth.ini` fragment; mounted under `/etc/grafana/oidc` and loaded via `GF_PATHS_CUSTOM_INI`. With shared-central tracing only its `auth.ini` key is mounted, so the fragment cannot read another key of the Secret with `$__file{}`.
 
 ## @enum {string} OIDCRole - Grafana org role bound to a listed user.
 ## @value Admin

@@ -847,7 +847,7 @@
               "default": {}
             },
             "secretRef": {
-              "description": "Reference to a Secret holding an `auth.ini` fragment; mounted under `/etc/grafana/oidc` and loaded via `GF_PATHS_CUSTOM_INI`.",
+              "description": "Reference to a Secret holding an `auth.ini` fragment; mounted under `/etc/grafana/oidc` and loaded via `GF_PATHS_CUSTOM_INI`. With shared-central tracing only its `auth.ini` key is mounted, so the fragment cannot read another key of the Secret with `$__file{}`.",
               "type": "object",
               "default": {},
               "properties": {
