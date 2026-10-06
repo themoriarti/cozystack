@@ -3673,7 +3673,7 @@ func TestCreateCNPGBackupArtifact_RecordsMajorVersion(t *testing.T) {
 			rendered := &strategyv1alpha1.CNPGTemplate{
 				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"},
 			}
-			got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", rendered, newPostgresApp("pg", "tenant"))
+			got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", "postgresql", rendered, newPostgresApp("pg", "tenant"))
 			if err != nil {
 				t.Fatalf("createCNPGBackupArtifact: %v", err)
 			}
@@ -3736,7 +3736,7 @@ func TestReconcileCNPGRestore_RefusesCrossMajorRestore(t *testing.T) {
 			}
 			targetCluster := cnpgClusterNameForApp(targetApp)
 
-			snap, err := marshalCNPGBackupSnapshot(newPostgresApp(sourceApp, ns), nil)
+			snap, err := marshalCNPGBackupSnapshot(newPostgresApp(sourceApp, ns), nil, "")
 			if err != nil {
 				t.Fatalf("marshal snapshot: %v", err)
 			}
