@@ -291,15 +291,18 @@
   every template of one render shares.
 */ -}}
 {{- define "monitoring.tracingCentralPassword" -}}
-{{- if not (hasKey .Values "_tracingCentralPassword") -}}
+{{- $ctx := index . 0 -}}
+{{- $secret := index . 1 -}}
+{{- $key := printf "_tracingCentralPassword_%s" $secret -}}
+{{- if not (hasKey $ctx.Values $key) -}}
 {{-   $password := "" -}}
-{{-   with (index (lookup "v1" "Secret" .Release.Namespace "traces-central-credentials") "data") -}}
+{{-   with (index (lookup "v1" "Secret" $ctx.Release.Namespace $secret) "data") -}}
 {{-     with .password }}{{ $password = b64dec . }}{{ end -}}
 {{-   end -}}
 {{-   if not $password }}{{ $password = randAlphaNum 32 }}{{ end -}}
-{{-   $_ := set .Values "_tracingCentralPassword" $password -}}
+{{-   $_ := set $ctx.Values $key $password -}}
 {{- end -}}
-{{- index .Values "_tracingCentralPassword" -}}
+{{- index $ctx.Values $key -}}
 {{- end -}}
 
 {{- /* tenant-root hosts the shared store only when it opts in with

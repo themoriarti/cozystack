@@ -141,16 +141,22 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: gives a central tenant a VMUser pinned to its own account
+  # The collector holds the tenant to its write rate, so the only login that
+  # may write is the collector's. Grafana gets a login that can only read:
+  # vmauth cleans the request path before it picks a route, so a write sent
+  # through a Grafana datasource proxy as ../insert would otherwise reach
+  # vtinsert past the limiter.
+  - it: gives a central tenant a write login pinned to its own account
     release:
       namespace: tenant-foo
     set:
       _namespace:
         tracingCentral: true
     template: templates/vtraces/vmuser.yaml
+    documentIndex: 0
     asserts:
       - hasDocuments:
-          count: 1
+          count: 2
       - isKind:
           of: VMUser
       - equal:
@@ -184,20 +190,58 @@ tests:
           path: spec.targetRefs
           value:
             - crd:
-                kind: VTCluster/vtselect
-                name: generic
-                namespace: tenant-root
-              paths:
-                - /select/jaeger/.*
-              headers:
-                - "AccountID: 3333747902"
-                - "ProjectID: 2511166196"
-            - crd:
                 kind: VTCluster/vtinsert
                 name: generic
                 namespace: tenant-root
               paths:
                 - /insert/opentelemetry/v1/traces
+              headers:
+                - "AccountID: 3333747902"
+                - "ProjectID: 2511166196"
+
+  - it: gives a central tenant a read-only login pinned to the same account
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+    template: templates/vtraces/vmuser.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: VMUser
+      - equal:
+          path: metadata.name
+          value: traces-central-reader
+      - equal:
+          path: metadata.labels["tracing.cozystack.io/central-reader"]
+          value: "true"
+      # A namespace name holds no dot, so no tenant's write login can share it.
+      - equal:
+          path: spec.username
+          value: tenant-foo.reader
+      - equal:
+          path: spec.passwordRef
+          value:
+            name: traces-central-reader-credentials
+            key: password
+      - equal:
+          path: spec.disable_secret_creation
+          value: true
+      - notExists:
+          path: spec.generatePassword
+      - equal:
+          path: spec.max_concurrent_requests
+          value: 4
+      - equal:
+          path: spec.targetRefs
+          value:
+            - crd:
+                kind: VTCluster/vtselect
+                name: generic
+                namespace: tenant-root
+              paths:
+                - /select/jaeger/.*
               headers:
                 - "AccountID: 3333747902"
                 - "ProjectID: 2511166196"
@@ -235,13 +279,15 @@ tests:
             namespace: tenant-root
     template: templates/vtraces/vmuser.yaml
     asserts:
-      - equal:
+      - documentIndex: 0
+        equal:
           path: spec.targetRefs[0].headers
           value:
             - "AccountID: 3341781467"
             - "ProjectID: 10782784"
-      - equal:
-          path: spec.targetRefs[1].headers
+      - documentIndex: 1
+        equal:
+          path: spec.targetRefs[0].headers
           value:
             - "AccountID: 3341781467"
             - "ProjectID: 10782784"
@@ -254,8 +300,9 @@ tests:
         tracingCentral: true
     template: templates/vtraces/vmuser.yaml
     asserts:
-      - equal:
-          path: spec.targetRefs[1].headers
+      - documentIndex: 0
+        equal:
+          path: spec.targetRefs[0].headers
           value:
             - "AccountID: 4290741035"
             - "ProjectID: 2806397044"
@@ -315,7 +362,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: points a central tenant's datasource at vmauth with the VMUser credentials
+  - it: points a central tenant's datasource at vmauth with the read-only login
     release:
       namespace: tenant-foo
     set:
@@ -349,10 +396,10 @@ tests:
             - targetPath: basicAuthUser
               valueFrom:
                 secretKeyRef:
-                  name: traces-central-credentials
+                  name: traces-central-reader-credentials
                   key: username
             - targetPath: secureJsonData.basicAuthPassword
               valueFrom:
                 secretKeyRef:
-                  name: traces-central-credentials
+                  name: traces-central-reader-credentials
                   key: password

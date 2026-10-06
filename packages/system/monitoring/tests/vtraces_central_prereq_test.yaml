@@ -52,16 +52,18 @@ tests:
             name: traces-central
             namespace: tenant-root
     asserts:
+      # The write and the read-only login.
       - hasDocuments:
-          count: 1
+          count: 2
 
   - it: does not refuse an offline render, which cannot see the cluster
     set:
       _namespace:
         tracingCentral: true
     asserts:
+      # The write and the read-only login.
       - hasDocuments:
-          count: 1
+          count: 2
 
   - it: does not look for the shared store in local mode
     kubernetesProvider:

@@ -662,6 +662,23 @@ monitoring:
   # here is true only to preserve the historical always-create behaviour;
   # operators MUST set it to match their actual Tenant/root spec.monitoring.
   rootEnabled: true
+  # The rate, in bytes per second counted uncompressed and before the
+  # collector samples, at which each tenant using shared-central tracing may
+  # write into the traces store tenant-root hosts; each tenant's collector
+  # refuses data above it, with a 429 an OTLP/HTTP sender retries and a
+  # RESOURCE_EXHAUSTED an OTLP/gRPC sender drops, so central tenants should
+  # export over HTTP; a request above 3 MiB gets a 400, not retried. 0 keeps
+  # the default of about 97 KiB/s: over the two days VictoriaTraces always
+  # keeps, one tenant writes at most the disk cap of a default 10Gi store,
+  # counted uncompressed, and the store keeps it compressed and only the
+  # sampled share of it (samplingPercentage). Each collector pod starts with a
+  # full bucket, so a pod start lets through above the rate up to 5 MiB, or
+  # one second of the pod's share of the rate when that is larger. Raise it
+  # with the store's size, as a whole number up to 1099511627776 (1 TiB/s);
+  # anything else fails the render. A change upgrades every release in every
+  # tenant once, since it travels in the cozystack-values Secret they all
+  # read.
+  tracingCentralTenantBytesPerSecond: 0
 # Backup storage overrides for the platform-managed cozy-default BackupClass.
 # Everything set here is forwarded verbatim into the emitted
 # cozystack.backupstrategy-controller Package CR as

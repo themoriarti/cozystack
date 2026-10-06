@@ -46,7 +46,30 @@ tests:
               tracing.cozystack.io/central-reader: "true"
     asserts:
       - failedTemplate:
-          errorMessage: "monitoring: tenant-root cannot stop hosting shared-central tracing while these tenants still use it: tenant-foo. Turn tracingCentral off on them first, then wait until each has reconciled its Monitoring and its VMUser traces-central is gone."
+          errorMessage: "monitoring: tenant-root cannot stop hosting shared-central tracing while these tenants still use it: tenant-foo. Turn tracingCentral off on them first, then wait until each has reconciled its Monitoring and its VMUsers traces-central and traces-central-reader are gone."
+
+  # Each central tenant has a write and a read VMUser; it is named once.
+  - it: names a tenant once though both of its VMUsers remain
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *root
+        - *reader
+        - kind: VMUser
+          apiVersion: operator.victoriametrics.com/v1beta1
+          metadata:
+            name: traces-central-reader
+            namespace: tenant-foo
+            labels:
+              tracing.cozystack.io/central-reader: "true"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tenant-root cannot stop hosting shared-central tracing while these tenants still use it: tenant-foo. Turn tracingCentral off on them first, then wait until each has reconciled its Monitoring and its VMUsers traces-central and traces-central-reader are gone."
 
   - it: keeps hosting without complaint when central tenants exist
     set:

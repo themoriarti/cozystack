@@ -64,16 +64,19 @@ go_stages() {
   ' "$1"
 }
 
-# One line per alpine golang stage that runs `go build` with neither git nor a
-# prior `go mod download`: the `|direct` fallback needs git, so such a stage
-# has no cover at all when the proxy drops a stream mid-build.
+# One line per alpine golang stage that runs `go build` or `go install` with
+# neither git nor a prior `go mod download`: the `|direct` fallback needs git,
+# so such a stage has no cover at all when the proxy drops a stream mid-build.
+# `go install pkg@version` resolves outside the stage's module, so a download
+# does not cover it and only git does.
 uncovered_alpine_builds() {
   sed -e ':a' -e '/\\$/N; s/\\\n//; ta' "$1" | awk '
-    function flush() { if (alpine && build && !git && !download) print from }
-    /^FROM[[:space:]]/ { flush(); from = $0; alpine = ($0 ~ /golang:[^ ]*-alpine/); build = 0; git = 0; download = 0; next }
+    function flush() { if (alpine && !git && ((build && !download) || install)) print from }
+    /^FROM[[:space:]]/ { flush(); from = $0; alpine = ($0 ~ /golang:[^ ]*-alpine/); build = 0; install = 0; git = 0; download = 0; next }
     /^RUN[[:space:]]/ && /apk add[^&;]*[[:space:]]git([[:space:]]|$)/ { git = 1 }
     /^RUN[[:space:]]/ && /go mod download/ { download = 1 }
-    /^RUN[[:space:]]/ && /go build/ && !download { build = 1 }
+    /^RUN[[:space:]]/ && /go install[^&;|]*@/ { install = 1 }
+    /^RUN[[:space:]]/ && /go (build|install)/ && !download { build = 1 }
     END { flush() }
   '
 }
@@ -195,10 +198,16 @@ GO_JOB_RE='actions/setup-go@|(^|[^A-Za-z0-9_-])go (build|test|run|mod|generate|i
   printf '%s\n' 'FROM golang:1.27-alpine AS a' 'RUN go build .' \
     'FROM golang:1.27-alpine AS b' 'RUN apk add --no-cache make git' 'RUN go build .' \
     'FROM golang:1.27-alpine AS c' 'RUN go mod download' 'RUN go build .' \
-    'FROM golang:1.27 AS d' 'RUN go build .' >"$fixture"
+    'FROM golang:1.27 AS d' 'RUN go build .' \
+    'FROM golang:1.27-alpine AS e' 'RUN go mod download' 'RUN go install example.com/tool@v1.0.0' \
+    'FROM golang:1.27-alpine AS f' 'RUN apk add --no-cache git' 'RUN go install example.com/tool@v1.0.0' \
+    'FROM golang:1.27-alpine AS g' 'RUN go install ./cmd/tool' \
+    'FROM golang:1.27-alpine AS h' 'RUN go mod download' 'RUN go install ./cmd/tool' >"$fixture"
   out="$(uncovered_alpine_builds "$fixture")"
   rm -f "$fixture"
-  [ "$out" = 'FROM golang:1.27-alpine AS a' ]
+  [ "$out" = 'FROM golang:1.27-alpine AS a
+FROM golang:1.27-alpine AS e
+FROM golang:1.27-alpine AS g' ]
 }
 
 @test "the retry loop pattern accepts the loop and rejects a bare or unbounded download" {
