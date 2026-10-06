@@ -13,11 +13,14 @@ suite: cilium owns service load-balancing
 # that port for every selected pod.
 #
 # Naming the backend alone still covers a pod dialling the ClusterIP, because
-# Cilium translates the service before it enforces egress policy: in Cilium
-# v1.19.5, bpf/bpf_lxc.c runs __per_packet_lb_svc_xlate_4 and lb4_local() and
-# only then tail-calls CILIUM_CALL_IPV4_FROM_LXC_CONT into handle_ipv4_from_lxc,
-# where policy_can_egress4 evaluates the rule. By that point the destination is
-# the backend pod on 8443, which is what the rules match.
+# Cilium translates the service before it enforces egress policy. In Cilium
+# v1.20.2 the chart forces bpf-lb-sock-hostns-only whenever Gateway API is on,
+# so socket LB leaves pod-namespace connections alone and bpf/bpf_lxc.c
+# translates them per packet: it runs __per_packet_lb_svc_xlate_4 and
+# lb4_local() and only then tail-calls CILIUM_CALL_IPV4_FROM_LXC_CONT into
+# handle_ipv4_from_lxc, where policy_can_egress4 evaluates the rule. By that
+# point the destination is the backend pod on 8443, which is what the rules
+# match.
 #
 # That ordering exists only while Cilium is the thing doing the DNAT, and the
 # value asserted below is what makes it so: kubeProxyReplacement, true here

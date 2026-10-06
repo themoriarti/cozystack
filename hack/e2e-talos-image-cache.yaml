@@ -286,8 +286,9 @@ spec:
   # No toPorts: the allow is already scoped to a single kube-system pod identity
   # (CI-only, torn down with the sandbox), so an L4 port restriction adds no
   # meaningful blast-radius reduction — only risk. With kube-proxy-less Cilium the
-  # importer's connect to the Service ClusterIP is socket-LB translated to the
-  # backend pod port BEFORE egress policy is evaluated, so a port literal here
+  # importer's connection to the Service ClusterIP is translated to the backend
+  # pod port per packet in bpf_lxc.c (the chart forces bpf-lb-sock-hostns-only
+  # while Gateway API is on) BEFORE egress policy is evaluated, so a port literal here
   # would have to track the container port (8080), not the Service port (80); a
   # wrong guess silently drops the traffic and reintroduces the exact public-factory
   # fallback this policy exists to prevent.
