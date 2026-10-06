@@ -225,15 +225,16 @@ func TestRenderCNPGTemplate_RoundTripsParametersThroughSnapshot(t *testing.T) {
 	}
 
 	// Round-trip parameters through Backup.status.underlyingResources.
-	raw, err := marshalCNPGBackupSnapshot(app, parameters)
+	raw, err := marshalCNPGBackupSnapshot(app, parameters, "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
 	bk := &backupsv1alpha1.Backup{Status: backupsv1alpha1.BackupStatus{UnderlyingResources: raw}}
-	_, _, gotParams, err := unmarshalCNPGBackupSnapshot(bk)
+	snap, err := unmarshalCNPGBackupSnapshot(bk)
 	if err != nil {
 		t.Fatalf("unmarshal snapshot: %v", err)
 	}
+	gotParams := snap.Parameters
 
 	// Restore-time render with retrieved parameters: same values out.
 	rendRestore, err := renderCNPGTemplate(tmpl, app, gotParams)
@@ -879,7 +880,7 @@ func TestMarshalUnmarshalCNPGBackupSnapshot(t *testing.T) {
 		"region":      "eu-west-1",
 	}
 
-	raw, err := marshalCNPGBackupSnapshot(src, parameters)
+	raw, err := marshalCNPGBackupSnapshot(src, parameters, "")
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -888,10 +889,11 @@ func TestMarshalUnmarshalCNPGBackupSnapshot(t *testing.T) {
 	}
 
 	bk := &backupsv1alpha1.Backup{Status: backupsv1alpha1.BackupStatus{UnderlyingResources: raw}}
-	dbs, users, params, err := unmarshalCNPGBackupSnapshot(bk)
+	snap, err := unmarshalCNPGBackupSnapshot(bk)
 	if err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
+	dbs, users, params := snap.Databases, snap.Users, snap.Parameters
 	if dbs["app"].Extensions[0] != "pgcrypto" {
 		t.Errorf("databases round-trip mismatch: %#v", dbs)
 	}
@@ -916,12 +918,17 @@ func TestMarshalUnmarshalCNPGBackupSnapshot(t *testing.T) {
 func TestMarshalUnmarshalCNPGBackupSnapshot_BackwardCompat(t *testing.T) {
 	legacyRaw := []byte(`{"kind":"CNPGBackupSnapshot","apiVersion":"backups.cozystack.io/v1alpha1","databases":{"app":{}},"users":{"app":{}}}`)
 	bk := &backupsv1alpha1.Backup{Status: backupsv1alpha1.BackupStatus{UnderlyingResources: &runtime.RawExtension{Raw: legacyRaw}}}
-	_, _, params, err := unmarshalCNPGBackupSnapshot(bk)
+	snap, err := unmarshalCNPGBackupSnapshot(bk)
 	if err != nil {
 		t.Fatalf("unmarshal legacy snapshot: %v", err)
 	}
-	if len(params) != 0 {
-		t.Errorf("legacy snapshot must yield empty parameters, got %#v", params)
+	if len(snap.Parameters) != 0 {
+		t.Errorf("legacy snapshot must yield empty parameters, got %#v", snap.Parameters)
+	}
+	// Flavors did not exist when this snapshot was written: every cluster
+	// ran postgresql, and the restore flavor check must read it that way.
+	if got := cnpgFlavor(snap.Flavor); got != "postgresql" {
+		t.Errorf("legacy snapshot must resolve to the postgresql flavor, got %q", got)
 	}
 }
 
@@ -942,7 +949,7 @@ func TestUnmarshalCNPGBackupSnapshot_RejectsMissingOrWrongKind(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			bk := &backupsv1alpha1.Backup{Status: backupsv1alpha1.BackupStatus{UnderlyingResources: tc.ur}}
-			_, _, _, err := unmarshalCNPGBackupSnapshot(bk)
+			_, err := unmarshalCNPGBackupSnapshot(bk)
 			if err == nil {
 				t.Fatalf("expected error, got nil")
 			}
@@ -1026,7 +1033,7 @@ func TestCreateCNPGBackupArtifact_AlreadyExistsReturnsExisting(t *testing.T) {
 	}
 
 	sourceApp := newPostgresApp("pg", "tenant")
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", rendered, sourceApp)
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", "postgresql", rendered, sourceApp)
 	if err != nil {
 		t.Fatalf("expected AlreadyExists to be swallowed, got error %v", err)
 	}
@@ -1052,7 +1059,7 @@ func TestApplyClusterPluginBackup_NotFoundOnMissingCluster(t *testing.T) {
 		},
 	}
 
-	_, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing")
+	_, _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing")
 	if err == nil {
 		t.Fatalf("expected NotFound error, got nil")
 	}
@@ -1690,7 +1697,7 @@ func TestApplyClusterPluginBackup_ReadsTheLiveClusterNotTheCache(t *testing.T) {
 		BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
 	}
 
-	got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name")
+	got, _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1708,6 +1715,108 @@ func TestApplyClusterPluginBackup_ReadsTheLiveClusterNotTheCache(t *testing.T) {
 	}
 	if got := string(owners[0].UID); got != "uid-after-restore" {
 		t.Fatalf("ObjectStore owned by UID %q, want the live Cluster's: it would be garbage-collected immediately", got)
+	}
+}
+
+// TestReconcileCNPG_RecordsTheLiveClusterFlavor: the chart refuses a flavor
+// change on a live Cluster, but the Postgres app keeps the refused value. The
+// Backup must record the flavor the Cluster actually runs, or a restore would
+// accept a target of the wrong image family and refuse the right one.
+func TestReconcileCNPG_RecordsTheLiveClusterFlavor(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	const ns, appName = "tenant", "pg"
+	clusterName := cnpgClusterNameForApp(appName)
+
+	cases := []struct {
+		name       string
+		liveImage  string
+		specFlavor string
+		want       string
+	}{
+		{name: "app switched to postgis on a postgresql cluster", liveImage: "ghcr.io/cloudnative-pg/postgresql:17.5", specFlavor: "postgis", want: "postgresql"},
+		{name: "app switched to postgresql on a postgis cluster", liveImage: "ghcr.io/cloudnative-pg/postgis:17-3.5", specFlavor: "", want: "postgis"},
+		{name: "cluster on the CNPG default image", liveImage: "", specFlavor: "postgis", want: "postgresql"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			startedAt := metav1.Now()
+			job := &backupsv1alpha1.BackupJob{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bj"},
+				Spec: backupsv1alpha1.BackupJobSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+				},
+				Status: backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
+			}
+			strategy := &strategyv1alpha1.CNPG{
+				ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+				Spec: strategyv1alpha1.CNPGSpec{
+					Template: strategyv1alpha1.CNPGTemplate{
+						BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+					},
+				},
+			}
+			app := newPostgresApp(appName, ns)
+			app.Spec.Flavor = tc.specFlavor
+			cluster := &cnpgtypes.Cluster{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, UID: "cluster-uid"},
+				Spec:       cnpgtypes.ClusterSpec{ImageName: tc.liveImage},
+			}
+			cnpgBackup := &cnpgtypes.Backup{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bj-cnpg", Labels: map[string]string{
+					backupsv1alpha1.OwningJobNameLabel:      job.Name,
+					backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+				}},
+				Spec:   cnpgtypes.BackupSpec{Cluster: cnpgtypes.ClusterReference{Name: clusterName}},
+				Status: cnpgtypes.BackupStatus{Phase: cnpgBackupPhaseComplete},
+			}
+			c := newCNPGStrategyTestClient(t, job, strategy, app, cluster, cnpgBackup)
+			r := &BackupJobReconciler{Client: c, Interface: cnpgDynamicFor(t, cluster)}
+			resolved := &ResolvedBackupConfig{
+				StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: strategy.Name},
+			}
+
+			j := &backupsv1alpha1.BackupJob{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), j); err != nil {
+				t.Fatalf("get BackupJob: %v", err)
+			}
+			if _, err := r.reconcileCNPG(context.Background(), j, resolved); err != nil {
+				t.Fatalf("reconcileCNPG: %v", err)
+			}
+			if j.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+				t.Fatalf("BackupJob phase = %q (%s), want Succeeded", j.Status.Phase, j.Status.Message)
+			}
+
+			backup := &backupsv1alpha1.Backup{}
+			if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: job.Name}, backup); err != nil {
+				t.Fatalf("get Backup artifact: %v", err)
+			}
+			snap, err := unmarshalCNPGBackupSnapshot(backup)
+			if err != nil {
+				t.Fatalf("unmarshal snapshot: %v", err)
+			}
+			if got := cnpgFlavor(snap.Flavor); got != tc.want {
+				t.Fatalf("Backup records flavor %q, want the live Cluster's %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCNPGImageFlavor pins the image-to-flavor mapping to the chart's
+// postgres.flavorGuard: only the image name counts, never the host, tag or
+// digest.
+func TestCNPGImageFlavor(t *testing.T) {
+	cases := map[string]string{
+		"":                                       "postgresql",
+		"ghcr.io/cloudnative-pg/postgresql:18.1": "postgresql",
+		"ghcr.io/cloudnative-pg/postgis:18-3.6":  "postgis",
+		"mirror.local:5000/cloudnative-pg/postgis:18-3.6@sha256:0123": "postgis",
+		"postgis@sha256:0123": "postgis",
+	}
+	for image, want := range cases {
+		if got := cnpgImageFlavor(image); got != want {
+			t.Errorf("cnpgImageFlavor(%q) = %q, want %q", image, got, want)
+		}
 	}
 }
 
@@ -1798,7 +1907,7 @@ func TestApplyClusterPluginBackup_PreservesLiveServerName(t *testing.T) {
 				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
 			}
 
-			got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name")
+			got, _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -1837,7 +1946,7 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 		},
 	}
 
-	if _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app"); err != nil {
+	if _, _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -2170,7 +2279,7 @@ func TestReconcileCNPGRestore_RepeatInPlacePurgesStaleRecoveryCluster(t *testing
 
 	mkBackupArtifact := func(t *testing.T) *backupsv1alpha1.Backup {
 		t.Helper()
-		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
 		if err != nil {
 			t.Fatalf("marshal snapshot: %v", err)
 		}
@@ -2286,6 +2395,135 @@ func TestReconcileCNPGRestore_RepeatInPlacePurgesStaleRecoveryCluster(t *testing
 	})
 }
 
+// TestReconcileCNPGRestore_RefusesCrossFlavorRestore: a physical backup only
+// restores onto the image family it was taken from. The postgresql and
+// postgis images ship different glibc versions, and postgis objects need the
+// postgis libraries, so a cross-flavor RestoreJob must fail before the purge
+// deletes the target's Cluster and PVCs. A snapshot without a flavor predates
+// flavors and therefore comes from a postgresql cluster.
+func TestReconcileCNPGRestore_RefusesCrossFlavorRestore(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+		cnpgBkName  = "cnpgbk"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+	startedAt := metav1.NewTime(time.Now())
+
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{
+			Template: strategyv1alpha1.CNPGTemplate{
+				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+			},
+		},
+	}
+	cnpgBackup := &cnpgtypes.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: cnpgBkName},
+		Spec:       cnpgtypes.BackupSpec{Cluster: cnpgtypes.ClusterReference{Name: clusterName}},
+		Status:     cnpgtypes.BackupStatus{Phase: cnpgBackupPhaseComplete, EndWal: "000000010000000000000003"},
+	}
+
+	cases := []struct {
+		name          string
+		sourceFlavor  string
+		targetFlavor  string
+		wantFailed    bool
+		wantInMessage string
+	}{
+		{name: "postgis backup into a postgresql app", sourceFlavor: "postgis", targetFlavor: "", wantFailed: true, wantInMessage: "taken from a postgis cluster"},
+		{name: "pre-flavor backup into a postgis app", sourceFlavor: "", targetFlavor: "postgis", wantFailed: true, wantInMessage: "taken from a postgresql cluster"},
+		{name: "postgis backup into a postgis app", sourceFlavor: "postgis", targetFlavor: "postgis", wantFailed: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, tc.sourceFlavor)
+			if err != nil {
+				t.Fatalf("marshal snapshot: %v", err)
+			}
+			backup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+					StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+					DriverMetadata: map[string]string{
+						cnpgServerNameKey:      appName,
+						cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+						cnpgBackupNameKey:      cnpgBkName,
+					},
+				},
+				Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+			}
+			target := newPostgresApp(appName, ns)
+			target.Spec.Flavor = tc.targetFlavor
+			sa := startedAt
+			restoreJob := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+				Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+				Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &sa, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+			}
+			liveCluster := &cnpgtypes.Cluster{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, CreationTimestamp: metav1.NewTime(startedAt.Add(-time.Hour))},
+			}
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName + "-1", Labels: map[string]string{cnpgClusterLabel: clusterName}},
+			}
+			c := newCNPGStrategyTestClient(t, backup, restoreJob, strategy, cnpgBackup, target, liveCluster, pvc)
+			r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
+
+			rj := &backupsv1alpha1.RestoreJob{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+				t.Fatalf("get seeded RestoreJob: %v", err)
+			}
+			if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+				t.Fatalf("reconcileCNPGRestore: %v", err)
+			}
+
+			got := &backupsv1alpha1.RestoreJob{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, got); err != nil {
+				t.Fatalf("get RestoreJob: %v", err)
+			}
+			clusterErr := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: clusterName}, &cnpgtypes.Cluster{})
+			app, err := r.getPostgresApp(ctx, ns, appName)
+			if err != nil {
+				t.Fatalf("get target app: %v", err)
+			}
+
+			if !tc.wantFailed {
+				if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+					t.Fatalf("same-flavor restore must proceed, got Failed: %s", got.Status.Message)
+				}
+				if !apierrors.IsNotFound(clusterErr) {
+					t.Fatalf("same-flavor restore must purge the target Cluster, got err=%v", clusterErr)
+				}
+				return
+			}
+			if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+				t.Fatalf("cross-flavor restore must fail, got phase %q", got.Status.Phase)
+			}
+			if !strings.Contains(got.Status.Message, tc.wantInMessage) || !strings.Contains(got.Status.Message, "pg_dump") {
+				t.Errorf("failure message must name the source flavor and point to a logical dump, got %q", got.Status.Message)
+			}
+			if clusterErr != nil {
+				t.Fatalf("cross-flavor restore must leave the target Cluster in place, got err=%v", clusterErr)
+			}
+			pvcs := &corev1.PersistentVolumeClaimList{}
+			if err := c.List(ctx, pvcs, client.InNamespace(ns), client.MatchingLabels{cnpgClusterLabel: clusterName}); err != nil {
+				t.Fatalf("list PVCs: %v", err)
+			}
+			if len(pvcs.Items) != 1 {
+				t.Fatalf("cross-flavor restore must leave the target PVCs in place, have %d", len(pvcs.Items))
+			}
+			if app.Spec.Bootstrap.Enabled {
+				t.Fatalf("cross-flavor restore must not patch the target app for recovery")
+			}
+		})
+	}
+}
+
 // TestReconcileCNPGRestore_HealthyClusterSucceeds drives the reconcile to its
 // success branch: with the target already purged (TargetPurged=True) and the
 // recovery Cluster reporting healthy, the RestoreJob must reach phase
@@ -2302,7 +2540,7 @@ func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
 	ctx := context.Background()
 	startedAt := metav1.NewTime(time.Now())
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -2421,7 +2659,7 @@ func TestReconcileCNPGRestore_HealthyDisablesBootstrap(t *testing.T) {
 	ctx := context.Background()
 	startedAt := metav1.NewTime(time.Now().Add(-time.Hour))
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -2510,7 +2748,7 @@ func TestReconcileCNPGRestore_BootstrapDisableFailsPastDeadline(t *testing.T) {
 	// Well past the 30m default deadline.
 	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -2623,7 +2861,7 @@ func TestReconcileCNPGRestore_BootstrapDisableTransientErrorRequeues(t *testing.
 	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
 	convergedAt := metav1.Now()
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -2750,7 +2988,7 @@ func TestReconcileCNPGRestore_BootstrapDisableShortTimeoutHonorsGraceFloor(t *te
 	// within the 5m post-convergence floor.
 	convergedAt := metav1.NewTime(time.Now().Add(-90 * time.Second))
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -2862,7 +3100,7 @@ func TestReconcileCNPGRestore_HealthyPastDeadlineSucceeds(t *testing.T) {
 	// Far past the 30m default deadline: this is the reconcile-gap case.
 	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -2958,7 +3196,7 @@ func TestReconcileCNPGRestore_DeadlineClassifiesRecoveryTargetUnreachable(t *tes
 	// enters the deadline-classification branch.
 	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -3297,7 +3535,7 @@ func TestReconcileCNPGRestore_PinsTheRequestedBackup(t *testing.T) {
 
 	mkBackupArtifact := func(t *testing.T) *backupsv1alpha1.Backup {
 		t.Helper()
-		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
 		if err != nil {
 			t.Fatalf("marshal snapshot: %v", err)
 		}

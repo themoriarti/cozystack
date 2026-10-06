@@ -75,6 +75,10 @@ type ClusterList struct {
 }
 
 type ClusterSpec struct {
+	// ImageName is read, never patched: the backup driver records the image
+	// family the data directory runs on. Empty means CNPG's default
+	// postgresql image.
+	ImageName string                  `json:"imageName,omitempty"`
 	Backup    *BackupConfiguration    `json:"backup,omitempty"`
 	Bootstrap *BootstrapConfiguration `json:"bootstrap,omitempty"`
 	// Plugins wires CNPG-I plugins (here barman-cloud) onto the Cluster. The
