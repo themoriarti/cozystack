@@ -17,7 +17,10 @@
 # the container lane does not have, so that path is left to the render tests.
 # The pool shape copies the kubernetes suites' worker sizing (see
 # run_kubernetes_test in _lib/run-kubernetes.sh for why each field is there),
-# at one worker rather than two.
+# two workers included. On one single-vCPU worker the tenant addons' CPU
+# requests take nearly all it can allocate, so cert-manager's startupapicheck
+# hook Job can find no room and stay Pending, which fails the cert-manager
+# install.
 #
 # Budget: the try ops' ceilings add up to 147m, this suite's own catch to 12m
 # (the events and describe collectors take timeouts.exec, 5m each, and the
@@ -115,8 +118,8 @@ spec:
                 diskSize: 20Gi
                 instanceType: u1.medium
                 logSerialConsole: true
-                minReplicas: 1
-                maxReplicas: 1
+                minReplicas: 2
+                maxReplicas: 2
                 podCpuLimit: 2
                 podCpuRequest: 100m
                 resources:
@@ -183,7 +186,7 @@ spec:
           sc=$(cozy_e2e_storage_class)
           values=$(timeout -k 5 30 kubectl -n tenant-cplane get helmrelease kubernetes-nodes-computeplane-cluster-md0 -o json | jq -c '.spec.values')
           echo "pool values: $values"
-          echo "$values" | jq -e --arg sc "$sc" '.storageClass == $sc and .minReplicas == 1 and .cluster == "computeplane-cluster" and .clusterReleaseName == "computeplane-cluster"'
+          echo "$values" | jq -e --arg sc "$sc" '.storageClass == $sc and .minReplicas == 2 and .cluster == "computeplane-cluster" and .clusterReleaseName == "computeplane-cluster"'
           extra=$(echo "$values" | jq -r 'keys - ["cluster","clusterReleaseName","minReplicas","maxReplicas","instanceType","diskSize","storageClass","roles","resources","gpus","kubelet","logSerialConsole","maxUnhealthy","nodeStartupTimeout","readyUnknownTimeout","readyFalseTimeout","podCpuLimit","podCpuRequest","maxNodeProvisionTime"] | .[]')
           if [ -n "$extra" ]; then
             echo "pool HelmRelease carries keys outside the module allowlist: $extra" >&2
@@ -245,8 +248,9 @@ spec:
 
     # ingress-nginx needs a joined worker, so it is waited for first: 29m for
     # the worker, the kubernetes suites' node-join deadline, plus room for the
-    # install that follows it. cert-manager installs alongside and has had that
-    # time already; its own budget clears its 10m install timeout.
+    # install that follows it. cert-manager also waits on the tenant cilium, so
+    # the worker join is not time it has had; its own budget clears its 10m
+    # install timeout.
     - assert:
         timeout: 35m
         resource:
