@@ -131,6 +131,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+      # e2e-fork.yaml pushes a fork's images only under names the base tree
+      # already exports, so an image the PR adds is refused there after the
+      # whole build. Refuse it here instead, before anything builds. The push
+      # check stays the boundary; a fork can edit this step away.
+      - name: Refuse images the base branch does not build (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          bt="$(mktemp -d)/basetree"
+          git worktree add --quiet --detach "$bt" HEAD^1
+          hack/fork-new-images.sh "$bt" .
       - name: Compute changed files and build matrix
         id: p
         env:
