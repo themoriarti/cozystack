@@ -147,6 +147,18 @@ load test_helper
   fi
 }
 
+@test "root monitoring redirects stay off, including for a narrow suite selection" {
+  for disabled in "" "$(hack/select-install.sh --disabled vminstance)"; do
+    manifest=$(COZY_DISABLED_PACKAGES="$disabled" hack/e2e-platform-packages.sh)
+    root=$(printf '%s\n' "$manifest" | yq 'select(.metadata.name == "cozystack.cozystack-platform") | .spec.components.platform.values.monitoring.rootEnabled')
+
+    if [ "$root" != "false" ]; then
+      echo "monitoring.rootEnabled is '$root' with disabledPackages '$disabled', but Tenant/root monitoring is off" >&2
+      return 1
+    fi
+  done
+}
+
 @test "a malformed package name fails before emitting YAML" {
   for bad in "goldpinger" "cozystack." "cozystack.Gold" "cozystack.a;b"; do
     if manifest=$(COZY_DISABLED_PACKAGES="cozystack.keda $bad" hack/e2e-platform-packages.sh 2>/dev/null); then

@@ -68,6 +68,11 @@ spec:
         publishing:
           host: "example.org"
           apiServerEndpoint: "$api_server_endpoint"
+        # Must match Tenant/root spec.monitoring, which the install sets to
+        # false. Left true, cozystack-basics renders Services into
+        # cozy-monitoring, which a narrow suite selection never creates.
+        monitoring:
+          rootEnabled: false
         bundles:
           enabledPackages:
             - cozystack.external-dns-application
