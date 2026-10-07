@@ -186,6 +186,7 @@ jobs:
               'storage':             'area/storage',
               'piraeus-operator':    'area/storage',
               'backupstrategy-controller': 'area/storage',
+              'local-storage':       'area/storage',
 
               // area/tenant
               'tenant':              'area/tenant',
