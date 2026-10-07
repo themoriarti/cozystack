@@ -15,6 +15,8 @@
 # no run/$status/$output, so each test calls init_state itself and every
 # negative assertion is an explicit `if ...; then ...; false; fi`.
 
+load test_helper
+
 SCRIPT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)/packages/system/cilium/files/ipam-migration.sh"
 
 # init_state builds an isolated workspace with the fake kubectl first on PATH,
