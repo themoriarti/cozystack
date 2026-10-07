@@ -61,15 +61,37 @@ cilium:
   # sets memory.max on the pod cgroup, and the Talos userspace OOM handler
   # (v1.12+) only ever selects cgroups that lack it — so an unlimited agent is
   # an eviction candidate on every node regardless of what caused the pressure.
-  # 14d peak on a 3-node dev cluster is 575Mi, and the agent grows with
-  # endpoint and policy count, so the limit matches the 4Gi in the upstream
-  # values' own commented example rather than being fitted to that measurement.
+  #
+  # The limit has to hold the agent's BPF maps as well as its heap. Read at
+  # cilium 1.19.5: the CT, NAT, neighbor and socket rev-NAT maps are sized as a
+  # share of total node RAM (bpf-map-dynamic-size-ratio, 0.0025 by default),
+  # each capped at 16Mi entries (LimitTableMax). They are LRU hash maps, which
+  # the kernel always preallocates in full, and since Linux 5.11 that memory is
+  # charged to the memcg of the process that creates them, i.e. this container.
+  # A map reused from bpffs stays charged to whoever created it, so a limit too
+  # small for the maps first fails on the start that recreates them: after a
+  # reboot, or when an upgrade changes a map's size or layout. Policy maps do
+  # not scale with RAM: they are LPM tries sized by bpf.policyMapMax that
+  # allocate per entry.
+  #
+  # One DaemonSet serves every node, so the limit cannot follow node RAM and
+  # covers the map ceiling instead: just under 20Gi of kernel memory with every
+  # map at 16Mi entries for both IPv4 and IPv6 (IPv6 is off by default, but
+  # turning it on must not bring the OOM back), plus 4Gi for the agent itself,
+  # the figure from the upstream values' commented example. A limit is a
+  # ceiling, not a reservation, so it costs no schedulable memory. What it does
+  # cost is the backstop against a leak in the agent itself: on every node the
+  # agent is stopped at 24Gi minus its own map memory, which on most nodes is
+  # no practical backstop. memory.max still keeps the pod out of the Talos
+  # handler's victim set, which is what the limit is for. Pinning the map sizes
+  # instead would cap connection capacity on large nodes and, on upgrade,
+  # recreate the maps and drop their conntrack and NAT state.
   resources:
     requests:
       cpu: 100m
       memory: 256Mi
     limits:
-      memory: 4Gi
+      memory: 24Gi
   # Shared by the agent's init containers (config, mount-cgroup, mount-bpf-fs,
   # apply-sysctl-overwrites, clean-cilium-state). All are short-lived setup
   # steps, but each one still has to carry a limit for the pod cgroup to get
