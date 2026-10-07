@@ -16,14 +16,17 @@
 # interprets an empty history, and the failure paths of the reads themselves -
 # without a cluster. The readings are unit-tested in hack/remediation-guard.bats.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Assertions are expressed as
+# CI runs this file under Bats. It stays compatible with the legacy cozytest.sh
+# translator, whose awk parser recognizes only @test blocks and a bare `}` on its
+# own line, so there is no bats `run` or `$status`. Assertions are expressed as
 # direct shell tests that exit non-zero on failure. Scratch directories are
 # removed at the end of the test body rather than from a trap (both runners set
 # -e, so a failed test leaves its fixtures behind for inspection).
 #
-# Run with: hack/cozytest.sh hack/run-kubernetes-remediation_test.bats
+# Run with: bats hack/run-kubernetes-remediation_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 # Writes a fixture-driven kubectl stub into $1/bin and returns with $1/fixtures
 # created. The stub answers the shapes the guard issues: the namespace listing

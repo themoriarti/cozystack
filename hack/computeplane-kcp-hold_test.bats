@@ -17,6 +17,8 @@
 # Run with: hack/cozytest.sh hack/computeplane-kcp-hold_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 KH_LIB="$HACK_DIR/e2e-chainsaw/computeplane/kcp-hold.sh"
 export KH_LIB

@@ -15,7 +15,9 @@
 # _namespace into it (packages/apps/tenant/templates/namespace.yaml). The live
 # merge, Secret included, is asserted by hack/e2e-chainsaw/seaweedfs/.
 #
-# Run with: hack/cozytest.sh hack/seaweedfs-chart-seam.bats
+# Run with: bats hack/seaweedfs-chart-seam.bats
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 APP_CHART="$REPO_ROOT/packages/extra/seaweedfs"

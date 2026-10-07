@@ -10,6 +10,8 @@
 # cozytest.sh sources this file into /bin/sh, which is dash on the CI runners:
 # POSIX shell only, no ${var//} and no <(...).
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PG_FILES="$REPO_ROOT/packages/apps/postgres/files"
 

@@ -14,6 +14,8 @@
 # Run with: hack/cozytest.sh hack/migration-59-vmi-hotplug-volumes.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 FIXTURES="$PWD/hack/testdata/migration-59-vmi-hotplug"
 MIG_DIR="$PWD/packages/core/platform/images/migrations/migrations"
 ALPINE=$(sed -n 's/^FROM \(alpine:[^ ]*\).*$/\1/p' \

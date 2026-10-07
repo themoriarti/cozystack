@@ -13,8 +13,10 @@
 # that keeps the stamped version in a file, so one pod's stamps are what the
 # next pod reads. The harness shape is hack/migration-58-http-cache-freeze.bats's.
 #
-# Run with: hack/cozytest.sh hack/run-migrations.bats
+# Run with: bats hack/run-migrations.bats from the repo root.
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/run-migrations"
 RUNNER="$PWD/packages/core/platform/images/migrations/run-migrations.sh"

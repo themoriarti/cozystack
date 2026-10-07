@@ -11,6 +11,8 @@
 # required, not optional: a suite that skips when the runtime is missing goes
 # green having run nothing.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 WF="$REPO_ROOT/.github/workflows/pr-labeler.yaml"
 LABELS="$REPO_ROOT/.github/labels.yml"
