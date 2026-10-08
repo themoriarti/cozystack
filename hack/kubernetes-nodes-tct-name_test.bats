@@ -11,7 +11,8 @@
 # If any of them disagreed, the MachineDeployment would wait forever on a
 # template nobody creates, or the Job would be forbidden from touching the one
 # it does create. helm-unittest asserts one document at a time, so the
-# cross-document equality is checked here, on a kubevirt and a proxmox pool.
+# cross-document equality is checked here, on a kubevirt and a proxmox pool,
+# and on a pool with a forced talosConfigRevision.
 #
 # Needs `helm` + `yq`; cozytest.sh runs from the repo root.
 # Run with: hack/cozytest.sh hack/kubernetes-nodes-tct-name_test.bats
@@ -50,7 +51,9 @@ proxmox:
   storage: ""
   dnsServers: ["8.8.8.8"]
 VALS
-    for substrate in kubevirt proxmox; do
+    # A forced revision moves the name in all three places at once.
+    { cat "$work/kubevirt.yaml"; echo 'talosConfigRevision: "2026-10-08"'; } > "$work/revision.yaml"
+    for substrate in kubevirt proxmox revision; do
         helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/$substrate.yaml" \
             > "$work/$substrate.out" 2>"$work/$substrate.err" \
             || { echo "$substrate: helm template failed" >&2; cat "$work/$substrate.err" >&2; rm -rf "$work"; exit 1; }
@@ -67,5 +70,7 @@ VALS
     kv=$(yq 'select(.kind == "MachineDeployment") | .spec.template.spec.bootstrap.configRef.name' "$work/kubevirt.out")
     px=$(yq 'select(.kind == "MachineDeployment") | .spec.template.spec.bootstrap.configRef.name' "$work/proxmox.out")
     [ "$kv" != "$px" ] || { echo "kubevirt and proxmox pools render different machineconfigs but share the name '$kv'" >&2; rm -rf "$work"; exit 1; }
+    rv=$(yq 'select(.kind == "MachineDeployment") | .spec.template.spec.bootstrap.configRef.name' "$work/revision.out")
+    [ "$rv" != "$kv" ] || { echo "talosConfigRevision did not move the name off '$kv'" >&2; rm -rf "$work"; exit 1; }
     rm -rf "$work"
 }

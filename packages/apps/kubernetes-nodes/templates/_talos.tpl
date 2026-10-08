@@ -278,9 +278,17 @@ spec:
        nodegroup.yaml (configRef) and the Job (the object it applies) both take
        the name from here, so the two cannot disagree. The runtime inputs —
        apiserver address, CAs, tokens — stay out of the hash: they are not known
-       at render time, and secrets have no business in an object name. */}}
+       at render time, and secrets have no business in an object name. That is
+       also why rotating them rolls nothing on its own: talosConfigRevision is
+       mixed into the hash when set, so an operator can force a fresh template
+       (and a rollout) without touching anything else. Left empty it is not
+       part of the input at all, so the name is the one the spec alone gives. */}}
 {{- define "kubernetes-nodes.talosConfigTemplateNameFromContext" -}}
-{{- printf "%s-%s-%s" .clusterName .groupName (include "kubernetes-nodes.talosConfigTemplateSpec" . | sha256sum | trunc 6) -}}
+{{- $hashInput := include "kubernetes-nodes.talosConfigTemplateSpec" . -}}
+{{- with .Values.talosConfigRevision -}}
+{{-   $hashInput = printf "%s\ntalosConfigRevision: %s" $hashInput (toString .) -}}
+{{- end -}}
+{{- printf "%s-%s-%s" .clusterName .groupName ($hashInput | sha256sum | trunc 6) -}}
 {{- end -}}
 
 {{- define "kubernetes-nodes.talosConfigTemplateName" -}}
