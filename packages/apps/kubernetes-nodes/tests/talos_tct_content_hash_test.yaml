@@ -6,7 +6,7 @@ suite: TalosConfigTemplate is named by its content
 # machineconfig carries and stays put for everything it does not, so a routine
 # upgrade (a kubectl image bump, new autoscaler bounds) rolls no worker.
 #
-# The two literals are golden values. Any change to the rendered spec in
+# The literal names are golden values. Any change to the rendered spec in
 # templates/_talos.tpl moves them, and on upgrade that rolls every pool, so
 # update them deliberately, in the same commit, from:
 #   helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes \
@@ -258,3 +258,68 @@ tests:
       - equal:
           path: spec.template.spec.bootstrap.configRef.name
           value: kubernetes-myk8s-md0-a64f6d
+
+  # The runtime inputs (tokens, CAs, apiserver address) stay out of the hash, so
+  # rotating the parent's talos-secrets renames nothing. talosConfigRevision is
+  # the operator's lever for that: any new value names a fresh template, which
+  # the Job fills with the current secrets and CAPI rolls the pool onto.
+  - it: moves the name when talosConfigRevision is set
+    template: templates/nodegroup.yaml
+    set:
+      talosConfigRevision: "2026-10-08"
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - notEqual:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+      - matchRegex:
+          path: spec.template.spec.bootstrap.configRef.name
+          pattern: ^kubernetes-myk8s-md0-[0-9a-f]{6}$
+
+  - it: moves the name again on the next talosConfigRevision
+    template: templates/nodegroup.yaml
+    set:
+      talosConfigRevision: "2026-10-09"
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - notEqual:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+      - notEqual:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-8aacbc
+
+  # The revision only names the template; it must not reach the machineconfig,
+  # where Talos would reject an unknown key.
+  - it: keeps talosConfigRevision out of the applied spec
+    template: templates/talos-reconcile-job.yaml
+    set:
+      talosConfigRevision: "2026-10-08"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'talosConfigRevision|2026-10-08'
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "TCT_NAME")].value
+          value: kubernetes-myk8s-md0-8aacbc
+
+  # Empty is the default, and the name it gives is the one the spec alone gives:
+  # adding the field rolled no existing pool.
+  - it: keeps the name when talosConfigRevision is empty
+    template: templates/nodegroup.yaml
+    set:
+      talosConfigRevision: ""
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
