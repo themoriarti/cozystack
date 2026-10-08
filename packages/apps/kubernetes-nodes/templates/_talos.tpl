@@ -266,3 +266,25 @@ spec:
               service:
                 disabled: true
 {{- end -}}
+
+{{- /* The TalosConfigTemplate's name: kubernetes-<cluster>-<group>-<hash>, the hash
+       taken over the spec above as this chart renders it, before the Job fills
+       in its runtime inputs. CABPT's webhook rejects any change to a
+       TalosConfigTemplate's spec, so a changed machineconfig has to be a new
+       object; naming it by content is what moves the MachineDeployment's
+       bootstrap.configRef, and so what makes CAPI roll the pool onto it. An
+       unchanged render names the existing object and rolls nothing.
+
+       nodegroup.yaml (configRef) and the Job (the object it applies) both take
+       the name from here, so the two cannot disagree. The runtime inputs —
+       apiserver address, CAs, tokens — stay out of the hash: they are not known
+       at render time, and secrets have no business in an object name. */}}
+{{- define "kubernetes-nodes.talosConfigTemplateNameFromContext" -}}
+{{- printf "%s-%s-%s" .clusterName .groupName (include "kubernetes-nodes.talosConfigTemplateSpec" . | sha256sum | trunc 6) -}}
+{{- end -}}
+
+{{- define "kubernetes-nodes.talosConfigTemplateName" -}}
+{{- $ctx := deepCopy . -}}
+{{- include "kubernetes-nodes.talosConfigContext" (dict "root" . "out" $ctx) -}}
+{{- include "kubernetes-nodes.talosConfigTemplateNameFromContext" $ctx -}}
+{{- end -}}

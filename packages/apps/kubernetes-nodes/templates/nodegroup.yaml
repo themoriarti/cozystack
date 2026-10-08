@@ -863,7 +863,16 @@ spec:
        the TalosConfigTemplate with a KamajiControlPlane ownerReference for
        natural GC. The MachineDeployment below references the TCT name; CAPI's
        Machine controller blocks on its absence and unblocks the moment the Job
-       applies it. */}}
+       applies it.
+
+       That name is content-hashed like the machine template's, and for the
+       same reason: CABPT rejects any change to a TalosConfigTemplate's spec, so
+       a changed machineconfig has to be a new object, and moving configRef to
+       it is what makes CAPI roll the pool. kubernetes-nodes.talosConfigTemplateName
+       hashes the very spec the Job applies, so the two cannot name different
+       objects. On an upgrade that renames it, the rollout waits until the Job
+       has applied the new template; the old MachineSet keeps running until
+       then. */}}
 ---
 {{- $context := deepCopy $ }}
 {{- $_ := set $context "group" $group }}
@@ -959,7 +968,7 @@ spec:
         configRef:
           apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
           kind: TalosConfigTemplate
-          name: {{ $clusterName }}-{{ $groupName }}
+          name: {{ include "kubernetes-nodes.talosConfigTemplateName" $ }}
           namespace: {{ $.Release.Namespace }}
       clusterName: {{ $clusterName }}
       infrastructureRef:
