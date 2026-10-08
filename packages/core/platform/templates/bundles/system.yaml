@@ -22,17 +22,25 @@
 {{- if dig "encryption" "enabled" false .Values.networking -}}
 {{- $_ := set $kubeovnDict "func" (dict "ENABLE_OVN_IPSEC" true) -}}
 {{- end -}}
-{{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
-{{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- /* For Talos (isp-full, isp-slim): use KubePrism endpoint and disable cgroup autoMount */ -}}
 {{- /* gateway.http2 is threaded explicitly in BOTH states: inline HelmRelease
        values override the system/cilium valuesFiles default (enableAlpn: true),
        so an operator's http2: false actually reaches the dataplane. */ -}}
-{{- $ciliumValues := dict "cilium" (dict
+{{- $cilium := dict
   "k8sServiceHost" "localhost"
   "k8sServicePort" "7445"
   "cgroup" (dict "autoMount" (dict "enabled" false))
-  "gatewayAPI" (dict "enableAlpn" .Values.gateway.http2)) -}}
+  "gatewayAPI" (dict "enableAlpn" .Values.gateway.http2) -}}
+{{- /* Cilium's own addresses come from a block of the pod CIDR that kube-ovn
+       does not hand out, see cozystack.platform.ciliumPool. The slim variants
+       run no kube-ovn and keep Cilium allocating pods from Node.spec.podCIDR. */ -}}
+{{- if not (include "cozystack.platform.slim" $) -}}
+{{- $_ := set $kubeovnDict "networking" (dict "EXCLUDE_IPS" (include "cozystack.platform.ciliumPoolRange" .Values.networking.podCIDR)) -}}
+{{- $_ := set $cilium "ipam" (dict "operator" (dict "clusterPoolIPv4PodCIDRList" (list (include "cozystack.platform.ciliumPool" .Values.networking.podCIDR)))) -}}
+{{- end -}}
+{{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
+{{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
+{{- $ciliumValues := dict "cilium" $cilium -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package.networking" (list $ $networkingComponents "kubeovn-cilium" "cilium") }}
@@ -112,15 +120,22 @@
 {{- if dig "encryption" "enabled" false .Values.networking -}}
 {{- $_ := set $kubeovnDict "func" (dict "ENABLE_OVN_IPSEC" true) -}}
 {{- end -}}
-{{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
-{{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- /* Cilium configuration - for generic k8s, always enable cgroup autoMount */ -}}
 {{- /* gateway.http2 threading: same rationale as the isp-full branch above. */ -}}
-{{- $ciliumValues := dict "cilium" (dict
+{{- $cilium := dict
   "k8sServiceHost" $apiHost
   "k8sServicePort" $apiPort
   "cgroup" (dict "autoMount" (dict "enabled" true))
-  "gatewayAPI" (dict "enableAlpn" .Values.gateway.http2)) -}}
+  "gatewayAPI" (dict "enableAlpn" .Values.gateway.http2) -}}
+{{- /* Cilium's address block, same as the isp-full branch above, from the pod
+       CIDR the cluster actually runs with. */ -}}
+{{- if not (include "cozystack.platform.slim" $) -}}
+{{- $_ := set $kubeovnDict "networking" (dict "EXCLUDE_IPS" (include "cozystack.platform.ciliumPoolRange" $podCIDR)) -}}
+{{- $_ := set $cilium "ipam" (dict "operator" (dict "clusterPoolIPv4PodCIDRList" (list (include "cozystack.platform.ciliumPool" $podCIDR)))) -}}
+{{- end -}}
+{{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
+{{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
+{{- $ciliumValues := dict "cilium" $cilium -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
 {{- /* Use kubeovn-cilium-generic / cilium-generic (no values-talos.yaml) */ -}}

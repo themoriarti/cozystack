@@ -107,3 +107,6 @@ cilium:
       requests:
         cpu: 100m
         memory: 128Mi
+# kubectl and jq for the hook Jobs in templates/ipam-migration.yaml.
+ipamMigration:
+  image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47
