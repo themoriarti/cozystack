@@ -296,7 +296,11 @@ jobs:
   # required check rather than blocking e2e from starting.
   checks:
     name: Unit & controller tests
-    runs-on: oracle-vm-4cpu-16gb-x86-64
+    # Fork override: the repository variable CI_RUNNER_4CPU (e.g. ubuntu-latest)
+    # replaces the upstream runner label for the 4-vCPU PR jobs (checks, build,
+    # build-talos, finalize). Unset, the upstream label is used, so upstream
+    # behaviour is unchanged. themoriarti/cozystack has no oracle-vm runners.
+    runs-on: ${{ vars.CI_RUNNER_4CPU || 'oracle-vm-4cpu-16gb-x86-64' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -344,7 +348,7 @@ jobs:
       needs.plan.outputs.code == 'true'
       && needs.plan.outputs.any == 'true'
       && !contains(github.event.pull_request.labels.*.name, 'release')
-    runs-on: oracle-vm-4cpu-16gb-x86-64
+    runs-on: ${{ vars.CI_RUNNER_4CPU || 'oracle-vm-4cpu-16gb-x86-64' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -488,7 +492,7 @@ jobs:
         github.event.pull_request.head.repo.fork
         || needs.plan.outputs.talos == 'true'
       )
-    runs-on: oracle-vm-4cpu-16gb-x86-64
+    runs-on: ${{ vars.CI_RUNNER_4CPU || 'oracle-vm-4cpu-16gb-x86-64' }}
     timeout-minutes: 40
     permissions:
       contents: read
@@ -579,7 +583,7 @@ jobs:
       && needs.checks.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped')
       && (needs.build-talos.result == 'success' || needs.build-talos.result == 'skipped')
-    runs-on: oracle-vm-4cpu-16gb-x86-64
+    runs-on: ${{ vars.CI_RUNNER_4CPU || 'oracle-vm-4cpu-16gb-x86-64' }}
     timeout-minutes: 30
     permissions:
       contents: read
