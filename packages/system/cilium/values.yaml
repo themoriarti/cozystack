@@ -45,6 +45,12 @@ cilium:
     digest: "sha256:136a7dfff4d6adcd448424c2354144160028a8e96eb6558b917fd3ee6d7b39fe"
   envoy:
     enabled: true
+    # Keep the per-type xDS the 1.19 agent and envoy speak. The 1.20 chart
+    # defaults to ADS, which a 1.19 agent never serves and a 1.20 agent in
+    # ADS mode serves exclusively, so while the agent and envoy DaemonSets
+    # roll, a node with mixed versions gives envoy no config. Moving to ADS
+    # needs a step of its own once every node runs 1.20.
+    xdsMode: split
     # Upstream default is {} — no requests/limits. The embedded envoy DaemonSet
     # idles at ~100 MB RAM/node and grows under L7 traffic; without requests
     # the DaemonSet schedules onto any node with no reserved headroom, and
