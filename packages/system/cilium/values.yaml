@@ -98,6 +98,15 @@ cilium:
     enableAlpn: true
   rollOutCiliumPods: true
   operator:
+    # A rebuild of the upstream operator carrying the Go patches in
+    # images/cilium-operator/patches/: it accepts an HTTPS listener and a TLS
+    # passthrough listener on one port when the passthrough hostname is
+    # strictly narrower, and serves such a port from one Envoy listener.
+    # `make image` stamps the ref; until it does, the committed value is the
+    # unpatched upstream operator the rebuild starts from, so a tree rendered
+    # without a build still pulls an image that exists.
+    image:
+      override: "quay.io/cilium/operator-generic:v1.20.2@sha256:64d8798350e8569b8e7622563fed6e44dce2625f311e4651b774816516c744fc"
     rollOutPods: true
     replicas: 1
     resources:
