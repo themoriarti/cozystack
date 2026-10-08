@@ -11200,3 +11200,146 @@ func TestReconcile_PlainServedRouteHoldsTheNameInEveryRecount(t *testing.T) {
 		})
 	}
 }
+
+// programGateway writes the status a Gateway controller writes once it
+// has accepted and programmed the Gateway and every listener.
+func programGateway(t *testing.T, c client.Client, key types.NamespacedName) {
+	t.Helper()
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), key, gw); err != nil {
+		t.Fatalf("get Gateway %s: %v", key, err)
+	}
+	ok := func(typ string) metav1.Condition {
+		return metav1.Condition{Type: typ, Status: metav1.ConditionTrue, Reason: typ, LastTransitionTime: metav1.Now()}
+	}
+	gw.Status.Conditions = []metav1.Condition{ok("Accepted"), ok("Programmed")}
+	gw.Status.Listeners = nil
+	for _, l := range gw.Spec.Listeners {
+		gw.Status.Listeners = append(gw.Status.Listeners, gatewayv1.ListenerStatus{
+			Name:           l.Name,
+			Conditions:     []metav1.Condition{ok("Accepted"), ok("Programmed")},
+			SupportedKinds: []gatewayv1.RouteGroupKind{},
+		})
+	}
+	if err := c.Status().Update(context.TODO(), gw); err != nil {
+		t.Fatalf("program Gateway %s: %v", key, err)
+	}
+}
+
+func readyCondition(t *testing.T, c client.Client, key types.NamespacedName) *metav1.Condition {
+	t.Helper()
+	got := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), key, got); err != nil {
+		t.Fatalf("get TenantGateway: %v", err)
+	}
+	for i := range got.Status.Conditions {
+		if got.Status.Conditions[i].Type == "Ready" {
+			return &got.Status.Conditions[i]
+		}
+	}
+	t.Fatalf("no Ready condition on %+v", got.Status)
+	return nil
+}
+
+// TestReconcile_ReadyNamesAClassThatCannotServePassthrough pins the
+// portability contract: a GatewayClass declares what it supports in
+// status.supportedFeatures, and a TenantGateway rendering passthrough
+// listeners on one that lacks TLSRoute reports it rather than reading
+// Ready on listeners nothing will serve. A class that declares nothing
+// is not judged, since older implementations do not fill the field in.
+func TestReconcile_ReadyNamesAClassThatCannotServePassthrough(t *testing.T) {
+	apiListener := []gatewayv1alpha1.TLSPassthroughListener{{Name: "api", Port: 6443, Hostname: "api.foo.example.com"}}
+	noTLSRoute := []gatewayv1.FeatureName{"Gateway", "HTTPRoute"}
+	for _, tc := range []struct {
+		name      string
+		features  []gatewayv1.FeatureName
+		mode      gatewayv1alpha1.CertMode
+		services  []string
+		listeners []gatewayv1alpha1.TLSPassthroughListener
+		noClass   bool
+		wantClass bool
+	}{
+		{"class without TLSRoute, passthrough listener", noTLSRoute, gatewayv1alpha1.CertModeHTTP01, nil, apiListener, false, true},
+		{"class without TLSRoute, passthrough services", noTLSRoute, gatewayv1alpha1.CertModeHTTP01, []string{"api"}, nil, false, true},
+		{"class with TLSRoute", []gatewayv1.FeatureName{"Gateway", "HTTPRoute", "TLSRoute"}, gatewayv1alpha1.CertModeHTTP01, []string{"vm-exportproxy"}, apiListener, false, false},
+		{"class declaring nothing", nil, gatewayv1alpha1.CertModeHTTP01, []string{"vm-exportproxy"}, apiListener, false, false},
+		{"class without TLSRoute, no passthrough", noTLSRoute, gatewayv1alpha1.CertModeHTTP01, nil, nil, false, false},
+		// edge renders no passthrough listener, so the class has nothing
+		// it could fail to serve.
+		{"class without TLSRoute, edge", noTLSRoute, gatewayv1alpha1.CertModeEdge, []string{"api"}, nil, false, false},
+		// A class that does not exist is a misspelled name, which shows
+		// as GatewayNotAccepted rather than as a missing feature.
+		{"no such class", nil, gatewayv1alpha1.CertModeHTTP01, nil, apiListener, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScheme(t)
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                    "foo.example.com",
+					CertMode:                tc.mode,
+					GatewayClassName:        "other",
+					TLSPassthroughServices:  tc.services,
+					TLSPassthroughListeners: tc.listeners,
+				},
+			}
+			class := &gatewayv1.GatewayClass{
+				ObjectMeta: metav1.ObjectMeta{Name: "other"},
+				Spec:       gatewayv1.GatewayClassSpec{ControllerName: "example.com/other"},
+			}
+			for _, f := range tc.features {
+				class.Status.SupportedFeatures = append(class.Status.SupportedFeatures, gatewayv1.SupportedFeature{Name: f})
+			}
+			objs := []client.Object{tgw}
+			if !tc.noClass {
+				objs = append(objs, class)
+			}
+			c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+			r := &Reconciler{Client: c, Scheme: s}
+			key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
+			if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("first reconcile: %v", err)
+			}
+			programGateway(t, c, key)
+			if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("second reconcile: %v", err)
+			}
+			ready := readyCondition(t, c, key)
+			if got := ready.Reason == "GatewayClassUnsupported"; got != tc.wantClass {
+				t.Errorf("Ready=%s reason=%s (%s), want the class refusal: %v", ready.Status, ready.Reason, ready.Message, tc.wantClass)
+			}
+			if tc.wantClass && (ready.Status != metav1.ConditionFalse || !strings.Contains(ready.Message, "TLSRoute") || !strings.Contains(ready.Message, "other")) {
+				t.Errorf("refusal must be Ready=False naming the class and the feature: %+v", ready)
+			}
+		})
+	}
+}
+
+// TestClassLacksTLSRoute_GetErrorFailsTheReconcile pins that a failed
+// GatewayClass read is returned rather than read as "not judged": a
+// transient API error must not turn into a Ready verdict.
+func TestClassLacksTLSRoute_GetErrorFailsTheReconcile(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, isClass := obj.(*gatewayv1.GatewayClass); isClass {
+					return errors.New("apiserver unavailable")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.classLacksTLSRoute(context.TODO(), tgw); err == nil {
+		t.Fatal("classLacksTLSRoute swallowed a failed GatewayClass read")
+	}
+}

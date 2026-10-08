@@ -46,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -113,6 +114,13 @@ func renderedPassthroughServices(tgw *gatewayv1alpha1.TenantGateway) []string {
 	return tgw.Spec.TLSPassthroughServices
 }
 
+func gatewayClassName(tgw *gatewayv1alpha1.TenantGateway) string {
+	if tgw.Spec.GatewayClassName == "" {
+		return "cilium"
+	}
+	return tgw.Spec.GatewayClassName
+}
+
 // gatewayIssuerName returns the per-tenant ACME Issuer name. The
 // Issuer lives in the same namespace as the TenantGateway and is
 // referenced by every Certificate this controller renders.
@@ -131,6 +139,7 @@ const (
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes;tlsroutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/status;httproutes/status;tlsroutes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=referencegrants,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates;issuers,verbs=get;list;watch;create;update;patch;delete
 
@@ -1753,10 +1762,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		})
 	}
 
-	className := tgw.Spec.GatewayClassName
-	if className == "" {
-		className = "cilium"
-	}
+	className := gatewayClassName(tgw)
 
 	// Gateway API caps spec.listeners at 64 and rejects the object
 	// wholesale past that — every app's HTTPS listener included. No
@@ -1791,9 +1797,6 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	return gw, nil
 }
 
-// SetupWithManager wires the Reconciler into the controller manager
-// with For (TenantGateway as primary), Owns (Gateway and Certificate
-// as owned children), and Watches against HTTPRoute and TLSRoute so
 // collectInheritingChildApexes returns the deduplicated, sorted
 // list of apex hostnames from tenant namespaces that inherit this
 // Gateway's publishing layer. A namespace counts as inheriting when
@@ -1926,12 +1929,17 @@ func (r *Reconciler) stripNamespaceGatewayLabel(ctx context.Context, name string
 	return r.Patch(ctx, ns, client.MergeFrom(before))
 }
 
+// SetupWithManager wires the Reconciler into the controller manager
+// with For (TenantGateway as primary), Owns (Gateway and Certificate
+// as owned children), Watches against HTTPRoute and TLSRoute so
 // route additions in attached namespaces re-trigger reconciliation
 // of the parent TenantGateway, and so do the objects a TLSRoute's
 // backendRef resolves through: a route that forwards nowhere leaves
 // the terminate listener standing, so the Service appearing — or the
 // ReferenceGrant that admits a cross-namespace reference — is what
-// lands the withdrawal that was deferred.
+// lands the withdrawal that was deferred. A Watch against GatewayClass
+// lets a class that changes its supportedFeatures re-judge the
+// TenantGateways on it.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("tenantgateway-controller").
@@ -1956,6 +1964,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&gatewayv1beta1.ReferenceGrant{},
 			r.backendToTenantGateways(),
+		).
+		Watches(
+			&gatewayv1.GatewayClass{},
+			handler.EnqueueRequestsFromMapFunc(r.mapGatewayClassToTenantGateways),
 		).
 		Complete(r)
 }
