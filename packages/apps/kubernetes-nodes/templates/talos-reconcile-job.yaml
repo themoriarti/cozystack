@@ -40,10 +40,20 @@
   render whose machineconfig changed names a new template and CAPI rolls the pool
   onto it; an unchanged render re-applies the existing one as a no-op and rolls
   nothing.
+
+  Pruning. Each rename leaves the previous template behind, and its
+  ownerReferences (KamajiControlPlane, plus the Cluster CAPI adds) outlive every
+  revision of the pool. The render lists this pool's templates no MachineSet
+  references any more (kubernetes-nodes.staleTalosConfigTemplates); the Role may
+  delete exactly those names, and the Job deletes them after the apply, checking
+  each against the live MachineSets once more first. A template is therefore
+  pruned on the first upgrade after the MachineSet holding it is gone, the same
+  lag the hash-named machine templates have.
 */}}
 {{- $clusterName := include "kubernetes-nodes.clusterName" . }}
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
 {{- $tctName := include "kubernetes-nodes.talosConfigTemplateName" . }}
+{{- $staleTcts := include "kubernetes-nodes.staleTalosConfigTemplates" (dict "root" . "current" $tctName) | fromJsonArray }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -91,13 +101,20 @@ rules:
     verbs: ["create"]
   {{- /* delete is separate and named: CABPT's validating webhook rejects any
          change to spec, so a template whose runtime inputs moved can only be
-         applied by replacing the object.
-         Restricting it to this pool's own template keeps the Job unable to
-         remove anyone else's. */}}
+         applied by replacing the object, and this pool's unreferenced old
+         templates are pruned. Naming exactly those — the current template and
+         the stale ones this render computed — keeps the Job unable to remove
+         anyone else's. */}}
   - apiGroups: ["bootstrap.cluster.x-k8s.io"]
     resources: ["talosconfigtemplates"]
-    resourceNames: ["{{ $tctName }}"]
+    resourceNames: {{ prepend $staleTcts $tctName | toJson }}
     verbs: ["delete"]
+  {{- /* Read-only, for the check right before each prune that no MachineSet has
+         come to reference the template since the render. list cannot be
+         narrowed by name. */}}
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["machinesets"]
+    verbs: ["list"]
 ---
 {{- /* The tenant-root chart installs a default-deny egress policy on every
        pod in the tenant namespace; without an explicit allow, this Job
@@ -204,6 +221,8 @@ spec:
               value: {{ .groupName | quote }}
             - name: TCT_NAME
               value: {{ .tctName | quote }}
+            - name: STALE_TCTS
+              value: {{ join " " .staleTcts | quote }}
             - name: TALOS_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -338,6 +357,29 @@ spec:
                 esac
               fi
               echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${TCT_NAME} applied"
+
+              # Prune this pool's templates that no MachineSet referenced at
+              # render time. Each is checked against the live MachineSets once
+              # more first: one can have come to reference it since, for instance
+              # after values were reverted to a render that names it again. A
+              # failure to list or delete fails the Job, which retries; the
+              # template above is already applied.
+              for STALE in ${STALE_TCTS}; do
+                REFS="$(kubectl -n "$NS" get machinesets.cluster.x-k8s.io -o jsonpath='{range .items[*]}{.spec.template.spec.bootstrap.configRef.name}{"\n"}{end}')"
+                case "
+              ${REFS}
+              " in
+                  *"
+              ${STALE}
+              "*)
+                    echo "[$(date -u +%H:%M:%S)] keeping TalosConfigTemplate ${STALE}: a MachineSet references it"
+                    ;;
+                  *)
+                    kubectl -n "$NS" delete talosconfigtemplate "${STALE}" --ignore-not-found
+                    echo "[$(date -u +%H:%M:%S)] pruned TalosConfigTemplate ${STALE}"
+                    ;;
+                esac
+              done
           resources:
             requests:
               cpu: 10m
@@ -362,6 +404,7 @@ spec:
 {{- $jobContext := deepCopy $ }}
 {{- include "kubernetes-nodes.talosConfigContext" (dict "root" $ "out" $jobContext) }}
 {{- $_ := set $jobContext "tctName" $tctName }}
+{{- $_ := set $jobContext "staleTcts" $staleTcts }}
 {{- $_ := set $jobContext "kubectlImage" (default ($.Files.Get "images/kubectl.tag" | trim) $.Values.images.kubectl) }}
 {{- $jobSpec := include "kubernetes-nodes.talos-reconcile-job-spec" $jobContext }}
 {{- $jobHash := $jobSpec | sha256sum | trunc 6 }}

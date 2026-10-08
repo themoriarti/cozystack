@@ -288,3 +288,57 @@ spec:
 {{- include "kubernetes-nodes.talosConfigContext" (dict "root" . "out" $ctx) -}}
 {{- include "kubernetes-nodes.talosConfigTemplateNameFromContext" $ctx -}}
 {{- end -}}
+
+{{- /* kubernetes-nodes.staleTalosConfigTemplates returns, as a JSON array, this
+       pool's TalosConfigTemplates that nothing references any more. Called as
+       (dict "root" $ "current" <this render's template name>).
+
+       Every machineconfig change leaves the previous template behind, and the
+       ownerReferences cannot reap it: KamajiControlPlane is the controller and
+       CAPI adds the Cluster, and both outlive every revision of the pool. So the
+       old ones are pruned the way the hash-named machine templates are kept in
+       nodegroup.yaml: a template stays while any MachineSet (or the live
+       MachineDeployment) still points at it, and goes on the first render after
+       that stops. With revisionHistoryLimit 1 that leaves at most the current
+       template, the one the retained MachineSet holds, and one on its way out.
+
+       "This pool's" is decided exactly, never by name prefix — pool "md0" must
+       not match a sibling "md0-a1b2c3": the template carries the
+       cozystack.io/kubernetes-nodes-release label the Job stamps on it, or it is
+       the stable kubernetes-<cluster>-<group> name every template had before
+       content naming. Either way it must also be owned by this cluster's
+       KamajiControlPlane. The current name is never returned.
+
+       lookup is empty under helm template and helm-unittest without a
+       kubernetesProvider, which returns an empty list: nothing is pruned. */}}
+{{- define "kubernetes-nodes.staleTalosConfigTemplates" -}}
+{{- $root := .root -}}
+{{- $current := .current -}}
+{{- $ns := $root.Release.Namespace -}}
+{{- $clusterName := include "kubernetes-nodes.clusterName" $root -}}
+{{- $legacyName := printf "%s-%s" $clusterName (include "kubernetes-nodes.groupName" $root) -}}
+{{- $referenced := list -}}
+{{- range (lookup "cluster.x-k8s.io/v1beta1" "MachineSet" $ns "").items | default list -}}
+{{-   if eq (dig "spec" "template" "spec" "bootstrap" "configRef" "kind" "" .) "TalosConfigTemplate" -}}
+{{-     $referenced = append $referenced (dig "spec" "template" "spec" "bootstrap" "configRef" "name" "" .) -}}
+{{-   end -}}
+{{- end -}}
+{{- with lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" $ns $legacyName -}}
+{{-   $referenced = append $referenced (dig "spec" "template" "spec" "bootstrap" "configRef" "name" "" .) -}}
+{{- end -}}
+{{- $stale := list -}}
+{{- range (lookup "bootstrap.cluster.x-k8s.io/v1alpha3" "TalosConfigTemplate" $ns "").items | default list -}}
+{{-   $name := .metadata.name -}}
+{{-   $mine := or (eq (dig "metadata" "labels" "cozystack.io/kubernetes-nodes-release" "" .) $root.Release.Name) (eq $name $legacyName) -}}
+{{-   $ownedByCluster := false -}}
+{{-   range (dig "metadata" "ownerReferences" list .) -}}
+{{-     if and (eq (.kind | default "") "KamajiControlPlane") (eq (.name | default "") $clusterName) -}}
+{{-       $ownedByCluster = true -}}
+{{-     end -}}
+{{-   end -}}
+{{-   if and $mine $ownedByCluster (ne $name $current) (not (has $name $referenced)) -}}
+{{-     $stale = append $stale $name -}}
+{{-   end -}}
+{{- end -}}
+{{- $stale | sortAlpha | toJson -}}
+{{- end -}}
