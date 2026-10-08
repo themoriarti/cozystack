@@ -31,14 +31,19 @@
   release.cozystack.io/helm-install-disable-wait annotation on the pool's
   ApplicationDefinition.
 
-  Churn-free across upgrades. The Job is immutable, so it carries a content-hash
-  name suffix; an identical render yields the same name and Helm no-ops it. The
-  applied TalosConfigTemplate keeps a stable name (kubernetes-<cluster>-<group>,
-  referenced by MachineDeployment.bootstrap.configRef), so an unchanged render
-  re-applies a byte-identical TCT — a CAPI no-op that never rolls workers.
+  Churn-free across upgrades, and a rollout when the machineconfig changes. The
+  Job is immutable, so it carries a content-hash name suffix; an identical render
+  yields the same name and Helm no-ops it. The TalosConfigTemplate is immutable
+  too (CABPT's webhook rejects any change to its spec), so it is content-hash
+  named the same way, kubernetes-<cluster>-<group>-<hash> from _talos.tpl, and
+  MachineDeployment.bootstrap.configRef in nodegroup.yaml carries that name. A
+  render whose machineconfig changed names a new template and CAPI rolls the pool
+  onto it; an unchanged render re-applies the existing one as a no-op and rolls
+  nothing.
 */}}
 {{- $clusterName := include "kubernetes-nodes.clusterName" . }}
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
+{{- $tctName := include "kubernetes-nodes.talosConfigTemplateName" . }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -79,19 +84,19 @@ rules:
          boot. Create stays unnamed because RBAC gives no way to narrow it. */}}
   - apiGroups: ["bootstrap.cluster.x-k8s.io"]
     resources: ["talosconfigtemplates"]
-    resourceNames: ["{{ $clusterName }}-{{ $groupName }}"]
+    resourceNames: ["{{ $tctName }}"]
     verbs: ["get", "patch", "update"]
   - apiGroups: ["bootstrap.cluster.x-k8s.io"]
     resources: ["talosconfigtemplates"]
     verbs: ["create"]
   {{- /* delete is separate and named: CABPT's validating webhook rejects any
-         change to spec, so a genuinely changed render can only be applied by
-         replacing the object.
+         change to spec, so a template whose runtime inputs moved can only be
+         applied by replacing the object.
          Restricting it to this pool's own template keeps the Job unable to
          remove anyone else's. */}}
   - apiGroups: ["bootstrap.cluster.x-k8s.io"]
     resources: ["talosconfigtemplates"]
-    resourceNames: ["{{ $clusterName }}-{{ $groupName }}"]
+    resourceNames: ["{{ $tctName }}"]
     verbs: ["delete"]
 ---
 {{- /* The tenant-root chart installs a default-deny egress policy on every
@@ -197,6 +202,8 @@ spec:
               value: {{ $.Release.Namespace | quote }}
             - name: GROUP_NAME
               value: {{ .groupName | quote }}
+            - name: TCT_NAME
+              value: {{ .tctName | quote }}
             - name: TALOS_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -287,8 +294,10 @@ spec:
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
               metadata:
-                name: ${RELEASE}-${GROUP_NAME}
+                name: ${TCT_NAME}
                 namespace: ${NS}
+                labels:
+                  cozystack.io/kubernetes-nodes-release: {{ $.Release.Name | quote }}
                 ownerReferences:
                   - apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
                     kind: KamajiControlPlane
@@ -300,26 +309,26 @@ spec:
               EOF
               )"
 
-              # CABPT's validating webhook rejects any change to spec
-              # (TalosConfigTemplate.Spec is immutable), so apply fails the moment
-              # any input this render depends on has genuinely changed -- the apiserver
-              # address is the one that moves in practice. The object then has to
-              # be replaced rather than patched. Existing Machines are unaffected:
-              # their bootstrap data was rendered when they joined. Only Machines
-              # created afterwards read the new template, which is the intent.
+              # TCT_NAME is a hash of what this chart renders, so a template that
+              # already exists under it can differ only in what this Job fills in
+              # at runtime -- the apiserver address or a renewed CA. CABPT's
+              # validating webhook rejects any change to spec
+              # (TalosConfigTemplate.Spec is immutable), so that case is replaced
+              # in place. It does not roll the pool: the name, and so the
+              # MachineDeployment's configRef, stays the same. Machines that
+              # already joined keep the bootstrap data they were rendered with;
+              # only Machines created afterwards read the new template.
               #
               # Every other apply failure still stops the Job. Matching on the
               # message is narrow on purpose: an apply rejected for its content (a
               # schema error, say) would be rejected again on the re-create, and a
               # delete before it would leave the pool with no template at all,
-              # unable to scale until the render is fixed. A replace itself does
-              # not roll the pool: Machines reference the template by name, and
-              # the name does not change.
+              # unable to scale until the render is fixed.
               if ! APPLY_OUT="$(printf '%s\n' "$TCT_MANIFEST" | kubectl apply --server-side --force-conflicts -f - 2>&1)"; then
                 case "$APPLY_OUT" in
                   *"is immutable"*)
-                    echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${RELEASE}-${GROUP_NAME} spec changed; replacing the immutable object"
-                    kubectl delete talosconfigtemplate "${RELEASE}-${GROUP_NAME}" -n "$NS"
+                    echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${TCT_NAME} runtime inputs changed; replacing the immutable object"
+                    kubectl delete talosconfigtemplate "${TCT_NAME}" -n "$NS"
                     printf '%s\n' "$TCT_MANIFEST" | kubectl apply --server-side --force-conflicts -f -
                     ;;
                   *)
@@ -328,7 +337,7 @@ spec:
                     ;;
                 esac
               fi
-              echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${RELEASE}-${GROUP_NAME} applied"
+              echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${TCT_NAME} applied"
           resources:
             requests:
               cpu: 10m
@@ -352,6 +361,7 @@ spec:
        template name. kubectlImage is the Job's own. */}}
 {{- $jobContext := deepCopy $ }}
 {{- include "kubernetes-nodes.talosConfigContext" (dict "root" $ "out" $jobContext) }}
+{{- $_ := set $jobContext "tctName" $tctName }}
 {{- $_ := set $jobContext "kubectlImage" (default ($.Files.Get "images/kubectl.tag" | trim) $.Values.images.kubectl) }}
 {{- $jobSpec := include "kubernetes-nodes.talos-reconcile-job-spec" $jobContext }}
 {{- $jobHash := $jobSpec | sha256sum | trunc 6 }}

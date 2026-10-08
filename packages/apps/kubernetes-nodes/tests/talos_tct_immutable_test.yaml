@@ -1,9 +1,11 @@
 suite: TalosConfigTemplate replacement on an immutable spec
-# CABPT's validating webhook rejects any change to spec, so the Job's kubectl
-# apply fails the moment any input the render depends on genuinely changes —
-# the apiserver address being the one that moves in practice. What is pinned
-# here is that the Job replaces it, that it only does so for that specific
-# failure, and that it may delete nothing else.
+# CABPT's validating webhook rejects any change to spec. The template is named
+# by a hash of what the chart renders, so a template that already exists under
+# that name can only differ in what the Job fills in at runtime -- the
+# apiserver address being the one that moves in practice -- and the Job's
+# kubectl apply then fails. What is pinned here is that the Job replaces it,
+# that it only does so for that specific failure, and that it may delete
+# nothing else.
 templates:
   - templates/talos-reconcile-job.yaml
 release:
@@ -30,7 +32,12 @@ tests:
       # would take out a sibling pool's, and a prefix match would not see it.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'kubectl delete talosconfigtemplate "\$\{RELEASE\}-\$\{GROUP_NAME\}" -n "\$NS"'
+          pattern: 'kubectl delete talosconfigtemplate "\$\{TCT_NAME\}" -n "\$NS"'
+      # ...and TCT_NAME is this pool's content-hashed name, the one the
+      # MachineDeployment references (tests/talos_tct_content_hash_test.yaml).
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "TCT_NAME")].value
+          pattern: ^kubernetes-myk8s-md0-[0-9a-f]{6}$
 
   # Any other apply error must stop the Job: a delete followed by a create that
   # fails for the same reason would leave the pool with no template at all.
@@ -51,13 +58,16 @@ tests:
       path: kind
       value: Role
     asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups: ["bootstrap.cluster.x-k8s.io"]
-            resources: ["talosconfigtemplates"]
-            resourceNames: ["kubernetes-myk8s-md0"]
-            verbs: ["delete"]
+      # Selected by verb and resource rather than matched as a whole rule: the
+      # name carries a content hash, which this suite has no reason to pin.
+      - matchRegex:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "delete")].resourceNames[0]
+          pattern: ^kubernetes-myk8s-md0-[0-9a-f]{6}$
+      # With nothing live to prune (lookup is empty here), the current template
+      # is the only one it may delete.
+      - lengthEqual:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "delete")].resourceNames
+          count: 1
       # delete must stay bound to this pool's own template: an unnamed rule
       # carrying it, alone or folded into the unnamed create, would let the Job
       # remove a sibling pool's template.
@@ -82,13 +92,15 @@ tests:
       path: kind
       value: Role
     asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups: ["bootstrap.cluster.x-k8s.io"]
-            resources: ["talosconfigtemplates"]
-            resourceNames: ["kubernetes-myk8s-md0"]
-            verbs: ["get", "patch", "update"]
+      - equal:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "get")].verbs
+          value: ["get", "patch", "update"]
+      - matchRegex:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "get")].resourceNames[0]
+          pattern: ^kubernetes-myk8s-md0-[0-9a-f]{6}$
+      - lengthEqual:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "get")].resourceNames
+          count: 1
       - notContains:
           path: rules
           content:

@@ -1,0 +1,260 @@
+suite: TalosConfigTemplate is named by its content
+# CABPT's validating webhook rejects any change to a TalosConfigTemplate's
+# spec, so a changed worker machineconfig has to land as a new object, and CAPI
+# rolls a pool only when MachineDeployment.bootstrap.configRef names a
+# different one. What is pinned here: the name moves with every input the
+# machineconfig carries and stays put for everything it does not, so a routine
+# upgrade (a kubectl image bump, new autoscaler bounds) rolls no worker.
+#
+# The two literals are golden values. Any change to the rendered spec in
+# templates/_talos.tpl moves them, and on upgrade that rolls every pool, so
+# update them deliberately, in the same commit, from:
+#   helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes \
+#     -n tenant-test --set ... \
+#     | yq 'select(.kind=="MachineDeployment").spec.template.spec.bootstrap.configRef.name'
+# That the Job applies the same name the MachineDeployment references is
+# checked across both documents by hack/kubernetes-nodes-tct-name_test.bats.
+templates:
+  - templates/nodegroup.yaml
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: names the template kubernetes-<cluster>-<group>-<hash> in the MachineDeployment
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+
+  - it: applies the template under that same name
+    template: templates/talos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "TCT_NAME")].value
+          value: kubernetes-myk8s-md0-ffdbe1
+      # The heredoc names the object by the variable, never by a second
+      # rendering of the name that could drift from the first.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '(?m)^\s+name: \$\{TCT_NAME\}$'
+
+  # The Job's own name moves with the kubectl image, so it reruns; the template
+  # it applies does not, so that rerun is a no-op that rolls nothing.
+  - it: keeps the name across a kubectl image bump
+    template: templates/nodegroup.yaml
+    set:
+      images:
+        kubectl: example.org/kubectl:v9.9.9
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+
+  - it: keeps the name across autoscaler bounds and health-check settings
+    template: templates/nodegroup.yaml
+    set:
+      maxReplicas: 7
+      maxUnhealthy: 50%
+      nodeStartupTimeout: 30m
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+
+  # An explicit empty list opts the pool out of modules, which is the same
+  # machineconfig as setting nothing.
+  - it: keeps the name when kernelModules is an explicit empty list
+    template: templates/nodegroup.yaml
+    set:
+      kernelModules: []
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+
+  - it: moves the name when the Talos version changes
+    template: templates/nodegroup.yaml
+    set:
+      talos:
+        version: v1.13.5
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - notEqual:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+      - matchRegex:
+          path: spec.template.spec.bootstrap.configRef.name
+          pattern: ^kubernetes-myk8s-md0-[0-9a-f]{6}$
+
+  - it: moves the name when the installer schematic changes
+    template: templates/nodegroup.yaml
+    set:
+      talos:
+        schematicID: "0000000000000000000000000000000000000000000000000000000000000000"
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - notEqual:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+
+  - it: moves the name when a kubelet reservation changes
+    template: templates/nodegroup.yaml
+    set:
+      kubelet:
+        systemReservedMemory: 300Mi
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - notEqual:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+
+  - it: moves the name when a registry mirror is added
+    template: templates/nodegroup.yaml
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: ["http://mirror.local:5000"]
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - notEqual:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+
+  - it: moves the name when a kernel module is added
+    template: templates/nodegroup.yaml
+    set:
+      kernelModules:
+        - name: nvidia_uvm
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - notEqual:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+
+  - it: moves the name when the pool gains a GPU
+    template: templates/nodegroup.yaml
+    set:
+      gpus:
+        - name: nvidia.com/GH200
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - notEqual:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+
+  - it: names a proxmox pool's template by its own content
+    template: templates/nodegroup.yaml
+    set: &proxmox
+      substrate: proxmox
+      resources:
+        cpu: "4"
+        memory: 8Gi
+      proxmox:
+        templateTags: [capmox-template, cozystack, talos, talos-v1.13.6]
+        full: true
+        network:
+          bridge: vmbr0
+        storage: ""
+        dnsServers: ["8.8.8.8"]
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-a64f6d
+
+  # The case that motivated content naming: a proxmox worker's host resolvers
+  # come only from this template, so a new dnsServers list never reached a
+  # worker while the name stayed the same.
+  - it: moves a proxmox pool's name when its DNS servers change
+    template: templates/nodegroup.yaml
+    set:
+      <<: *proxmox
+      proxmox:
+        templateTags: [capmox-template, cozystack, talos, talos-v1.13.6]
+        full: true
+        network:
+          bridge: vmbr0
+        storage: ""
+        dnsServers: ["10.0.0.1"]
+    asserts:
+      - notEqual:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-a64f6d
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+      # Without this, a merge that silently fell back to kubevirt would also
+      # differ from the proxmox name and pass.
+      - isKind:
+          of: ProxmoxMachineTemplate
+        documentSelector:
+          path: kind
+          value: ProxmoxMachineTemplate
+
+  # The bridge belongs to the machine template, which rolls the pool through
+  # infrastructureRef on its own; the machineconfig does not carry it.
+  - it: keeps a proxmox pool's name when only its machine template changes
+    template: templates/nodegroup.yaml
+    set:
+      <<: *proxmox
+      proxmox:
+        templateTags: [capmox-template, cozystack, talos, talos-v1.13.6]
+        full: true
+        network:
+          bridge: vmbr9
+        storage: ""
+        dnsServers: ["8.8.8.8"]
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-a64f6d

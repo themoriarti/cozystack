@@ -66,9 +66,12 @@ tests:
       path: kind
       value: MachineDeployment
     asserts:
-      - equal:
+      # Content-hash named, like the machine template: CABPT will not let a
+      # TalosConfigTemplate's spec change, so only a new name rolls the pool.
+      # tests/talos_tct_content_hash_test.yaml pins what moves the hash.
+      - matchRegex:
           path: spec.template.spec.bootstrap.configRef.name
-          value: kubernetes-myk8s-md0
+          pattern: ^kubernetes-myk8s-md0-[0-9a-f]{6}$
       - equal:
           path: spec.template.spec.bootstrap.configRef.kind
           value: TalosConfigTemplate
