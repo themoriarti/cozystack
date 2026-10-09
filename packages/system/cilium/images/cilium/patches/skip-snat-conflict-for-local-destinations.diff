@@ -1,9 +1,10 @@
 Skip NodePort SNAT conflict handling for host traffic to a local endpoint.
 
-The hunks of https://github.com/cilium/cilium/pull/49232 (commit
-e0462275b8164463ae9b473b32718a64645cda6d), verbatim, applied to cilium
-v1.20.2 bpf/lib/nodeport_egress.h. Upstream commit 990f79be17
-("bpf,nodeport: generalize SNAT conflict detection") runs the conflict path
+The bpf/lib/nodeport_egress.h hunks of
+https://github.com/cilium/cilium/pull/49232, verbatim, applied to cilium
+v1.20.2. The PR is cited, not a commit of it, because its branch is
+rewritten until it merges. Upstream commit 990f79be17 ("bpf,nodeport:
+generalize SNAT conflict detection") runs the conflict path
 for any host-marked packet on every bpf_host device, and that path replaces
 MARK_MAGIC_HOST with MARK_MAGIC_SNAT_DONE. With kube-ovn chaining, host
 traffic to a local pod leaves through ovn0, so the pod sees it as world:
@@ -12,8 +13,10 @@ drops the API server calling a webhook on its own node. Upstream report:
 https://github.com/cilium/cilium/issues/49208, downstream tracking:
 https://github.com/cozystack/cozystack/issues/4781.
 
-Drop this patch once a cilium release we ship carries cilium/cilium#49232.
-Until then `make update` dry-runs it against the new tag.
+Drop this patch by hand once a cilium release we ship carries the fix.
+Nothing detects that: `make update` and the image build fail only when a
+hunk stops applying, and a fix that lands upstream in another place leaves
+this one applying cleanly as a second, redundant early return.
 
 --- a/lib/nodeport_egress.h
 +++ b/lib/nodeport_egress.h
