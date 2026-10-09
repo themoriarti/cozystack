@@ -93,23 +93,30 @@ load test_helper
   fi
 }
 
-@test "both gating workflows forward the E2E-only override into the sandbox" {
-  workflow_value=$(yq '.jobs.e2e.steps[] | select(.name == "Install Cozystack into sandbox") | .env.COZY_LINSTOR_DRBD_ENABLED' .github/workflows/pull-requests.yaml)
-  fork_value=$(yq '.jobs.e2e.steps[] | select(.name == "Install Cozystack into sandbox") | .env.COZY_LINSTOR_DRBD_ENABLED' .github/workflows/e2e-fork.yaml)
+@test "every e2e lane forwards the container-lane overrides into the sandbox" {
   make_command=$(make -n -C packages/core/testing SANDBOX_NAME=test COZY_LINSTOR_DRBD_ENABLED=false install-cozystack)
-
-  if [ "$workflow_value" != "false" ]; then
-    echo "container workflow does not set COZY_LINSTOR_DRBD_ENABLED=false" >&2
-    return 1
-  fi
-  if [ "$fork_value" != "false" ]; then
-    echo "fork workflow does not set COZY_LINSTOR_DRBD_ENABLED=false" >&2
-    return 1
-  fi
   if ! printf '%s\n' "$make_command" | grep -Fq -- '-e COZY_LINSTOR_DRBD_ENABLED="false"'; then
     echo "testing Makefile does not forward COZY_LINSTOR_DRBD_ENABLED" >&2
     return 1
   fi
+
+  # Install and run must agree on the class: a mismatch fails deep inside a suite.
+  for wf in .github/workflows/pull-requests.yaml .github/workflows/e2e-fork.yaml .github/workflows/nightly.yaml .github/workflows/e2e-tag.yaml; do
+    install='.jobs.e2e.steps[] | select(.name == "Install Cozystack into sandbox")'
+    tests='.jobs.e2e.steps[] | select(.name | test("^Run E2E tests"))'
+    if [ "$(yq "$install | .env.COZY_LINSTOR_DRBD_ENABLED" "$wf")" != "false" ]; then
+      echo "$wf: install does not set COZY_LINSTOR_DRBD_ENABLED=false" >&2
+      return 1
+    fi
+    if [ "$(yq "$install | .env.COZY_E2E_STORAGE_CLASS" "$wf")" != "local" ]; then
+      echo "$wf: install does not set COZY_E2E_STORAGE_CLASS=local" >&2
+      return 1
+    fi
+    if [ "$(yq "$tests | .env.COZY_E2E_STORAGE_CLASS" "$wf")" != "local" ]; then
+      echo "$wf: the suite run does not set COZY_E2E_STORAGE_CLASS=local" >&2
+      return 1
+    fi
+  done
 }
 
 @test "a selector list is emitted under one disabledPackages key, merged with the container pair" {
