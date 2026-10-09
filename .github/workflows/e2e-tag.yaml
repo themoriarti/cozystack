@@ -134,8 +134,9 @@ jobs:
     # leaves enough host headroom for networking, containerd, and the runner
     # agent while the full platform installs across all three nodes.
     runs-on: oracle-vm-32cpu-128gb-x86-64
-    # Sized above what the tenant-Kubernetes pair can spend on a failing run, and
-    # held to one figure across every lane that runs the suite.
+    # Covers a green full suite. It does not cover a tenant-Kubernetes suite
+    # running into its node-join deadline, so a red there can end as a
+    # cancelled job. Held to one figure across every lane that runs the suite.
     timeout-minutes: 215
     permissions:
       contents: read
