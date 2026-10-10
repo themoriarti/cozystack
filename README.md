@@ -30,8 +30,8 @@ You can use Cozystack as a backend for a public cloud
 * [**Using Cozystack to build a private cloud**](https://cozystack.io/docs/v1.6/guides/use-cases/private-cloud/)  
 You can use Cozystack as a platform to build a private cloud powered by Infrastructure-as-Code approach
 
-* [**Using Cozystack as a Kubernetes distribution**](https://cozystack.io/docs/v1.6/guides/use-cases/kubernetes-distribution/)  
-You can use Cozystack as a Kubernetes distribution for Bare Metal
+* [**Using Cozystack to build your own platform**](https://cozystack.io/docs/v1.6/guides/use-cases/kubernetes-distribution/)  
+You can install only the Cozystack components you need on an existing Kubernetes cluster
 
 ## Documentation
 
