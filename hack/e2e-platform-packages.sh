@@ -13,9 +13,9 @@ linstor_drbd_enabled=${COZY_LINSTOR_DRBD_ENABLED:-true}
 #
 # The consequence is worth stating where it is made, and it applies to both:
 # the merge-gating lane exercises neither the shipped CDI default nor
-# `drbd.enabled: true`. Whether a tenant worker disk imports at 600M, and
-# whether the DRBD path works at all, are answered by the QEMU lanes
-# (nightly.yaml, e2e-tag.yaml), which take no override, and not here.
+# `drbd.enabled: true`. Every e2e lane runs on containers, so whether a
+# tenant worker disk imports at 600M, and whether the DRBD path works at all,
+# is answered by no CI lane.
 case "$linstor_drbd_enabled" in
   true|false) ;;
   *)

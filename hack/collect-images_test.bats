@@ -90,6 +90,21 @@ D3="sha256:$(printf '3%.0s' $(seq 1 64))"
   yq -r '.jobs.e2e.steps[] | select(.name == "Upload image list") | .with.path' "$wf" | grep -q 'multiarch-audit.txt'
 }
 
+@test "e2e-tag refuses a tree that predates the container lane and names the ref to dispatch from" {
+  run=$(yq -r '.jobs.e2e.steps[] | select(.name == "Require a container-lane tree") | .run' .github/workflows/e2e-tag.yaml)
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/old" "$tmp/new/hack"
+  touch "$tmp/new/hack/e2e-compose.yaml"
+  printf '%s\n' "$run" >"$tmp/step.sh"
+  (cd "$tmp/new" && TAG=v1.7.0-alpha.3 bash -e "$tmp/step.sh")
+  rc=0
+  (cd "$tmp/old" && TAG=v1.6.3 bash -e "$tmp/step.sh") >"$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ]
+  grep -qF '::error title=e2e-tag::v1.6.3 predates the container lane' "$tmp/out"
+  grep -qF -- '--ref v1.6.3' "$tmp/out"
+  rm -rf "$tmp"
+}
+
 @test "the e2e audit skips a tree that predates it and fails a pre-release tree that has it" {
   # The step runs in the checkout of the tag under test. An rc cut before the
   # audit existed has neither the script nor image-refs.txt, and failing its e2e
