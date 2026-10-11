@@ -60,7 +60,7 @@ case "$args" in
     [ -n "${STUB_CREATE_FAIL:-}" ] && { echo "AlreadyExists" >&2; exit 1; }
     exit 0
     ;;
-  *"apply -f -"*)
+  *"apply "*"-f -"*)
     cat >> "${KUBECTL_LOG:-/dev/null}"
     exit 0
     ;;
@@ -206,7 +206,7 @@ run_hook() {
 
   [ "$rc" != 0 ]
   grep -qF 'already belongs to cluster' "$tmp/out"
-  if grep -qE 'apply -f -|create -f -|kraft=|node-pools=' "$tmp/kubectl.log"; then
+  if grep -qE 'apply .*-f -|create -f -|kraft=|node-pools=' "$tmp/kubectl.log"; then
     echo "FAIL: a foreign-owned kafka pool did not abort before mutating"
     cat "$tmp/kubectl.log"
     return 1
@@ -223,7 +223,7 @@ run_hook() {
 
   [ "$rc" != 0 ]
   grep -qF 'owner label failed' "$tmp/out"
-  if grep -qE 'apply -f -|create -f -|kraft=|node-pools=' "$tmp/kubectl.log"; then
+  if grep -qE 'apply .*-f -|create -f -|kraft=|node-pools=' "$tmp/kubectl.log"; then
     echo "FAIL: proceeded to mutate the cluster after a failed owner read"
     cat "$tmp/kubectl.log"
     return 1
