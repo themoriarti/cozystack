@@ -10,6 +10,8 @@
 # mapping demoted to a YAML `#` or JavaScript `//` comment must never satisfy
 # the contract. See hack/promote-gate-contract.bats for the pattern.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PR_LABELER="$REPO_ROOT/.github/workflows/pr-labeler.yaml"
 STALE="$REPO_ROOT/.github/workflows/stale.yaml"
