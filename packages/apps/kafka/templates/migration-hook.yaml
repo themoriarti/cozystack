@@ -26,6 +26,7 @@
 {{- $controllerReplicas := include "kafka.controllerReplicas" . }}
 {{- $brokerPool := include "kafka.brokerPoolName" . }}
 {{- $freshBrokerPool := printf "b-%s" (include "kafka.poolHash" .) }}
+{{- $cruiseControlMemory := "1Gi" }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -143,6 +144,14 @@ spec:
                 roles:
                   - broker
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                # A pool template replaces spec.kafka.template whole, for every
+                # pool here: nothing set on the Kafka CR's template reaches these
+                # pods (KafkaPool.java at 0.45.1-rc1: https://github.com/strimzi/strimzi-kafka-operator/blob/0.45.1-rc1/cluster-operator/src/main/java/io/strimzi/operator/cluster/model/KafkaPool.java#L196-L218).
+                template:
+                  kafkaContainer:
+                    env:
+                      - name: JAVA_TOOL_OPTIONS
+                        value: {{ include "kafka.javaToolOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml).limits | quote }}
                 storage:
                   type: jbod
                   volumes:
@@ -187,6 +196,11 @@ spec:
                 roles:
                   - controller
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                template:
+                  kafkaContainer:
+                    env:
+                      - name: JAVA_TOOL_OPTIONS
+                        value: {{ include "kafka.javaToolOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml).limits | quote }}
                 storage:
                   type: jbod
                   volumes:
@@ -388,6 +402,11 @@ spec:
                 roles:
                   - broker
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                template:
+                  kafkaContainer:
+                    env:
+                      - name: JAVA_TOOL_OPTIONS
+                        value: {{ include "kafka.javaToolOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml).limits | quote }}
                 storage:
                   type: jbod
                   volumes:
@@ -407,9 +426,13 @@ spec:
               # explicit resources: Cruise Control is a JVM, and a tenant namespace
               # LimitRange defaults containers to 128Mi, which OOMs it before it
               # can produce a proposal (same reason the entity-operator carries
-              # explicit resources in kafka.yaml).
+              # explicit resources in kafka.yaml). JAVA_TOOL_OPTIONS: see
+              # kafka.javaToolOptions.
               echo "Enabling Cruise Control for the drain..."
-              kubectl -n "$ns" patch "$kafka" "$name" --type merge -p '{"spec":{"cruiseControl":{"resources":{"requests":{"cpu":"200m","memory":"768Mi"},"limits":{"memory":"1Gi"}}}}}'
+              {{- $ccEnv := list (dict "name" "JAVA_TOOL_OPTIONS" "value" (include "kafka.javaToolOptions" (dict "memory" $cruiseControlMemory))) }}
+              {{- $ccResources := dict "requests" (dict "cpu" "200m" "memory" "768Mi") "limits" (dict "memory" $cruiseControlMemory) }}
+              {{- $ccPatch := dict "spec" (dict "cruiseControl" (dict "resources" $ccResources "template" (dict "cruiseControlContainer" (dict "env" $ccEnv)))) }}
+              kubectl -n "$ns" patch "$kafka" "$name" --type merge -p '{{ $ccPatch | toJson }}'
 
               # F3: drain all partitions off the "kafka" pool broker IDs.
               kafkaIds=$(kubectl -n "$ns" get "$np" kafka -o jsonpath='{.status.nodeIds}' 2>/dev/null || echo "")

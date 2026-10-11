@@ -16,6 +16,7 @@
 {{- $tlsEnabled := include "kafka.tls.enabled" . | trim -}}
 {{- $showExternal := .Values.external -}}
 {{- $kafkaVersion := include "kafka.versionMap" . -}}
+{{- $entityOperatorMemory := "512Mi" -}}
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:
@@ -75,21 +76,22 @@ spec:
     # The topic-operator and user-operator are JVM processes and OOMKill at
     # that default, leaving the entity-operator in CrashLoopBackOff so
     # KafkaTopics/KafkaUsers never reconcile. Set explicit resources so they
-    # don't inherit the namespace default.
+    # don't inherit the namespace default. JAVA_TOOL_OPTIONS: see
+    # kafka.javaToolOptions.
     topicOperator:
       resources:
         requests:
           cpu: 100m
           memory: 256Mi
         limits:
-          memory: 512Mi
+          memory: {{ $entityOperatorMemory }}
     userOperator:
       resources:
         requests:
           cpu: 100m
           memory: 256Mi
         limits:
-          memory: 512Mi
+          memory: {{ $entityOperatorMemory }}
     template:
       # `pod` accepts metadata + a flat set of pod-spec fields
       # (enableServiceLinks, securityContext, affinity, …) directly.
@@ -101,3 +103,11 @@ spec:
           labels:
             policy.cozystack.io/allow-to-apiserver: "true"
         enableServiceLinks: false
+      topicOperatorContainer:
+        env:
+          - name: JAVA_TOOL_OPTIONS
+            value: {{ include "kafka.javaToolOptions" (dict "memory" $entityOperatorMemory) | quote }}
+      userOperatorContainer:
+        env:
+          - name: JAVA_TOOL_OPTIONS
+            value: {{ include "kafka.javaToolOptions" (dict "memory" $entityOperatorMemory) | quote }}
