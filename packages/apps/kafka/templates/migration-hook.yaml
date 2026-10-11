@@ -122,6 +122,15 @@ spec:
               np=kafkanodepools.kafka.strimzi.io
               kr=kafkarebalances.kafka.strimzi.io
 
+              # Every apply here passes --openapi-patch=false. Without it, applying
+              # an object that already exists makes kubectl download the cluster's
+              # whole OpenAPI v2 document only to learn that a custom resource
+              # takes a JSON merge patch: about 300Mi with the platform's CRDs,
+              # while this container runs under a tenant LimitRange default of
+              # 128Mi. With it kubectl builds the same merge patch from the
+              # last-applied annotation. Not --server-side: fields that
+              # "kubectl create" set on the "kafka" pool stay co-owned by that
+              # manager, so a server-side apply would never remove them.
               # ---- Node-pool manifests (broker pool reused for the create-CAS) ----
               broker_manifest=$(cat <<MANIFEST
               apiVersion: kafka.strimzi.io/v1beta2
@@ -256,10 +265,10 @@ spec:
                 fi
               fi
               echo "Ensuring broker KafkaNodePool \"$brokerPool\" exists..."
-              echo "$broker_manifest" | kubectl apply -f -
+              echo "$broker_manifest" | kubectl apply --openapi-patch=false -f -
 
               echo "Ensuring controller KafkaNodePool exists..."
-              echo "$controller_manifest" | kubectl apply -f -
+              echo "$controller_manifest" | kubectl apply --openapi-patch=false -f -
 
               # ---- Decide what to do from the Kafka CR ----
               # Fail closed. --ignore-not-found makes kubectl exit 0 with empty
@@ -384,7 +393,7 @@ spec:
               # F1: stand up this cluster's own release-hashed broker pool with
               # node IDs pinned high, clear of the existing broker/controller IDs.
               echo "Creating target broker pool \"$freshBrokerPool\"..."
-              cat <<POOL | kubectl apply -f -
+              cat <<POOL | kubectl apply --openapi-patch=false -f -
               apiVersion: kafka.strimzi.io/v1beta2
               kind: KafkaNodePool
               metadata:
@@ -441,7 +450,7 @@ spec:
                 exit 1
               fi
               echo "Draining brokers $kafkaIds via Cruise Control rebalance..."
-              cat <<REB | kubectl apply -f -
+              cat <<REB | kubectl apply --openapi-patch=false -f -
               apiVersion: kafka.strimzi.io/v1beta2
               kind: KafkaRebalance
               metadata:
