@@ -28,3 +28,9 @@ Custom patches for piraeus-server (linstor-server) v1.33.3.
 
 - **native-protoc.diff** — Download the protoc build for the build host's architecture instead of always `linux-x86_64`. The builder stage runs on `$BUILDPLATFORM`, so on a native arm64 builder the x86_64 protoc cannot execute and `./gradlew generateJava` fails with `Syntax error: ")" unexpected`.
   - Not proposed upstream yet.
+
+- **snapshot-restore-drbd-initialized.diff** — Mark the volume definitions of a restored snapshot as DRBD-initialized, unless the restored resource definition carries `DrbdOptions/ForceInitialSyncPermanent`, which keeps the existing path that recreates metadata, as for a backup. Without the flag the initial UpToDate race is still open on a restored volume, and `Linstor/Drbd/InitialUptoDateOn`, copied from the source volume through the snapshot, names whichever node won it for the source. When linstor-csi autoplaces a replica on that node, the empty new volume wins the race, gets mkfs and goes StandAlone against the restored replica, so a pod attached there sees an empty filesystem. With the flag set, nothing wins the race, and an autoplaced replica resyncs from the restored one like any replica added to an existing volume.
+  - Backported from upstream commit: [`9d8cdf511`](https://github.com/LINBIT/linstor-server/commit/9d8cdf5118338fc72a34bb99799e452e031ea8f6), first released in v1.34.0; the `CHANGELOG.md` hunk is left out
+  - Drop when LINSTOR is upgraded to v1.34.0 or later
+  - On ZFS and thin pools the autoplaced replicas still skip the initial sync and rely on the source volume's day0 UUID being in the restored replica's history, upstream included; if it is not, DRBD reports unrelated data and goes StandAlone rather than syncing
+  - Fixes [cozystack/cozystack#4862](https://github.com/cozystack/cozystack/issues/4862)
