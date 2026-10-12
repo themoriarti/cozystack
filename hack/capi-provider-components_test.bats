@@ -117,10 +117,57 @@ check_sums() {
   fi
 }
 
+# Packages that carry patches/ vendor a file that differs from the release
+# asset, so its sum cannot be pinned directly. Reverting the patches recovers
+# the asset, and that is checked against the pinned sum instead: a hand edit of
+# the vendored file, a patch changed without a refresh, or a sum moved without
+# the file all show up here.
+check_patched_sums() {
+  local pkg="$1" makefile_var="$2" yaml="$3" metadata="${4:-metadata.yaml}"
+  local dir="$REPO_ROOT/packages/system/$pkg"
+
+  local sum_components sum_metadata
+  sum_components="$(sed -n "s/^${makefile_var}_SHA256_COMPONENTS=//p" "$dir/Makefile")"
+  sum_metadata="$(sed -n "s/^${makefile_var}_SHA256_METADATA=//p" "$dir/Makefile")"
+  [ -n "$sum_components" ] && [ -n "$sum_metadata" ] \
+    || { echo "$pkg: Makefile pins no ${makefile_var}_SHA256_* sums" >&2; return 1; }
+
+  local work; work="$(mktemp -d)"
+  cp "$dir/files/$yaml" "$work/asset.yaml"
+  local patches=() i
+  for i in "$dir"/patches/*.diff; do
+    [ -e "$i" ] && patches+=("$i")
+  done
+  for (( i = ${#patches[@]} - 1; i >= 0; i-- )); do
+    patch -s -f -R "$work/asset.yaml" < "${patches[$i]}" \
+      || { echo "$pkg: $(basename "${patches[$i]}") does not revert cleanly from files/$yaml" >&2; rm -rf "$work"; return 1; }
+  done
+
+  if ! printf '%s  %s\n%s  %s\n' "$sum_components" "$work/asset.yaml" "$sum_metadata" "$dir/files/$metadata" \
+      | sha256sum -c - >/dev/null 2>&1; then
+    echo "$pkg: files/$yaml without patches/, or files/$metadata, does not match the sum its Makefile pins" >&2
+    rm -rf "$work"
+    return 1
+  fi
+  rm -rf "$work"
+}
+
 @test "capmox vendored files match the sums its Makefile pins" {
   check_sums capi-providers-infraprovider-proxmox CAPMOX infrastructure-components.yaml
 }
 
 @test "in-cluster IPAM vendored files match the sums its Makefile pins" {
   check_sums capi-providers-ipam-in-cluster CAIP ipam-components.yaml
+}
+
+@test "CAPI core components.gz matches the vendored core-components.yaml" {
+  check_pair capi-providers-core core-components.yaml
+}
+
+@test "CAPI core vendored files match the sums its Makefile pins" {
+  check_patched_sums capi-providers-core CAPI core-components.yaml
+}
+
+@test "CAPI core ships the version its Makefile vendored" {
+  check_version capi-providers-core CAPI_VERSION
 }
