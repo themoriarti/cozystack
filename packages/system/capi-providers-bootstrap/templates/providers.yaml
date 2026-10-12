@@ -27,7 +27,7 @@ metadata:
   name: talos
 spec:
   # https://github.com/siderolabs/cluster-api-bootstrap-provider-talos
-  version: v0.6.12-bootstrap-talos
+  version: v0.6.13-bootstrap-talos
   fetchConfig:
     selector:
       matchLabels:

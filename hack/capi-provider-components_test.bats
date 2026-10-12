@@ -18,22 +18,22 @@ load test_helper
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
 check_pair() {
-  local pkg="$1" yaml="$2"
+  local pkg="$1" yaml="$2" blob="${3:-components.gz}"
   local dir="$REPO_ROOT/packages/system/$pkg/files"
 
   [ -f "$dir/$yaml" ]      || { echo "missing $pkg/files/$yaml" >&2; return 1; }
-  [ -f "$dir/components.gz" ] || { echo "missing $pkg/files/components.gz" >&2; return 1; }
+  [ -f "$dir/$blob" ] || { echo "missing $pkg/files/$blob" >&2; return 1; }
 
   local work; work="$(mktemp -d)"
-  gzip -dc "$dir/components.gz" > "$work/decompressed.yaml"
+  gzip -dc "$dir/$blob" > "$work/decompressed.yaml"
 
   if ! cmp -s "$work/decompressed.yaml" "$dir/$yaml"; then
-    echo "$pkg: components.gz does not match $yaml" >&2
+    echo "$pkg: $blob does not match $yaml" >&2
     echo "the chart mounts the blob, so the cluster would run what the YAML does not say" >&2
-    if grep -q '^components:' "$REPO_ROOT/packages/system/$pkg/Makefile" 2>/dev/null; then
+    if [ "$blob" = components.gz ] && grep -q '^components:' "$REPO_ROOT/packages/system/$pkg/Makefile" 2>/dev/null; then
       echo "run: make -C packages/system/$pkg components" >&2
     else
-      echo "regenerate: gzip -9 -n -c files/$yaml > files/components.gz" >&2
+      echo "regenerate: gzip -9 -n -c files/$yaml > files/$blob" >&2
     fi
     head -40 "$work/decompressed.yaml" > "$work/a"
     head -40 "$dir/$yaml" > "$work/b"
@@ -204,6 +204,18 @@ check_bootstrap_version() {
 
 @test "kubeadm bootstrap ships the version its Makefile vendored" {
   check_bootstrap_version CAPI_VERSION bootstrap
+}
+
+@test "Talos bootstrap ships the version its Makefile vendored" {
+  check_bootstrap_version CABPT_UPSTREAM_VERSION bootstrap-talos
+}
+
+@test "Talos bootstrap components-talos.gz matches the vendored bootstrap-components-talos.yaml" {
+  check_pair capi-providers-bootstrap bootstrap-components-talos.yaml components-talos.gz
+}
+
+@test "Talos bootstrap vendored files match the sums its Makefile pins" {
+  check_patched_sums capi-providers-bootstrap CABPT bootstrap-components-talos.yaml metadata-talos.yaml
 }
 
 @test "kubeadm bootstrap components.gz matches the vendored bootstrap-components.yaml" {
