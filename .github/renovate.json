@@ -86,6 +86,21 @@
       "enabled": false
     },
     {
+      "description": "Split golang patch from minor updates for the e2e sandbox builder, so the rule below can drop the minor bump without taking the patch bump with it. By default both land in one non-major bucket and only the newest release is proposed.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/core/testing/images/e2e-sandbox/**"],
+      "matchPackageNames": ["golang"],
+      "separateMinorPatch": true
+    },
+    {
+      "description": "The e2e sandbox builds a patched chainsaw release with the Go minor upstream shipped that release with. A golang minor or major bump builds it with a toolchain upstream never shipped it with. Patch and digest updates of the same minor still arrive; move the minor by hand together with CHAINSAW_VERSION.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/core/testing/images/e2e-sandbox/**"],
+      "matchPackageNames": ["golang"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    },
+    {
       "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
       "matchManagers": ["gomod"],
       "matchPackageNames": ["kubevirt.io/csi-driver"],
