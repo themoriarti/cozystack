@@ -171,3 +171,56 @@ check_patched_sums() {
 @test "CAPI core ships the version its Makefile vendored" {
   check_version capi-providers-core CAPI_VERSION
 }
+
+# capi-providers-bootstrap ships two providers, kubeadm and Talos, each with its
+# own ConfigMap and BootstrapProvider, so the single-provider check above does
+# not fit it. This asserts that the ConfigMap and the provider object for one of
+# them both carry <Makefile version>-<suffix>.
+check_bootstrap_version() {
+  local makefile_var="$1" suffix="$2"
+  local dir="${3:-$REPO_ROOT/packages/system/capi-providers-bootstrap}"
+
+  local version
+  version="$(sed -n "s/^${makefile_var} *= *//p" "$dir/Makefile")"
+  [ -n "$version" ] || { echo "capi-providers-bootstrap: no $makefile_var in Makefile" >&2; return 1; }
+
+  local want="$version-$suffix"
+  grep -qxF "  name: $want" "$dir/templates/configmaps.yaml" \
+    || { echo "capi-providers-bootstrap: no ConfigMap named $want" >&2; return 1; }
+  grep -qxF "  version: $want" "$dir/templates/providers.yaml" \
+    || { echo "capi-providers-bootstrap: no BootstrapProvider at version $want" >&2; return 1; }
+}
+
+# A version carries dots, which a pattern match would take for any character.
+@test "the bootstrap version check compares the version literally" {
+  local fx="$BATS_TEST_TMPDIR/bootstrap"
+  mkdir -p "$fx/templates"
+  echo 'CAPI_VERSION=v1.13.7' > "$fx/Makefile"
+  printf 'metadata:\n  name: v1x13x7-bootstrap\n' > "$fx/templates/configmaps.yaml"
+  printf 'spec:\n  version: v1x13x7-bootstrap\n' > "$fx/templates/providers.yaml"
+  run check_bootstrap_version CAPI_VERSION bootstrap "$fx"
+  [ "$status" -ne 0 ]
+}
+
+@test "kubeadm bootstrap ships the version its Makefile vendored" {
+  check_bootstrap_version CAPI_VERSION bootstrap
+}
+
+@test "kubeadm bootstrap components.gz matches the vendored bootstrap-components.yaml" {
+  check_pair capi-providers-bootstrap bootstrap-components.yaml
+}
+
+@test "kubeadm bootstrap vendored files match the sums its Makefile pins" {
+  check_sums capi-providers-bootstrap CAPI bootstrap-components.yaml
+}
+
+# The core and the kubeadm bootstrap provider are cut from one Cluster API
+# release; running them at different versions is not a combination upstream
+# tests.
+@test "CAPI core and kubeadm bootstrap vendor the same Cluster API release" {
+  local core boot
+  core="$(sed -n 's/^CAPI_VERSION=//p' "$REPO_ROOT/packages/system/capi-providers-core/Makefile")"
+  boot="$(sed -n 's/^CAPI_VERSION=//p' "$REPO_ROOT/packages/system/capi-providers-bootstrap/Makefile")"
+  [ -n "$core" ] && [ "$core" = "$boot" ] \
+    || { echo "core vendors '$core', kubeadm bootstrap vendors '$boot'" >&2; return 1; }
+}
