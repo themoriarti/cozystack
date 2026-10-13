@@ -25,6 +25,13 @@ seaweedfs:
   # chart directly from its ExternalArtifact without re-rendering extra/seaweedfs.
   # The guard also refuses to render at all if this pin is ever lifted.
   fullnameOverride: seaweedfs
+  # Built in-tree from images/seaweedfs, which carries the patches in
+  # images/seaweedfs/patches. Without this block the vendored chart falls back
+  # to chrislusf/seaweedfs at its appVersion, the unpatched upstream build.
+  # `make image` rewrites both keys on every build.
+  image:
+    repository: "ghcr.io/cozystack/cozystack/seaweedfs"
+    tag: "4.45@sha256:2a063deb9992ac0c06f8c09589ae063a30ac8c87af2c6aa1f4d4420cc544535c"
   master:
     # At the shipped replicationFactor of 2 the size limit and
     # extraEnvironmentVars.WEED_MASTER_VOLUME_GROWTH_COPY_2 below are one
