@@ -347,12 +347,13 @@ spec:
 
               # read_state <ns> <name>: how helm-controller stands with a release
               # being deleted. "suspended": it skips the uninstall of a suspended
-              # release, and the suspension is another manager's. "unhandled":
+              # release, and the suspension is not flux-plunger's. "unhandled":
               # its own finalizer no longer holds the release and it has not
               # observed the latest generation, so the fence is all that keeps
-              # the release until it runs the uninstall. Empty otherwise.
+              # the release until it runs the uninstall. Empty otherwise. Fails
+              # when the release cannot be read.
               read_state() {
-                kubectl --namespace "$1" get "$hr" "$2" --ignore-not-found --output go-template='{{`{{if .metadata.deletionTimestamp}}{{if .spec.suspend}}suspended{{else}}{{$held := false}}{{range .metadata.finalizers}}{{if eq . "finalizers.fluxcd.io"}}{{$held = true}}{{end}}{{end}}{{if and (not $held) (ne (printf "%v" .status.observedGeneration) (printf "%v" .metadata.generation))}}unhandled{{end}}{{end}}{{end}}`}}' || echo unknown
+                kubectl --namespace "$1" get "$hr" "$2" --ignore-not-found --output go-template='{{`{{if .metadata.deletionTimestamp}}{{if .spec.suspend}}suspended{{else}}{{$held := false}}{{range .metadata.finalizers}}{{if eq . "finalizers.fluxcd.io"}}{{$held = true}}{{end}}{{end}}{{if and (not $held) (ne (printf "%v" .status.observedGeneration) (printf "%v" .metadata.generation))}}unhandled{{end}}{{end}}{{end}}`}}'
               }
 
               # report_release <ref> <state>: remove the fence and name what that
@@ -371,7 +372,7 @@ spec:
                     echo "released $fence from $1 without an uninstall: helm-controller had not handled it" ;;
                   suspended)
                     unhandled=$((unhandled + 1))
-                    echo "released $fence from $1 without an uninstall: another manager holds its suspension" ;;
+                    echo "released $fence from $1 without an uninstall: it is still suspended, not by flux-plunger" ;;
                   unknown)
                     echo "released $fence from $1; whether helm-controller had handled it could not be read" ;;
                   *)
@@ -408,11 +409,15 @@ spec:
                     echo "NOT released $ref: flux-plunger's suspension could not be lifted" >&2
                     continue ;;
                 esac
-                state=$(read_state "$hns" "$name")
-                if [ "$state" = unhandled ]; then
-                  pending="$pending $ref"
-                  continue
-                fi
+                # A release whose state cannot be read waits like one helm-controller
+                # has not handled: unfencing it on a failed read could delete it
+                # before its uninstall.
+                state=$(retry read_state "$hns" "$name") || state=unknown
+                case "$state" in
+                  unhandled|unknown)
+                    pending="$pending $ref"
+                    continue ;;
+                esac
                 report_release "$ref" "$state"
               done
               # The last fences go well before the window closes, so their
@@ -422,19 +427,21 @@ spec:
                 sleep 2
                 still=
                 for ref in $pending; do
-                  state=$(read_state "${ref%%/*}" "${ref#*/}")
-                  if [ "$state" = unhandled ]; then
-                    still="$still $ref"
-                  else
-                    begin_release
-                    report_release "$ref" "$state"
-                  fi
+                  state=$(read_state "${ref%%/*}" "${ref#*/}") || state=unknown
+                  case "$state" in
+                    unhandled|unknown)
+                      still="$still $ref" ;;
+                    *)
+                      begin_release
+                      report_release "$ref" "$state" ;;
+                  esac
                 done
                 pending=$still
               done
               for ref in $pending; do
                 begin_release
-                report_release "$ref" unhandled
+                state=$(read_state "${ref%%/*}" "${ref#*/}") || state=unknown
+                report_release "$ref" "$state"
               done
               stop_at=$retry_until
 

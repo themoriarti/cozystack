@@ -118,7 +118,8 @@ fences_left() {
 #                            for a reason other than pods (wait), the listing
 #                            (list), a listing after the first (relist), the
 #                            pod listing (pods), a release's ownership read
-#                            (<ns>@<name>.ownedread), unsuspend
+#                            (<ns>@<name>.ownedread), a release's state read
+#                            (<ns>@<name>.stateread), unsuspend
 #                            (<ns>@<name>.apply), unsuspend racing another
 #                            write (<ns>@<name>.applyconflict) or finalizer patch
 #                            (<ns>@<name>.patch);
@@ -269,6 +270,7 @@ if [ "$verb" = get ]; then
       case "$tmpl" in *'ne .manager "flux-plunger"'*) [ -e "$rel.coowned" ] && echo other ;; esac
       exit 0 ;;
     *deletionTimestamp*)
+      if take_fail "$rel.stateread"; then echo "fake: the state read timed out" >&2; exit 1; fi
       [ -e "$rel.deleting" ] || exit 0
       case "$tmpl" in *"$SUSPENDED_DELETING"*) if [ -e "$rel.suspended" ]; then printf 'suspended'; exit 0; fi ;; esac
       case "$tmpl" in *"$UNHANDLED"*) ;; *) exit 0 ;; esac
@@ -492,7 +494,7 @@ run_hook() {
 
   [ "$status" -eq 0 ]
   [ "$(fences_left "$STATE")" -eq 0 ]
-  grep -q -x "released $FENCE from tenant-x/app-x without an uninstall: another manager holds its suspension" "$tmp/out"
+  grep -q -x "released $FENCE from tenant-x/app-x without an uninstall: it is still suspended, not by flux-plunger" "$tmp/out"
   grep -q -x 'released 1 of 1 fenced HelmReleases, 1 without an uninstall' "$tmp/out"
   rm -rf "$tmp"
 }
@@ -569,6 +571,44 @@ run_hook() {
   [ "$status" -eq 0 ]
   [ "$(fences_left "$STATE")" -eq 0 ]
   grep -q -x "released $FENCE from tenant-a/app-a without an uninstall: helm-controller had not handled it" "$tmp/out"
+  [ "$(cat "$CLOCK")" -lt "$DEADLINE" ]
+  rm -rf "$tmp"
+}
+
+@test "a state read that fails once does not end the wait for helm-controller" {
+  tmp=$(mktemp -d)
+  prepare "$tmp"
+  add_release "$STATE" tenant-a app-a "$FENCE"
+  touch "$STATE/tenant-a@app-a.deleting"
+  echo yes > "$STATE/tenant-a@app-a.owned"
+  echo 3 > "$STATE/tenant-a@app-a.hcdelay"
+  echo 1 > "$STATE/tenant-a@app-a.stateread.fail"
+
+  run_hook "$tmp"
+
+  [ "$status" -eq 0 ]
+  [ "$(fences_left "$STATE")" -eq 0 ]
+  [ "$(cat "$STATE/tenant-a@app-a.obs")" = "$(cat "$STATE/tenant-a@app-a.gen")" ]
+  grep -q -x "released $FENCE from tenant-a/app-a" "$tmp/out"
+  grep -q -x 'released 1 of 1 fenced HelmReleases, 0 without an uninstall' "$tmp/out"
+  rm -rf "$tmp"
+}
+
+@test "a release whose state can never be read is still released inside the deadline, and says so" {
+  tmp=$(mktemp -d)
+  prepare "$tmp"
+  add_release "$STATE" tenant-a app-a "$FENCE"
+  touch "$STATE/tenant-a@app-a.deleting"
+  echo yes > "$STATE/tenant-a@app-a.owned"
+  echo 9999 > "$STATE/tenant-a@app-a.stateread.fail"
+
+  run_hook "$tmp"
+
+  [ "$status" -eq 0 ]
+  [ "$(fences_left "$STATE")" -eq 0 ]
+  grep -q -x "released $FENCE from tenant-a/app-a; whether helm-controller had handled it could not be read" "$tmp/out"
+  # It kept the fence for the whole wait, as one helm-controller had not handled.
+  [ "$(cat "$CLOCK")" -ge $((WINDOW - 30)) ]
   [ "$(cat "$CLOCK")" -lt "$DEADLINE" ]
   rm -rf "$tmp"
 }
