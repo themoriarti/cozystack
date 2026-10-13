@@ -274,7 +274,7 @@ src_to_suites() {
     # harbor stores its registry in a BucketClaim the seaweedfs COSI driver
     # serves. etcd's round-trip is left out because CI gates it off. A test
     # derives this set from the suites.
-    seaweedfs-application) echo "bucket clickhouse harbor kafka kafka-metadata mariadb mongodb postgres rabbitmq redis seaweedfs" ;;
+    seaweedfs-application) echo "bucket clickhouse harbor kafka kafka-metadata mariadb mongodb postgres rabbitmq redis seaweedfs valkey" ;;
     # Both suites create a KeycloakClient and wait for the operator's finalizer
     # to remove it. kubernetes-application has no dependsOn on keycloak-operator
     # (#4680), so the graph reaches only monitoring and would drop the tenant
@@ -458,12 +458,20 @@ while IFS= read -r file || [ -n "$file" ]; do
       # to the harness selects a suite that cannot exercise it. A dir with no
       # matching suite is a docs-only demo and stays ignored (adding it to
       # selected_apps would empty the final intersection and trip the
-      # full-suite safety net).
+      # full-suite safety net). The redis walkthrough is the one harness shared
+      # across suites: the valkey round-trip runs it with APP_KIND=Valkey, so an
+      # edit there selects both.
       app=$(echo "$file" | sed -nE 's,^examples/backups/([^/]+)/.*,\1,p')
-      if echo "$all_apps" | grep -Fxq "$app"; then
-        selected_apps="$selected_apps $app"
-        trigger_any=1
-      fi
+      case "$app" in
+        redis) users="redis valkey" ;;
+        *) users=$app ;;
+      esac
+      for user in $users; do
+        if echo "$all_apps" | grep -Fxq "$user"; then
+          selected_apps="$selected_apps $user"
+          trigger_any=1
+        fi
+      done
       continue ;;
     examples/backups/*)
       # A file beside the per-app dirs rather than in one (POSIX case lets `*`
