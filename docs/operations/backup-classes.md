@@ -18,8 +18,11 @@ Tenants reference `cozy-default` from `BackupJob`, `Plan`, and `RestoreJob` reso
 | `apps.cozystack.io/Etcd`         | etcd-operator snapshot               | `strategy.backups.cozystack.io/Etcd` `cozy-default-etcd`                   |
 | `apps.cozystack.io/RabbitMQ`     | RabbitMQ definitions (management API) | `strategy.backups.cozystack.io/Rabbitmq` `cozy-default-rabbitmq`          |
 | `apps.cozystack.io/Redis`        | RDB dump Job (sentinel-discovered master) | `strategy.backups.cozystack.io/Redis` `cozy-default-redis`            |
+| `apps.cozystack.io/Valkey`       | RDB dump Job (sentinel-discovered master) | `strategy.backups.cozystack.io/Redis` `cozy-default-redis`            |
 | `apps.cozystack.io/VMInstance`   | Velero + kubevirt-velero-plugin      | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vminstance`    |
 | `apps.cozystack.io/VMDisk`       | Velero                               | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vmdisk`        |
+
+Valkey runs on the same RedisFailover operator as Redis, so `cozy-default-redis` serves both: the driver hands the template `.Release.Prefix` (`redis-` or `valkey-`, after the app's Kind), from which it builds the Sentinel Service and the auth and CA Secret names. A Valkey backup restores only into a Valkey app, a Redis backup only into a Redis app. The Valkey chart has no TLS option, so a Valkey dump always connects in plaintext.
 
 ### Shipped but NOT bound (admin opt-in required)
 
