@@ -285,6 +285,17 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "redis backup harness edit selects the valkey suite that also runs it" {
+    # valkey-backup-roundtrip drives examples/backups/redis with
+    # APP_KIND=Valkey, so a change to that harness must run both suites.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "examples/backups/redis/00-helpers.sh" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "redis valkey" ]
+    rm -rf "$tmp"
+}
+
 @test "backup example without a matching suite selects nothing" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
