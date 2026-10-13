@@ -27,6 +27,16 @@ const (
 	ShutdownDrainTimeoutFlag = "shutdown-drain-timeout"
 )
 
+// ValidateShutdownDrainTimeout refuses a drain deadline that is already spent
+// when the drain starts: the drain would leave every fence behind without
+// listing one.
+func ValidateShutdownDrainTimeout(d time.Duration) error {
+	if d <= 0 {
+		return fmt.Errorf("--%s must be positive, got %v", ShutdownDrainTimeoutFlag, d)
+	}
+	return nil
+}
+
 // DrainFences gives up every fence flux-plunger holds, for a flux-plunger that is
 // stopping. A live release has its recovery aborted, the suspension and the fence
 // lifted together, which leaves it as recovery found it for the next flux-plunger
