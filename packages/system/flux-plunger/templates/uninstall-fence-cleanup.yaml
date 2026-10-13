@@ -185,11 +185,23 @@ spec:
               scope="${HR_SCOPE:---all-namespaces}"
               # The pod is given its grace period, and a little more, to drain.
               pod_wait={{ $podWait }}
-              # Retries stop here, a minute short of activeDeadlineSeconds, which
-              # counts from the Job's start, so the report is still written when
-              # scheduling and the image pull took part of it. The pod wait is cut
-              # to what is left of this window too.
+              # Retries stop here, a minute short of activeDeadlineSeconds. That
+              # deadline counts from the Job's start and this window from the
+              # script's, so scheduling and the image pull come out of the minute:
+              # one that takes longer gets the Job killed before its report, which
+              # fails the uninstall for helm-controller to retry. The pod wait is
+              # cut to what is left of this window too.
               retry_until=$(( $(date +%s) + {{ $retryWindow }} ))
+              # Retries stop at $stop_at: the whole window for the steps that cover
+              # every release, and a share of it for each release, so one that
+              # can never be read or unfenced does not leave the releases listed
+              # after it a single attempt.
+              stop_at=$retry_until
+              per_release=30
+              begin_release() {
+                stop_at=$(( $(date +%s) + per_release ))
+                [ "$stop_at" -le "$retry_until" ] || stop_at=$retry_until
+              }
               # Each fenced release once, however many copies of the fence it
               # carries: the apiserver accepts a finalizer listed twice.
               listing='{{`{{range .items}}{{$fenced := false}}{{range .metadata.finalizers}}{{if eq . "flux-plunger.cozystack.io/uninstall-fence"}}{{$fenced = true}}{{end}}{{end}}{{if $fenced}}{{.metadata.namespace}}/{{.metadata.name}}{{"\n"}}{{end}}{{end}}`}}'
@@ -209,7 +221,7 @@ spec:
                     printf '%s\n' "$out"
                     return 0
                   fi
-                  [ "$(date +%s)" -lt "$retry_until" ] || return 1
+                  [ "$(date +%s)" -lt "$stop_at" ] || return 1
                   sleep 2
                 done
               }
@@ -245,7 +257,7 @@ spec:
                     --patch "[{\"op\":\"test\",\"path\":\"/metadata/resourceVersion\",\"value\":\"$ls_rv\"},{\"op\":\"test\",\"path\":\"/metadata/uid\",\"value\":\"$ls_uid\"},{\"op\":\"replace\",\"path\":\"/spec/suspend\",\"value\":false}]"; then
                     return 0
                   fi
-                  [ "$(date +%s)" -lt "$retry_until" ] || return 1
+                  [ "$(date +%s)" -lt "$stop_at" ] || return 1
                   sleep 2
                 done
               }
@@ -274,7 +286,7 @@ spec:
                         fi ;;
                     esac
                   fi
-                  [ "$(date +%s)" -lt "$retry_until" ] || return 1
+                  [ "$(date +%s)" -lt "$stop_at" ] || return 1
                   sleep 2
                 done
               }
@@ -292,6 +304,10 @@ spec:
               fi
               if [ -z "$present" ]; then
                 echo "no $deploy Deployment in $NAMESPACE; nothing to stop"
+              # kubectl scale retries a conflict for up to five minutes on its own,
+              # but without --current-replicas or --resource-version it sends a
+              # merge patch of the scale subresource, which carries no
+              # resourceVersion to conflict on, so that retry never runs here.
               elif ! retry kubectl --namespace "$NAMESPACE" scale deployment "$deploy" --replicas=0; then
                 echo "could not scale $deploy down; no fence was touched" >&2
                 exit 1
@@ -380,6 +396,7 @@ spec:
                 total=$((total + 1))
                 hns=${ref%%/*}
                 name=${ref#*/}
+                begin_release
                 lift_suspension "$hns" "$name"
                 case $? in
                   2)
@@ -409,14 +426,17 @@ spec:
                   if [ "$state" = unhandled ]; then
                     still="$still $ref"
                   else
+                    begin_release
                     report_release "$ref" "$state"
                   fi
                 done
                 pending=$still
               done
               for ref in $pending; do
+                begin_release
                 report_release "$ref" unhandled
               done
+              stop_at=$retry_until
 
               echo "released $released of $total fenced HelmReleases, $unhandled without an uninstall"
               # A flux-plunger still running could have fenced a release after the

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 )
 
 // The chart's pre-delete hook restates two of this package's names in shell and
@@ -181,6 +183,31 @@ func TestHookTemplate_UsesTheControllersNames(t *testing.T) {
 	for _, l := range literals {
 		if l != `"`+fenceFinalizer+`"` {
 			t.Errorf("hook template names fence %s, controller sets %q", l, fenceFinalizer)
+		}
+	}
+}
+
+// The hook tells a release helm-controller has stopped holding by
+// helm-controller's own finalizer. A rename on the flux side that the hook did
+// not follow would read every release being deleted as handled, and the hook
+// would unfence it without waiting for the uninstall.
+func TestHookTemplate_UsesHelmControllersFinalizer(t *testing.T) {
+	raw, err := os.ReadFile(hookTemplate)
+	if err != nil {
+		t.Fatalf("read %s: %v", hookTemplate, err)
+	}
+	hook := string(raw)
+	if want := `"` + helmv2.HelmReleaseFinalizer + `"`; !strings.Contains(hook, want) {
+		t.Fatalf("hook does not name helm-controller's finalizer %s", want)
+	}
+	// Every other fluxcd.io literal in quotes, the RBAC API group aside, is that
+	// finalizer, whole.
+	for _, l := range regexp.MustCompile(`"[^"\s]*fluxcd\.io[^"\s]*"`).FindAllString(hook, -1) {
+		if l == `"`+helmv2.GroupVersion.Group+`"` {
+			continue
+		}
+		if l != `"`+helmv2.HelmReleaseFinalizer+`"` {
+			t.Errorf("hook template names %s, helm-controller's finalizer is %q", l, helmv2.HelmReleaseFinalizer)
 		}
 	}
 }
