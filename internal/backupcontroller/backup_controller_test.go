@@ -602,3 +602,29 @@ func TestBackupCleanup_Redis_NoObjectKeyIsNoOp(t *testing.T) {
 		t.Errorf("expected no cleanup Job for a keyless Backup, got %d", len(jobs.Items))
 	}
 }
+
+// TestBackupCleanup_Redis_UnknownKindRendersNothing pins that a Backup routed
+// to the Redis strategy for a kind with no chart prefix is released without a
+// Job, rather than rendered with an empty prefix.
+func TestBackupCleanup_Redis_UnknownKindRendersNothing(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+	backup := redisCleanupBackup("redis-odd", "tenant-test/cache/redis-odd.rdb")
+	backup.Spec.ApplicationRef.Kind = "Postgres"
+	strategy := newRedisCleanupStrategy("cozy-default-redis")
+	c, s := newRabbitmqBackupReconcilerClient(ns, backup, strategy)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Error("expected the Backup released, not requeued")
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(context.Background(), jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("expected no cleanup Job for a kind with no prefix, got %d", len(jobs.Items))
+	}
+}
