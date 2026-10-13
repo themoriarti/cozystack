@@ -6,7 +6,9 @@
   being deleted before lifting that fence. This hook is the backstop for what the
   drain could not finish, so that removing the chart never leaves a release that
   tenant teardown waits on forever: it stops flux-plunger, waits out the drain,
-  then lifts any suspension and fence that remain, without waiting again.
+  then lifts any suspension and fence that remain, keeping the fence of a release
+  being deleted only while helm-controller, now that the release is unsuspended,
+  runs its uninstall.
 
   Two bounds apply. helm-controller runs a pre-delete hook under the release's
   uninstall timeout, 300s by default (the operator sets none), counted from when
@@ -327,16 +329,53 @@ spec:
                 exit 1
               fi
 
+              # read_state <ns> <name>: how helm-controller stands with a release
+              # being deleted. "suspended": it skips the uninstall of a suspended
+              # release, and the suspension is another manager's. "unhandled":
+              # its own finalizer no longer holds the release and it has not
+              # observed the latest generation, so the fence is all that keeps
+              # the release until it runs the uninstall. Empty otherwise.
+              read_state() {
+                kubectl --namespace "$1" get "$hr" "$2" --ignore-not-found --output go-template='{{`{{if .metadata.deletionTimestamp}}{{if .spec.suspend}}suspended{{else}}{{$held := false}}{{range .metadata.finalizers}}{{if eq . "finalizers.fluxcd.io"}}{{$held = true}}{{end}}{{end}}{{if and (not $held) (ne (printf "%v" .status.observedGeneration) (printf "%v" .metadata.generation))}}unhandled{{end}}{{end}}{{end}}`}}' || echo unknown
+              }
+
+              # report_release <ref> <state>: remove the fence and name what that
+              # leaves the release to.
+              report_release() {
+                rr_ns=${1%%/*}
+                rr_name=${1#*/}
+                if ! release_fence "$rr_ns" "$rr_name"; then
+                  echo "NOT released $1: the fence could not be removed" >&2
+                  return
+                fi
+                released=$((released + 1))
+                case "$2" in
+                  unhandled)
+                    unhandled=$((unhandled + 1))
+                    echo "released $fence from $1 without an uninstall: helm-controller had not handled it" ;;
+                  suspended)
+                    unhandled=$((unhandled + 1))
+                    echo "released $fence from $1 without an uninstall: another manager holds its suspension" ;;
+                  unknown)
+                    echo "released $fence from $1; whether helm-controller had handled it could not be read" ;;
+                  *)
+                    echo "released $fence from $1" ;;
+                esac
+              }
+
               # What is left is what the drain could not finish: flux-plunger did
               # not stop gracefully, or helm-controller did not uninstall a release
               # being deleted within the grace period. Each loses flux-plunger's
-              # suspension and the fence without waiting any longer. One being
-              # deleted that helm-controller's own finalizer no longer holds, and
-              # whose latest generation it has not observed, is then deleted
-              # without an uninstall, and is named as such.
+              # suspension and then its fence. A release being deleted that only
+              # the fence still holds keeps it while helm-controller, which sees
+              # the generation the lifted suspension wrote, runs the uninstall,
+              # until a little before the retry window closes; one it has not
+              # handled by then is deleted without an uninstall, and is named as
+              # such.
               total=0
               released=0
               unhandled=0
+              pending=
               for ref in $fenced; do
                 total=$((total + 1))
                 hns=${ref%%/*}
@@ -352,21 +391,31 @@ spec:
                     echo "NOT released $ref: flux-plunger's suspension could not be lifted" >&2
                     continue ;;
                 esac
-                state=$(kubectl --namespace "$hns" get "$hr" "$name" --ignore-not-found --output go-template='{{`{{if .metadata.deletionTimestamp}}{{$held := false}}{{range .metadata.finalizers}}{{if eq . "finalizers.fluxcd.io"}}{{$held = true}}{{end}}{{end}}{{if and (not $held) (ne (printf "%v" .status.observedGeneration) (printf "%v" .metadata.generation))}}unhandled{{end}}{{end}}`}}') || state=unknown
-                if ! release_fence "$hns" "$name"; then
-                  echo "NOT released $ref: the fence could not be removed" >&2
+                state=$(read_state "$hns" "$name")
+                if [ "$state" = unhandled ]; then
+                  pending="$pending $ref"
                   continue
                 fi
-                released=$((released + 1))
-                case "$state" in
-                  unhandled)
-                    unhandled=$((unhandled + 1))
-                    echo "released $fence from $ref without an uninstall: helm-controller had not handled it" ;;
-                  unknown)
-                    echo "released $fence from $ref; whether helm-controller had handled it could not be read" ;;
-                  *)
-                    echo "released $fence from $ref" ;;
-                esac
+                report_release "$ref" "$state"
+              done
+              # The last fences go well before the window closes, so their
+              # removal still has retries.
+              wait_until=$(( retry_until - 30 ))
+              while [ -n "$pending" ] && [ "$(date +%s)" -lt "$wait_until" ]; do
+                sleep 2
+                still=
+                for ref in $pending; do
+                  state=$(read_state "${ref%%/*}" "${ref#*/}")
+                  if [ "$state" = unhandled ]; then
+                    still="$still $ref"
+                  else
+                    report_release "$ref" "$state"
+                  fi
+                done
+                pending=$still
+              done
+              for ref in $pending; do
+                report_release "$ref" unhandled
               done
 
               echo "released $released of $total fenced HelmReleases, $unhandled without an uninstall"

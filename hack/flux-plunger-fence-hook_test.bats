@@ -89,6 +89,9 @@ fences_left() {
 #   * <ns>@<name>.rv         resourceVersion, bumped by every write;
 #   * <ns>@<name>.suspended  spec.suspend is true;
 #   * <ns>@<name>.deleting   the release is being deleted;
+#   * <ns>@<name>.hcdelay    helm-controller handles the release, once it is no
+#                            longer suspended, after this many reads of its state:
+#                            the uninstall runs and the generation is observed;
 #   * <ns>@<name>.owned      flux-plunger's Apply entry owns spec.suspend,
 #                            holding what a correct ownership template prints;
 #   * <ns>@<name>.coowned    another manager also owns spec.suspend at true;
@@ -132,7 +135,10 @@ HELMFIN=finalizers.fluxcd.io
 # The one predicate that tells a release helm-controller has not yet handled in
 # its unsuspended form: being deleted, no longer held by its finalizer, and its
 # latest generation not yet observed.
-UNHANDLED='{{if .metadata.deletionTimestamp}}{{$held := false}}{{range .metadata.finalizers}}{{if eq . "finalizers.fluxcd.io"}}{{$held = true}}{{end}}{{end}}{{if and (not $held) (ne (printf "%v" .status.observedGeneration) (printf "%v" .metadata.generation))}}'
+# A release being deleted under a suspension, which helm-controller skips the
+# uninstall of, is told apart first.
+SUSPENDED_DELETING='{{if .metadata.deletionTimestamp}}{{if .spec.suspend}}suspended{{else}}'
+UNHANDLED='{{$held := false}}{{range .metadata.finalizers}}{{if eq . "finalizers.fluxcd.io"}}{{$held = true}}{{end}}{{end}}{{if and (not $held) (ne (printf "%v" .status.observedGeneration) (printf "%v" .metadata.generation))}}'
 # In the hook's pod kubectl finds the API server only through the in-cluster
 # config, which client-go stops falling back to once a client override such as
 # --request-timeout is set: the call then goes to localhost:8080 and fails.
@@ -263,8 +269,15 @@ if [ "$verb" = get ]; then
       case "$tmpl" in *'ne .manager "flux-plunger"'*) [ -e "$rel.coowned" ] && echo other ;; esac
       exit 0 ;;
     *deletionTimestamp*)
-      case "$tmpl" in *"$UNHANDLED"*) ;; *) exit 0 ;; esac
       [ -e "$rel.deleting" ] || exit 0
+      case "$tmpl" in *"$SUSPENDED_DELETING"*) if [ -e "$rel.suspended" ]; then printf 'suspended'; exit 0; fi ;; esac
+      case "$tmpl" in *"$UNHANDLED"*) ;; *) exit 0 ;; esac
+      # helm-controller handles an unsuspended release being deleted after a
+      # number of reads: it runs the uninstall and records the generation.
+      if [ ! -e "$rel.suspended" ] && [ -s "$rel.hcdelay" ]; then
+        n=$(cat "$rel.hcdelay")
+        if [ "$n" -le 0 ]; then cp "$rel.gen" "$rel.obs"; else echo $((n - 1)) > "$rel.hcdelay"; fi
+      fi
       grep -q -x "$HELMFIN" "$rel.fin" && exit 0
       [ "$(cat "$rel.gen")" = "$(cat "$rel.obs")" ] && exit 0
       printf 'unhandled'
@@ -447,6 +460,7 @@ run_hook() {
   # Being deleted, helm-controller has handled its current generation.
   add_release "$STATE" tenant-c app-c "$FENCE"
   touch "$STATE/tenant-c@app-c.deleting"
+  rm "$STATE/tenant-c@app-c.suspended"
   # Its uninstall completes mid-sweep, and the release is gone when read.
   add_release "$STATE" tenant-d app-d "$FENCE"
   touch "$STATE/tenant-d@app-d.vanish"
@@ -460,6 +474,67 @@ run_hook() {
   grep -q -x "released $FENCE from tenant-c/app-c" "$tmp/out"
   grep -q -x "released $FENCE from tenant-d/app-d" "$tmp/out"
   grep -q -x 'released 4 of 4 fenced HelmReleases, 1 without an uninstall' "$tmp/out"
+  [ "$(cat "$CLOCK")" -lt "$DEADLINE" ]
+  rm -rf "$tmp"
+}
+
+@test "a release being deleted under another manager's suspension is named as deleted without an uninstall" {
+  tmp=$(mktemp -d)
+  prepare "$tmp"
+  # helm-controller skips the uninstall of a suspended release; the hook leaves a
+  # suspension another manager also holds, so this release goes without one.
+  add_release "$STATE" tenant-x app-x "$FENCE"
+  touch "$STATE/tenant-x@app-x.deleting"
+  echo yes > "$STATE/tenant-x@app-x.owned"
+  touch "$STATE/tenant-x@app-x.coowned"
+
+  run_hook "$tmp"
+
+  [ "$status" -eq 0 ]
+  [ "$(fences_left "$STATE")" -eq 0 ]
+  grep -q -x "released $FENCE from tenant-x/app-x without an uninstall: another manager holds its suspension" "$tmp/out"
+  grep -q -x 'released 1 of 1 fenced HelmReleases, 1 without an uninstall' "$tmp/out"
+  rm -rf "$tmp"
+}
+
+@test "the wait for helm-controller ends early enough that the last fences still get their retries" {
+  tmp=$(mktemp -d)
+  prepare "$tmp"
+  # helm-controller never handles this one, and the first removals of its fence
+  # fail: the wait must leave the removal time to be retried.
+  add_release "$STATE" tenant-a app-a "$FENCE"
+  touch "$STATE/tenant-a@app-a.deleting"
+  echo yes > "$STATE/tenant-a@app-a.owned"
+  echo 2 > "$STATE/tenant-a@app-a.patch.fail"
+
+  run_hook "$tmp"
+
+  [ "$status" -eq 0 ]
+  [ "$(fences_left "$STATE")" -eq 0 ]
+  grep -q -x "released $FENCE from tenant-a/app-a without an uninstall: helm-controller had not handled it" "$tmp/out"
+  [ "$(cat "$CLOCK")" -lt "$DEADLINE" ]
+  rm -rf "$tmp"
+}
+
+@test "a release helm-controller handles while the hook waits keeps its fence until the uninstall has run" {
+  tmp=$(mktemp -d)
+  prepare "$tmp"
+  # helm-controller dropped its finalizer on the suspended delete. Once the hook
+  # lifts flux-plunger's suspension, helm-controller runs the uninstall a few
+  # seconds later; removing the fence before that deletes the release without it.
+  add_release "$STATE" tenant-a app-a "$FENCE"
+  touch "$STATE/tenant-a@app-a.deleting"
+  echo yes > "$STATE/tenant-a@app-a.owned"
+  echo 3 > "$STATE/tenant-a@app-a.hcdelay"
+
+  run_hook "$tmp"
+
+  [ "$status" -eq 0 ]
+  [ "$(fences_left "$STATE")" -eq 0 ]
+  [ "$(cat "$STATE/tenant-a@app-a.obs")" = "$(cat "$STATE/tenant-a@app-a.gen")" ]
+  grep -q -x "released $FENCE from tenant-a/app-a" "$tmp/out"
+  grep -q -x 'released 1 of 1 fenced HelmReleases, 0 without an uninstall' "$tmp/out"
+  [ "$(cat "$CLOCK")" -lt "$DEADLINE" ]
   rm -rf "$tmp"
 }
 
