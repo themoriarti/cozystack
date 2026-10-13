@@ -497,6 +497,63 @@ run_hook() {
   rm -rf "$tmp"
 }
 
+@test "a release that can never be read does not leave the ones listed after it a single attempt" {
+  tmp=$(mktemp -d)
+  prepare "$tmp"
+  # Listed first, never readable: it must not spend the whole retry window.
+  add_release "$STATE" tenant-a app-a "$FENCE"
+  echo 9999 > "$STATE/tenant-a@app-a.ownedread.fail"
+  # Listed after it, and its fence comes off only on the third try.
+  add_release "$STATE" tenant-z app-z "$FENCE"
+  echo 2 > "$STATE/tenant-z@app-z.patch.fail"
+
+  run_hook "$tmp"
+
+  [ "$status" -ne 0 ]
+  grep -q '^NOT released tenant-a/app-a: it could not be read' "$tmp/out"
+  grep -q -x "released $FENCE from tenant-z/app-z" "$tmp/out"
+  [ "$(cat "$CLOCK")" -lt "$DEADLINE" ]
+  rm -rf "$tmp"
+}
+
+@test "releases swept after the retry window closed get one attempt each, so the report is still written" {
+  tmp=$(mktemp -d)
+  prepare "$tmp"
+  # A slow scale-down and the stuck pod's wait take the window to its end; a
+  # share of it per release must not reach past the window for these.
+  echo $((WINDOW - 10)) > "$STATE/scale.slow"
+  touch "$STATE/pods.stuck"
+  for n in a b c; do
+    add_release "$STATE" "tenant-$n" "app-$n" "$FENCE"
+    echo 9999 > "$STATE/tenant-$n@app-$n.ownedread.fail"
+  done
+
+  run_hook "$tmp"
+
+  [ "$status" -ne 0 ]
+  grep -q -x 'released 0 of 3 fenced HelmReleases, 0 without an uninstall' "$tmp/out"
+  [ "$(cat "$CLOCK")" -lt "$DEADLINE" ]
+  rm -rf "$tmp"
+}
+
+@test "the listing after the sweep gets the rest of the window, not the last release's share" {
+  tmp=$(mktemp -d)
+  prepare "$tmp"
+  # The pod stays, so the fences are listed again; that listing fails for longer
+  # than one release's share before it answers.
+  echo 1 > "$STATE/wait.fail"
+  touch "$STATE/pods.stuck"
+  add_release "$STATE" tenant-a app-a "$FENCE"
+  echo 20 > "$STATE/relist.fail"
+
+  run_hook "$tmp"
+
+  [ "$status" -eq 0 ]
+  [ "$(fences_left "$STATE")" -eq 0 ]
+  grep -q -x 'released 1 of 1 fenced HelmReleases, 0 without an uninstall' "$tmp/out"
+  rm -rf "$tmp"
+}
+
 @test "the wait for helm-controller ends early enough that the last fences still get their retries" {
   tmp=$(mktemp -d)
   prepare "$tmp"
