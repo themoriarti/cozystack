@@ -179,7 +179,10 @@ type drainingManager interface {
 // informer cache is frozen and would show fences already gone. Only a
 // flux-plunger that led drains: one that never did stops while the leader goes
 // on, and the fences are the leader's. Without leader election Elected is closed
-// from the start.
+// from the start. controller-runtime closes Elected only once its
+// leader-election runnables have started, so a process stopped in between holds
+// the Lease yet takes the never-led path; it has run no reconcile, so the
+// fences it skips are ones it inherited, and the next leader takes them over.
 func RunManager(ctx context.Context, mgr drainingManager, drain time.Duration) error {
 	return RunThenDrain(ctx, mgr.Start, func(dctx context.Context) (int, error) {
 		select {
