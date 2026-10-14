@@ -148,6 +148,13 @@ tests:
       - matchRegex:
           path: spec.template.spec.initContainers[1].command[2]
           pattern: 'provider: capmox'
+      # A tag in this registry is not a pin: v0.15.0 was re-pushed on
+      # 2026-09-27 to a build that panics in init(), and every Node that came
+      # up after the pull kept the uninitialized taint. The digest decides
+      # what runs.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/sergelogvinov/proxmox-cloud-controller-manager:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$'
 
   # A blanket `operator: Exists` also matches
   # node.kubernetes.io/unreachable:NoExecute with no tolerationSeconds, which
