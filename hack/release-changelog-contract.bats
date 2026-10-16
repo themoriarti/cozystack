@@ -35,6 +35,8 @@
 #      trip over.
 #   9-11. The validator accepts every changelog of the current era (both header
 #      conventions, including a 19-line patch release) and rejects unusable output.
+#   11b. It also rejects an entry cut off with an ellipsis and a link to
+#      cozystack.io/docs/next/, and nothing that merely resembles either.
 #   12. The workflow calls the validator script rather than reimplementing it.
 #   13. The agent instructions, the release checks they send the agent to and the
 #      validator are overlaid from the dispatch ref, because the rc tag's copies
@@ -430,6 +432,64 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     echo "Validator accepted v1.5.1's changelog as v1.6.0's release body." >&2
     exit 1
   fi
+  rm -rf "$tmp"
+}
+
+# 11b. Two content defects that reached a generated release body: an entry cut
+#      off with an ellipsis before its attribution, which loses the operator
+#      action PR authors put at the end of a release note, and a link to
+#      cozystack.io/docs/next/, which the live site answers with 404. Each is
+#      planted in a shipped changelog, so a rejection cannot come from broken
+#      structure instead, and the reason must name the line and fit on one
+#      line, since the workflows quote it into a ::warning:: or ::error::
+#      annotation, which ends at the first newline. The near misses at the end
+#      are shapes shipped changelogs carry.
+@test "the changelog validator rejects truncated entries and docs/next links, and only those" {
+  base="$REPO_ROOT/docs/changelogs/v1.5.1.md"
+  [ -f "$base" ] || { echo "fixture $base is gone; pick another shipped changelog" >&2; exit 1; }
+  tmp="$(mktemp -d)"
+  line=$(( $(wc -l < "$base") + 1 ))
+
+  for bad in \
+    'ellipsis|* **fix(app): restore the bucket**: The restore now carries the bucket, and the… ([**@someone**](https://github.com/someone) in #1)' \
+    'ellipsis|* **fix(app): restore the bucket**: The restore now carries the bucket, and the... ([**@someone**](https://github.com/someone) in #1)' \
+    'docs/next|Learn more in the [documentation](https://cozystack.io/docs/next/).' \
+    'docs/next|Learn more in the [documentation](https://cozystack.io/docs/next).'
+  do
+    want="${bad%%|*}"; text="${bad#*|}"
+    { cat "$base"; printf '%s\n' "$text"; } > "$tmp/bad.md"
+    if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/bad.md" 1.5.1 >/dev/null 2>&1; then
+      echo "Validator accepted a changelog carrying: $text" >&2
+      exit 1
+    fi
+    reason="$("$REPO_ROOT/hack/validate-changelog.sh" "$tmp/bad.md" 1.5.1 2>&1 || true)"
+    case "$reason" in
+      *"$want"*"(line(s) $line)"*) ;;
+      *) echo "Rejected '$text' without naming '$want' and line $line: $reason" >&2; exit 1 ;;
+    esac
+    [ "$(printf '%s\n' "$reason" | wc -l)" -eq 1 ] || {
+      echo "The reason spans several lines, so a workflow annotation would carry only the first:" >&2
+      printf '%s\n' "$reason" | sed 's/^/    /' >&2
+      exit 1
+    }
+  done
+
+  # The website source tree named in prose (v1.3.0), an ellipsis inside a
+  # sentence (v1.4.0), a list closed with "..." right before the attribution,
+  # and a versioned docs link.
+  {
+    cat "$base"
+    printf '%s\n' \
+      '* **[website] Trunk docs**: keeps a permanent `content/en/docs/next/` trunk ([**@someone**](https://github.com/someone) in cozystack/website#1)' \
+      '* **feat(app): sizes**: the legacy names (`nano` … `2xlarge`) stay as aliases ([**@someone**](https://github.com/someone) in #2)' \
+      '* **feat(app): plugins**: stages the reference plugins (bridge, macvlan, ...) ([**@someone**](https://github.com/someone) in #3)' \
+      'Learn more in the [documentation](https://cozystack.io/docs/v1.5/operations/).'
+  } > "$tmp/near.md"
+  "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/near.md" 1.5.1 >/dev/null 2>&1 || {
+    echo "Validator rejected text that only resembles a truncated entry or a docs/next link:" >&2
+    "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/near.md" 1.5.1 2>&1 >/dev/null | sed 's/^/    /' >&2
+    exit 1
+  }
   rm -rf "$tmp"
 }
 
