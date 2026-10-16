@@ -36,8 +36,9 @@
 #   9-11. The validator accepts every changelog of the current era (both header
 #      conventions, including a 19-line patch release) and rejects unusable output.
 #   12. The workflow calls the validator script rather than reimplementing it.
-#   13. The agent instructions and the validator are overlaid from the dispatch
-#      ref, because the rc tag's copies predate this workflow.
+#   13. The agent instructions, the release checks they send the agent to and the
+#      validator are overlaid from the dispatch ref, because the rc tag's copies
+#      predate this workflow.
 #   14. open-pr survives an artifact transfer failure and keys off the file on disk.
 #   15. A pre-existing changelog is validated, not merely non-empty.
 #   16. promote-rc parses the rc tag ONCE in a cheap `parse` job that rejects
@@ -480,6 +481,35 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     echo "tooling checkout." >&2
     exit 1
   }
+
+  # changelog.md sends the agent to run the docs/release.md checks and the
+  # validator on its own output, by their working-tree paths. Without these two
+  # copies it runs the rc tag's versions, which predate every check added since.
+  for f in docs/release.md hack/validate-changelog.sh; do
+    printf '%s\n' "$overlay" | code_lines | grep -qF "cp .release-tooling/$f $f" || {
+      echo "The refresh step does not overlay $f from the tooling checkout, so the" >&2
+      echo "agent following docs/agents/changelog.md section 9 runs the rc tag's copy." >&2
+      exit 1
+    }
+  done
+
+  # docs/release.md sits under neither sparse-checkout path. It reaches
+  # .release-tooling only because cone mode also checks out the files of every
+  # parent directory of a listed one; without it the copy above fails the job.
+  tooling="$(printf '%s\n' "$block" | awk '
+    /^      - name: Checkout release tooling from the dispatch ref$/ { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside' | code_lines)"
+  printf '%s\n' "$tooling" | grep -qE '^[[:space:]]+docs/agents$' || {
+    echo "The tooling checkout no longer lists docs/agents, which is what carries" >&2
+    echo "docs/release.md into .release-tooling." >&2
+    exit 1
+  }
+  if printf '%s\n' "$tooling" | grep -qE 'sparse-checkout-cone-mode:[[:space:]]*false'; then
+    echo "The tooling checkout turned cone mode off, which drops docs/release.md" >&2
+    echo "from .release-tooling and fails the refresh step's copy." >&2
+    exit 1
+  fi
 
   # Every job that runs release tooling against an older checkout must source it
   # from the dispatch ref. A script fetched by a script that is itself missing
