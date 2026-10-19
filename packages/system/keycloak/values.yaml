@@ -135,7 +135,10 @@ extraEnv: []
 #     (in etcd, next to the DB credentials — "static" trades some at-rest
 #     protection for zero external dependencies). If that Secret is ever lost,
 #     every previously-encrypted value becomes permanently undecryptable, so it
-#     MUST be part of the backup set. For production prefer kms.backend=vault-transit.
+#     MUST be part of the backup set. Helm keeps the Secret when encryption is
+#     disabled or the package is removed, and the next install reuses it; delete
+#     it by hand only once nothing encrypted under it is left. For production
+#     prefer kms.backend=vault-transit.
 encryption:
   enabled: false
   image: ghcr.io/cozystack/keycloak-kms-proxy:0.2.3@sha256:6ad52ca209b31afe0fb118ca5c2ada418ec22c16a20c5153003c954d9bb54e8e

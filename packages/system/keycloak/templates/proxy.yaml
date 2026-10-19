@@ -92,6 +92,11 @@ metadata:
   name: keycloak-kms-proxy-kek
   labels:
     app: keycloak-kms-proxy
+  annotations:
+    # The DEK set is wrapped with this KEK, so losing it loses the data.
+    # Keep it when encryption is disabled or the release is reinstalled;
+    # the lookup above picks it up again on the next install.
+    helm.sh/resource-policy: keep
 data:
   kek: {{ $kek | quote }}
 ---

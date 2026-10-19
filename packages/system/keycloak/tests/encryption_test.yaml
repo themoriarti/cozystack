@@ -176,6 +176,24 @@ tests:
           path: data.kek
           pattern: ^[A-Za-z0-9+/]{59}=$
 
+  - it: keeps the static KEK Secret when the release drops it
+    # The DEK set is wrapped with this KEK; deleting it with the release
+    # would make the data undecryptable on the next enable.
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    set:
+      encryption.enabled: true
+      encryption.fields: disabled
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
   - it: exposes the proxy on a postgres Service
     template: templates/proxy.yaml
     documentSelector:
