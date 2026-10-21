@@ -102,7 +102,7 @@ extraEnv: []
 #       name: my-secret
 #       key: my-key
 
-# Additional trust anchors for outbound TLS (LDAPS, external IdPs, SMTP).
+# Additional system trust anchors (LDAPS, external IdPs, SMTP).
 # Each entry selects one key from an existing Secret or ConfigMap in the
 # release namespace; key defaults to ca.crt. Supply only public certificates:
 # PEM bundles or unencrypted PKCS12 (.p12, .pfx, .pkcs12), without private keys.
@@ -111,6 +111,9 @@ extraEnv: []
 # The chart reserves the cozystack-* subdirectories there for these mounts.
 # These CAs apply to the whole Keycloak server, across all realms, so restrict
 # writes to the referenced objects to administrators who manage that trust.
+# They also verify incoming client certificates when https-client-auth is
+# request or required and no separate https-trust-store-file is configured.
+# Set that file explicitly if incoming mTLS needs a different trust boundary.
 # Changing an object's contents does not restart Keycloak: restart both pods
 # after rotation, or change the referenced object name to trigger a rollout.
 # Missing objects/keys prevent the pod from starting. Certificate
