@@ -73,6 +73,13 @@ spec:
         name: cozy-default-redis
     - application:
         apiGroup: apps.cozystack.io
+        kind: Valkey
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Redis
+        name: cozy-default-redis
+    - application:
+        apiGroup: apps.cozystack.io
         kind: Kafka
       strategyRef:
         apiGroup: strategy.backups.cozystack.io
