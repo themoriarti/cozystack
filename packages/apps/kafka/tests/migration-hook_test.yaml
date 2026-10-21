@@ -447,3 +447,16 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "roles:\\s+- controller[\\s\\S]*?resources:\\s+limits:"
         documentIndex: 3
+
+  - it: applies without the OpenAPI patch lookup, so an upgrade fits the tenant LimitRange default
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    documentIndex: 3
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "kubectl[^|\\n]* apply (-f|--filename|--server-side)"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "echo \"\\$broker_manifest\" \\| kubectl apply --openapi-patch=false -f -\\n[\\s\\S]*echo \"\\$controller_manifest\" \\| kubectl apply --openapi-patch=false -f -\\n[\\s\\S]*<<POOL \\| kubectl apply --openapi-patch=false -f -\\n[\\s\\S]*<<REB \\| kubectl apply --openapi-patch=false -f -\\n"

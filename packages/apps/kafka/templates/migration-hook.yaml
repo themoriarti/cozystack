@@ -26,6 +26,7 @@
 {{- $controllerReplicas := include "kafka.controllerReplicas" . }}
 {{- $brokerPool := include "kafka.brokerPoolName" . }}
 {{- $freshBrokerPool := printf "b-%s" (include "kafka.poolHash" .) }}
+{{- $cruiseControlMemory := "1Gi" }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -121,6 +122,15 @@ spec:
               np=kafkanodepools.kafka.strimzi.io
               kr=kafkarebalances.kafka.strimzi.io
 
+              # Every apply here passes --openapi-patch=false. Without it, applying
+              # an object that already exists makes kubectl download the cluster's
+              # whole OpenAPI v2 document only to learn that a custom resource
+              # takes a JSON merge patch: about 300Mi with the platform's CRDs,
+              # while this container runs under a tenant LimitRange default of
+              # 128Mi. With it kubectl builds the same merge patch from the
+              # last-applied annotation. Not --server-side: fields that
+              # "kubectl create" set on the "kafka" pool stay co-owned by that
+              # manager, so a server-side apply would never remove them.
               # ---- Node-pool manifests (broker pool reused for the create-CAS) ----
               broker_manifest=$(cat <<MANIFEST
               apiVersion: kafka.strimzi.io/v1beta2
@@ -143,6 +153,14 @@ spec:
                 roles:
                   - broker
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                # A pool template replaces spec.kafka.template whole, for every
+                # pool here: nothing set on the Kafka CR's template reaches these
+                # pods (KafkaPool.java at 0.45.1-rc1: https://github.com/strimzi/strimzi-kafka-operator/blob/0.45.1-rc1/cluster-operator/src/main/java/io/strimzi/operator/cluster/model/KafkaPool.java#L196-L218).
+                template:
+                  kafkaContainer:
+                    env:
+                      - name: JAVA_TOOL_OPTIONS
+                        value: {{ include "kafka.javaToolOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml).limits | quote }}
                 storage:
                   type: jbod
                   volumes:
@@ -187,6 +205,11 @@ spec:
                 roles:
                   - controller
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                template:
+                  kafkaContainer:
+                    env:
+                      - name: JAVA_TOOL_OPTIONS
+                        value: {{ include "kafka.javaToolOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml).limits | quote }}
                 storage:
                   type: jbod
                   volumes:
@@ -242,10 +265,10 @@ spec:
                 fi
               fi
               echo "Ensuring broker KafkaNodePool \"$brokerPool\" exists..."
-              echo "$broker_manifest" | kubectl apply -f -
+              echo "$broker_manifest" | kubectl apply --openapi-patch=false -f -
 
               echo "Ensuring controller KafkaNodePool exists..."
-              echo "$controller_manifest" | kubectl apply -f -
+              echo "$controller_manifest" | kubectl apply --openapi-patch=false -f -
 
               # ---- Decide what to do from the Kafka CR ----
               # Fail closed. --ignore-not-found makes kubectl exit 0 with empty
@@ -370,7 +393,7 @@ spec:
               # F1: stand up this cluster's own release-hashed broker pool with
               # node IDs pinned high, clear of the existing broker/controller IDs.
               echo "Creating target broker pool \"$freshBrokerPool\"..."
-              cat <<POOL | kubectl apply -f -
+              cat <<POOL | kubectl apply --openapi-patch=false -f -
               apiVersion: kafka.strimzi.io/v1beta2
               kind: KafkaNodePool
               metadata:
@@ -388,6 +411,11 @@ spec:
                 roles:
                   - broker
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                template:
+                  kafkaContainer:
+                    env:
+                      - name: JAVA_TOOL_OPTIONS
+                        value: {{ include "kafka.javaToolOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml).limits | quote }}
                 storage:
                   type: jbod
                   volumes:
@@ -407,9 +435,13 @@ spec:
               # explicit resources: Cruise Control is a JVM, and a tenant namespace
               # LimitRange defaults containers to 128Mi, which OOMs it before it
               # can produce a proposal (same reason the entity-operator carries
-              # explicit resources in kafka.yaml).
+              # explicit resources in kafka.yaml). JAVA_TOOL_OPTIONS: see
+              # kafka.javaToolOptions.
               echo "Enabling Cruise Control for the drain..."
-              kubectl -n "$ns" patch "$kafka" "$name" --type merge -p '{"spec":{"cruiseControl":{"resources":{"requests":{"cpu":"200m","memory":"768Mi"},"limits":{"memory":"1Gi"}}}}}'
+              {{- $ccEnv := list (dict "name" "JAVA_TOOL_OPTIONS" "value" (include "kafka.javaToolOptions" (dict "memory" $cruiseControlMemory))) }}
+              {{- $ccResources := dict "requests" (dict "cpu" "200m" "memory" "768Mi") "limits" (dict "memory" $cruiseControlMemory) }}
+              {{- $ccPatch := dict "spec" (dict "cruiseControl" (dict "resources" $ccResources "template" (dict "cruiseControlContainer" (dict "env" $ccEnv)))) }}
+              kubectl -n "$ns" patch "$kafka" "$name" --type merge -p '{{ $ccPatch | toJson }}'
 
               # F3: drain all partitions off the "kafka" pool broker IDs.
               kafkaIds=$(kubectl -n "$ns" get "$np" kafka -o jsonpath='{.status.nodeIds}' 2>/dev/null || echo "")
@@ -418,7 +450,7 @@ spec:
                 exit 1
               fi
               echo "Draining brokers $kafkaIds via Cruise Control rebalance..."
-              cat <<REB | kubectl apply -f -
+              cat <<REB | kubectl apply --openapi-patch=false -f -
               apiVersion: kafka.strimzi.io/v1beta2
               kind: KafkaRebalance
               metadata:
