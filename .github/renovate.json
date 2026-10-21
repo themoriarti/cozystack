@@ -86,6 +86,12 @@
       "enabled": false
     },
     {
+      "description": "The seaweedfs rebuild compiles one upstream release with the Go toolchain upstream's docker/Dockerfile.go_build uses at that tag, lays it over the upstream image of that tag, and `make update` in packages/system/seaweedfs re-pins the builder, the base image digest and the source checksum from there. A Renovate bump of any of them builds a combination upstream never shipped, and the next `make update` silently reverts it. Updates are disabled here; all of them move with the SeaweedFS version.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/system/seaweedfs/images/seaweedfs/**"],
+      "enabled": false
+    },
+    {
       "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
       "matchManagers": ["gomod"],
       "matchPackageNames": ["kubevirt.io/csi-driver"],
