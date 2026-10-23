@@ -2778,3 +2778,71 @@ func TestReconcileBucketClaim_AdoptsOwnerlessWorkload(t *testing.T) {
 		t.Errorf("owners = %v, want the claim uid-x", w.OwnerReferences)
 	}
 }
+
+// A controller rolled back to the doubled prefix attaches claim bucket-x to
+// bucket-bucket-x, which by then is the Bucket app "bucket-x"'s renamed
+// Workload. On the next upgrade bucket-x must let go of it, not delete it.
+func TestReconcileBucketApp_ReleasesSharedLegacyWorkload(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-x", "uid-x")
+	shared := bucketWorkloadWithSize("bucket-bucket-x", "bucket-bucket-x", "uid-bx", "100Gi")
+	shared.OwnerReferences = append(shared.OwnerReferences, metav1.OwnerReference{
+		APIVersion: "objectstorage.k8s.io/v1alpha1", Kind: "BucketClaim", Name: "bucket-x", UID: "uid-x",
+	})
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, shared).
+		WithStatusSubresource(monitor).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	if err := reconciler.reconcileBucketClaimForMonitor(context.TODO(), monitor, *claim, nil); err != nil {
+		t.Fatalf("reconcileBucketClaimForMonitor returned error: %v", err)
+	}
+
+	got, w := workloadSize(t, c, "bucket-bucket-x")
+	if len(w.OwnerReferences) != 1 || w.OwnerReferences[0].UID != "uid-bx" {
+		t.Errorf("bucket-bucket-x owners = %v, want only uid-bx", w.OwnerReferences)
+	}
+	if got.Cmp(resource.MustParse("100Gi")) != 0 {
+		t.Errorf("bucket-bucket-x size = %s, want 100Gi kept", got.String())
+	}
+	if _, own := workloadSize(t, c, "bucket-x"); own.Status.Resources != nil {
+		if _, ok := own.Status.Resources[resourceS3StorageBytes]; ok {
+			t.Errorf("bucket-x took the other bucket's size: %v", own.Status.Resources)
+		}
+	}
+}
+
+// The legacy Workload can be replaced under the same name between the lookup
+// and the delete; the replacement must survive.
+func TestReconcileBucketApp_KeepsWorkloadThatReplacedLegacy(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-cozy-backups", "claim-uid")
+	legacy := legacyBucketWorkloadOwnedBy("claim-uid")
+	legacy.UID = "legacy-uid"
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, legacy).
+		WithStatusSubresource(monitor).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if obj.GetName() == "bucket-bucket-cozy-backups" {
+					if err := c.Delete(ctx, obj.DeepCopyObject().(client.Object)); err != nil {
+						return err
+					}
+					replacement := bucketWorkloadWithSize("bucket-bucket-cozy-backups", "bucket-bucket-cozy-backups", "other-uid", "5Gi")
+					replacement.UID = "replacement-uid"
+					if err := c.Create(ctx, replacement); err != nil {
+						return err
+					}
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	if err := reconciler.reconcileBucketClaimForMonitor(context.TODO(), monitor, *claim, nil); err != nil {
+		t.Fatalf("reconcileBucketClaimForMonitor returned error: %v", err)
+	}
+
+	got, w := workloadSize(t, c, "bucket-bucket-cozy-backups")
+	if len(w.OwnerReferences) != 1 || w.OwnerReferences[0].UID != "other-uid" || got.Cmp(resource.MustParse("5Gi")) != 0 {
+		t.Errorf("replacement Workload changed: owners=%v size=%s", w.OwnerReferences, got.String())
+	}
+}
