@@ -497,33 +497,15 @@ func TestWarnRemovedFields(t *testing.T) {
 			wantKeys: nil,
 		},
 		{
-			name:     "foundationdb with an empty cluster.version does not warn",
-			kindName: "FoundationDB",
-			specJSON: `{"cluster":{"version":""}}`,
-			wantKeys: nil,
-		},
-		{
 			name:     "opensearch with the removed image override warns",
 			kindName: "OpenSearch",
 			specJSON: `{"version":"v2","images":{"opensearch":"example.test/opensearch:1"}}`,
 			wantKeys: []string{"images"},
 		},
 		{
-			name:     "foundationdb with the removed cluster.version warns",
+			name:     "foundationdb legacy version is handled by the chart",
 			kindName: "FoundationDB",
 			specJSON: `{"version":"v7.3","cluster":{"version":"7.1.67","redundancyMode":"double"}}`,
-			wantKeys: []string{"cluster.version"},
-		},
-		{
-			name:     "foundationdb without cluster.version does not warn",
-			kindName: "FoundationDB",
-			specJSON: `{"version":"v7.3","cluster":{"redundancyMode":"double"}}`,
-			wantKeys: nil,
-		},
-		{
-			name:     "a scalar where the nested path expects an object does not warn",
-			kindName: "FoundationDB",
-			specJSON: `{"cluster":"broken"}`,
 			wantKeys: nil,
 		},
 	}

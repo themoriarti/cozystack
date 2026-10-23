@@ -11,11 +11,11 @@
 {{- index $versionMap $version }}
 {{- end }}
 
-{{/* cluster.version is no longer read, but a release that still carries one
-     runs that version today. Migration 60 carries it over to version where
-     the platform runs migrations; nothing does on a variant that runs none,
-     and there a new render would move the cluster to another release line
-     without a word: down from 7.4, or off 7.1, which the operator no longer
+{{/* cluster.version no longer selects the deployed version, but a release
+     that still carries one runs that version today. Migration 60 carries it
+     over to version where the platform runs migrations. Without migrations,
+     a new render would move the cluster to another release line without a
+     word: down from 7.4, or off 7.1, which the operator no longer
      manages. Refusing the render keeps such a release on the revision it runs
      until someone picks the line. A patch-level difference inside the same
      line is left alone. */}}
@@ -27,7 +27,7 @@
 {{-     $line := regexFind "^[0-9]+\\.[0-9]+" (toString $legacy) }}
 {{-     $version := .Values.version | toString }}
 {{-     if ne $line (trimPrefix "v" $version) }}
-{{-       printf `cluster.version %s is no longer read, and it is on a different release line than version %s. Set version to the line the cluster runs, upgrading the cluster first if that line is no longer offered, or remove cluster.version to move the cluster to %s.` (toString $legacy) $version (include "foundationdb.versionMap" .) | fail }}
+{{-       printf `cluster.version %s no longer selects the deployed version, and it is on a different release line than version %s. Set version to the line the cluster runs, upgrading the cluster first if that line is no longer offered, or remove cluster.version to move the cluster to %s.` (toString $legacy) $version (include "foundationdb.versionMap" .) | fail }}
 {{-     end }}
 {{-   end }}
 {{- end }}

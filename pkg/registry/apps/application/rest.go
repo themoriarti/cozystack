@@ -2164,33 +2164,28 @@ const kubernetesKind = "Kubernetes"
 // values mid-upgrade -- so the write path says so rather than letting the field
 // look effective.
 type removedField struct {
-	// path is the values key, with "." between the segments of a nested one.
-	path string
+	key string
 	// replacement says what happens instead, in the second half of the warning.
 	replacement string
 	// emptyDefault marks a key that is set only when it carries a value. The
 	// image overrides defaulted to empty strings, the read path fills defaults
 	// in, and a client that writes back what it read stores them, so their
-	// presence says nothing. FoundationDB's cluster.version defaulted to a
-	// version instead, so there the flag only drops an explicit empty string.
+	// presence says nothing.
 	emptyDefault bool
 }
 
 var removedFieldsByKind = map[string][]removedField{
 	kubernetesKind: {
-		{path: "nodeGroups", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
-		{path: "nodeHealthCheck", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
-		{path: "maxNodeProvisionTime", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
-		{path: "images", replacement: "the images come from the chart, and an air-gapped install serves them through the registry mirrors configured on its nodes", emptyDefault: true},
+		{key: "nodeGroups", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
+		{key: "nodeHealthCheck", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
+		{key: "maxNodeProvisionTime", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
+		{key: "images", replacement: "the images come from the chart, and an air-gapped install serves them through the registry mirrors configured on its nodes", emptyDefault: true},
 	},
 	"KubernetesNodes": {
-		{path: "images", replacement: "the images come from the chart, and an air-gapped install serves them through the registry mirrors configured on its nodes", emptyDefault: true},
+		{key: "images", replacement: "the images come from the chart, and an air-gapped install serves them through the registry mirrors configured on its nodes", emptyDefault: true},
 	},
 	"OpenSearch": {
-		{path: "images", replacement: "the image follows spec.version", emptyDefault: true},
-	},
-	"FoundationDB": {
-		{path: "cluster.version", replacement: "the version is selected with spec.version", emptyDefault: true},
+		{key: "images", replacement: "the image follows spec.version", emptyDefault: true},
 	},
 }
 
@@ -2208,31 +2203,14 @@ func (r *REST) warnRemovedFields(ctx context.Context, app *appsv1alpha1.Applicat
 		return
 	}
 	for _, f := range fields {
-		value, present := lookupValuesPath(values, strings.Split(f.path, "."))
+		value, present := values[f.key]
 		if !present || (f.emptyDefault && !carriesValue(value)) {
 			continue
 		}
 		warning.AddWarning(ctx, "", fmt.Sprintf(
 			"spec.%s is ignored on the %s resource: %s. The field is stored but has no effect.",
-			f.path, r.kindName, f.replacement))
+			f.key, r.kindName, f.replacement))
 	}
-}
-
-// lookupValuesPath returns the value at the path, walking only objects: a
-// segment under a scalar is not present.
-func lookupValuesPath(values map[string]any, path []string) (any, bool) {
-	var current any = values
-	for _, segment := range path {
-		object, ok := current.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		current, ok = object[segment]
-		if !ok {
-			return nil, false
-		}
-	}
-	return current, true
 }
 
 // carriesValue reports whether a value is more than an empty default: not null,

@@ -48,7 +48,7 @@ tests:
         version: "7.4.2"
     asserts:
       - failedTemplate:
-          errorMessage: "cluster.version 7.4.2 is no longer read, and it is on a different release line than version v7.3. Set version to the line the cluster runs, upgrading the cluster first if that line is no longer offered, or remove cluster.version to move the cluster to 7.3.63."
+          errorMessage: "cluster.version 7.4.2 no longer selects the deployed version, and it is on a different release line than version v7.3. Set version to the line the cluster runs, upgrading the cluster first if that line is no longer offered, or remove cluster.version to move the cluster to 7.3.63."
 
   - it: refuses a leftover cluster.version on a line the chart no longer offers
     set:
@@ -56,7 +56,7 @@ tests:
         version: "7.1.67"
     asserts:
       - failedTemplate:
-          errorMessage: "cluster.version 7.1.67 is no longer read, and it is on a different release line than version v7.3. Set version to the line the cluster runs, upgrading the cluster first if that line is no longer offered, or remove cluster.version to move the cluster to 7.3.63."
+          errorMessage: "cluster.version 7.1.67 no longer selects the deployed version, and it is on a different release line than version v7.3. Set version to the line the cluster runs, upgrading the cluster first if that line is no longer offered, or remove cluster.version to move the cluster to 7.3.63."
 
   - it: renders once version picks the line cluster.version is on
     set:
