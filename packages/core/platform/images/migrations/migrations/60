@@ -167,16 +167,15 @@ while IFS= read -r row; do
     carry)
       if [ "$DRY_RUN" = "1" ]; then
         echo "[dry-run] would set version=$version on FoundationDB $ns/$name (cluster.version $detail)"
-        CARRIED=$((CARRIED + 1))
-        continue
+      else
+        patch=$(printf '%s' "$row" | jq -c '[
+          {op: "test", path: "/spec/values", value: .values},
+          {op: "add", path: "/spec/values/version", value: .version}
+        ]')
+        kubectl patch helmreleases.helm.toolkit.fluxcd.io --namespace "$ns" "$name" \
+          --type json --patch "$patch" >/dev/null
+        echo "Set version=$version on FoundationDB $ns/$name (cluster.version $detail)"
       fi
-      patch=$(printf '%s' "$row" | jq -c '[
-        {op: "test", path: "/spec/values", value: .values},
-        {op: "add", path: "/spec/values/version", value: .version}
-      ]')
-      kubectl patch helmreleases.helm.toolkit.fluxcd.io --namespace "$ns" "$name" \
-        --type json --patch "$patch" >/dev/null
-      echo "Set version=$version on FoundationDB $ns/$name (cluster.version $detail)"
       CARRIED=$((CARRIED + 1))
       if [ "$detail" != "$tag" ]; then
         echo "WARN: FoundationDB $ns/$name runs $detail, and $version renders $tag after the upgrade" >&2

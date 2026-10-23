@@ -158,7 +158,7 @@ JSON
   rm -rf "$WORK"
 }
 
-@test "dry run patches nothing and does not stamp" {
+@test "dry run reports patch changes without writing anything" {
   prep
   export MIGRATION_DRY_RUN=1
   rc=0
@@ -166,7 +166,15 @@ JSON
   cat "$WORK/out"
   [ "$rc" -eq 0 ]
   grep -q 'would set version=v7.4 on FoundationDB tenant-a/foundationdb-new74' "$WORK/out"
+  grep -qxF 'WARN: FoundationDB tenant-a/foundationdb-new74 runs 7.4.3, and v7.4 renders 7.4.1 after the upgrade' "$WORK/out"
+  grep -qxF 'WARN: FoundationDB tenant-c/foundationdb-unlabelled runs 7.3.5, and v7.3 renders 7.3.63 after the upgrade' "$WORK/out"
+  summary=$(grep '^==> Summary:' "$WORK/out")
+  printf '%s\n' "$summary" | grep -qF 'carried=3 '
+  printf '%s\n' "$summary" | grep -qF 'tenant-a/foundationdb-new74=cluster.version:7.4.3->7.4.1'
+  printf '%s\n' "$summary" | grep -qF 'tenant-c/foundationdb-unlabelled=cluster.version:7.3.5->7.3.63'
+  if grep -q 'WARN: FoundationDB tenant-b/foundationdb-pinned73 ' "$WORK/out"; then echo "warned on an unchanged patch"; exit 1; fi
   if grep -q '^PATCH' "$FAKE_CMDLOG"; then echo "unexpected line matching '^PATCH'"; exit 1; fi
+  if grep -q '^ANNOTATE' "$FAKE_CMDLOG"; then echo "unexpected line matching '^ANNOTATE'"; exit 1; fi
   if grep -q '^STAMP' "$FAKE_CMDLOG"; then echo "unexpected line matching '^STAMP'"; exit 1; fi
   rm -rf "$WORK"
 }
