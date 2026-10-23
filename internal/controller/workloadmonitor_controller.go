@@ -597,6 +597,21 @@ func bucketWorkloadName(claimName string) string {
 	return "bucket-" + claimName
 }
 
+// ownedByOtherBucketClaim reports whether w belongs to a BucketClaim other
+// than bc, and not to bc itself.
+func ownedByOtherBucketClaim(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) bool {
+	other := false
+	for _, ref := range w.OwnerReferences {
+		if ref.UID == bc.UID {
+			return false
+		}
+		if ref.Kind == "BucketClaim" {
+			other = true
+		}
+	}
+	return other
+}
+
 // legacyBucketWorkload returns the Workload a previous version created for bc
 // under the unconditionally prefixed name, if it is still there and owned by
 // bc, so its sizes can be carried over and the duplicate removed.
@@ -632,6 +647,23 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 			Labels:    make(map[string]string, len(bc.Labels)),
 		},
 	}
+	// The name may still be held by another claim's Workload: Bucket
+	// applications "x" and "bucket-x" make the legacy name of the first the
+	// new name of the second. Adopting it would meter this bucket with the
+	// other one's size and leave it for the other claim to delete. Wait until
+	// that claim's own reconcile renames it away.
+	existing := &cozyv1alpha1.Workload{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(workload), existing); client.IgnoreNotFound(err) != nil {
+		return err
+	} else if err == nil && ownedByOtherBucketClaim(existing, &bc) {
+		logger.Info("Workload name is held by another BucketClaim; not adopting it", "workload", workload.Name, "bucketClaim", bc.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
+				"Workload %s for BucketClaim %s is owned by another BucketClaim; waiting for it to be released", workload.Name, bc.Name)
+		}
+		return nil
+	}
+
 	legacy, err := r.legacyBucketWorkload(ctx, &bc)
 	if err != nil {
 		return err
