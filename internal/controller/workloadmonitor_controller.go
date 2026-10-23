@@ -597,14 +597,18 @@ func bucketWorkloadName(claimName string) string {
 	return "bucket-" + claimName
 }
 
-// ownedBySomeoneElse reports whether w has owners and bc is not one of them.
-func ownedBySomeoneElse(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) bool {
+func ownedBy(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) bool {
 	for _, ref := range w.OwnerReferences {
 		if ref.UID == bc.UID {
-			return false
+			return true
 		}
 	}
-	return len(w.OwnerReferences) > 0
+	return false
+}
+
+// ownedBySomeoneElse reports whether w has owners and bc is not one of them.
+func ownedBySomeoneElse(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) bool {
+	return len(w.OwnerReferences) > 0 && !ownedBy(w, bc)
 }
 
 // heldBySomeoneElse reports whether the Workload called name exists and has
@@ -618,9 +622,10 @@ func (r *WorkloadMonitorReconciler) heldBySomeoneElse(ctx context.Context, bc *c
 }
 
 // legacyBucketWorkload returns the Workload a previous version created for bc
-// under the unconditionally prefixed name, if it is still there and bc is
-// among its owners.
-func (r *WorkloadMonitorReconciler) legacyBucketWorkload(ctx context.Context, bc *cosiv1alpha1.BucketClaim) (*cozyv1alpha1.Workload, error) {
+// under the unconditionally prefixed name, if it is still there and either bc
+// is among its owners or it has lost every owner (a claim deleted with
+// --cascade=orphan and recreated) while still carrying monitor's label.
+func (r *WorkloadMonitorReconciler) legacyBucketWorkload(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor, bc *cosiv1alpha1.BucketClaim) (*cozyv1alpha1.Workload, error) {
 	name := "bucket-" + bc.Name
 	if name == bucketWorkloadName(bc.Name) {
 		return nil, nil
@@ -629,10 +634,8 @@ func (r *WorkloadMonitorReconciler) legacyBucketWorkload(ctx context.Context, bc
 	if err := r.Get(ctx, client.ObjectKey{Namespace: bc.Namespace, Name: name}, legacy); err != nil {
 		return nil, client.IgnoreNotFound(err)
 	}
-	for _, ref := range legacy.OwnerReferences {
-		if ref.UID == bc.UID {
-			return legacy, nil
-		}
+	if ownedBy(legacy, bc) || (len(legacy.OwnerReferences) == 0 && legacy.Labels[workloadMonitorLabel] == monitor.Name) {
+		return legacy, nil
 	}
 	return nil, nil
 }
@@ -692,17 +695,21 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 
 	var legacy *cozyv1alpha1.Workload
 	if migrate {
-		if legacy, err = r.legacyBucketWorkload(ctx, &bc); err != nil {
+		if legacy, err = r.legacyBucketWorkload(ctx, monitor, &bc); err != nil {
 			return err
 		}
 	}
 	// A legacy Workload with other owners is another bucket's renamed one that
 	// a rolled-back controller also attached bc to: neither its sizes nor the
-	// object are bc's to take.
+	// object are bc's to take. An ownerless one is removed, but its sizes may
+	// be older than the claim it is recognised for.
 	soleLegacy := legacy != nil && len(legacy.OwnerReferences) == 1
+	orphanLegacy := legacy != nil && len(legacy.OwnerReferences) == 0
 
 	monitorLabels := r.getMonitorLabels(monitor)
 	_, err = ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
+		// sizes on a Workload bc did not own yet were not written for it
+		ownedBefore := ownedBy(workload, &bc)
 		updateOwnerReferences(workload.GetObjectMeta(), &bc)
 
 		if workload.Labels == nil {
@@ -731,7 +738,7 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		// rename leaves no gap in the bucket's metered size.
 		resources := make(map[string]resource.Quantity)
 		for _, key := range []string{resourceS3StorageBytes, resourceS3PhysicalStorageBytes} {
-			if q, ok := workload.Status.Resources[key]; ok {
+			if q, ok := workload.Status.Resources[key]; ok && (ownedBefore || !soleLegacy) {
 				resources[key] = q
 			} else if soleLegacy {
 				if q, ok := legacy.Status.Resources[key]; ok {
@@ -769,7 +776,7 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	// preconditions delete only the object that was checked, not one that
 	// took over the name since the lookup; a conflict is retried next pass.
 	switch {
-	case soleLegacy:
+	case soleLegacy || orphanLegacy:
 		err = r.Delete(ctx, legacy, client.Preconditions{UID: &legacy.UID, ResourceVersion: &legacy.ResourceVersion})
 	case legacy != nil:
 		orig := legacy.DeepCopy()

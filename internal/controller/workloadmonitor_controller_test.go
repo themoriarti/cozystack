@@ -2934,3 +2934,44 @@ func TestReconcileBucketClaim_BothNamesHeldIsSkipped(t *testing.T) {
 		}
 	}
 }
+
+func orphanedLegacyWorkload(monitor string) *cozyv1alpha1.Workload {
+	w := legacyBucketWorkloadOwnedBy("gone-uid")
+	w.OwnerReferences = nil
+	w.Labels = map[string]string{workloadMonitorLabel: monitor}
+	return w
+}
+
+// A claim deleted with --cascade=orphan and recreated leaves its legacy
+// Workload without owners; it must not be metered next to the new one.
+func TestReconcileBucketApp_RemovesOrphanedLegacyWorkload(t *testing.T) {
+	c := reconcileBucketApp(t, orphanedLegacyWorkload("bucket-cozy-backups"))
+
+	err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-cozy-backups", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected the orphaned legacy Workload to be deleted, got error %v", err)
+	}
+	if _, w := workloadSize(t, c, "bucket-cozy-backups"); len(w.Status.Resources) != 0 {
+		t.Errorf("sizes carried over from an orphaned legacy Workload: %v", w.Status.Resources)
+	}
+}
+
+func TestReconcileBucketApp_KeepsOrphanOfAnotherMonitor(t *testing.T) {
+	c := reconcileBucketApp(t, orphanedLegacyWorkload("some-other-monitor"))
+
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-cozy-backups", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{}); err != nil {
+		t.Errorf("expected another monitor's orphan to stay, got error %v", err)
+	}
+}
+
+// Sizes recorded on a Workload the claim did not own yet were not written for
+// it, so the legacy Workload's sizes take precedence.
+func TestReconcileBucketApp_LegacySizeWinsOverOwnerlessNewWorkload(t *testing.T) {
+	stale := bucketWorkloadWithSize("bucket-cozy-backups", "bucket-cozy-backups", "claim-uid", "10Gi")
+	stale.OwnerReferences = nil
+	c := reconcileBucketApp(t, legacyBucketWorkloadOwnedBy("claim-uid"), stale)
+
+	if got, _ := workloadSize(t, c, "bucket-cozy-backups"); got.Cmp(resource.MustParse("689Gi")) != 0 {
+		t.Errorf("size = %s, want the legacy 689Gi over the stale 10Gi", got.String())
+	}
+}
