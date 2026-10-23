@@ -607,6 +607,16 @@ func ownedBySomeoneElse(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) 
 	return len(w.OwnerReferences) > 0
 }
 
+// heldBySomeoneElse reports whether the Workload called name exists and has
+// owners other than bc.
+func (r *WorkloadMonitorReconciler) heldBySomeoneElse(ctx context.Context, bc *cosiv1alpha1.BucketClaim, name string) (bool, error) {
+	w := &cozyv1alpha1.Workload{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: bc.Namespace, Name: name}, w); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	return ownedBySomeoneElse(w, bc), nil
+}
+
 // legacyBucketWorkload returns the Workload a previous version created for bc
 // under the unconditionally prefixed name, if it is still there and bc is
 // among its owners.
@@ -635,35 +645,56 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	allMetrics map[string]*bucketMetrics,
 ) error {
 	logger := log.FromContext(ctx)
+
+	// The name may be held by another owner's Workload: Bucket applications
+	// "x" and "bucket-x" make the legacy name of the first the new name of the
+	// second, and a claim "x" outside the Bucket application maps to the same
+	// name as the application "x". Adopting it would meter this bucket with
+	// the other one's size. Keep metering the bucket under its legacy name
+	// until the new one is free, and skip the bucket only when that name is
+	// held as well.
+	name := bucketWorkloadName(bc.Name)
+	migrate := true
+	held, err := r.heldBySomeoneElse(ctx, &bc, name)
+	if err != nil {
+		return err
+	}
+	if held {
+		legacyName := "bucket-" + bc.Name
+		legacyHeld := legacyName == name
+		if !legacyHeld {
+			if legacyHeld, err = r.heldBySomeoneElse(ctx, &bc, legacyName); err != nil {
+				return err
+			}
+		}
+		if legacyHeld {
+			logger.Info("Workload name is held by another owner; not adopting it", "workload", name, "bucketClaim", bc.Name)
+			if r.Recorder != nil {
+				r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
+					"Workload %s for BucketClaim %s is owned by another object; the bucket is not metered", name, bc.Name)
+			}
+			return nil
+		}
+		logger.Info("Workload name is held by another owner; keeping the legacy name", "workload", name, "legacy", legacyName, "bucketClaim", bc.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
+				"Workload %s for BucketClaim %s is owned by another object; metering the bucket as %s until it is free", name, bc.Name, legacyName)
+		}
+		name, migrate = legacyName, false
+	}
 	workload := &cozyv1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      bucketWorkloadName(bc.Name),
+			Name:      name,
 			Namespace: bc.Namespace,
 			Labels:    make(map[string]string, len(bc.Labels)),
 		},
 	}
-	// The name may still be held by another claim's Workload: Bucket
-	// applications "x" and "bucket-x" make the legacy name of the first the
-	// new name of the second. Adopting it would meter this bucket with the
-	// other one's size and leave it for the other claim to delete. Wait until
-	// that claim's own reconcile renames it away.
-	existing := &cozyv1alpha1.Workload{}
-	err := r.Get(ctx, client.ObjectKeyFromObject(workload), existing)
-	if client.IgnoreNotFound(err) != nil {
-		return err
-	}
-	if err == nil && ownedBySomeoneElse(existing, &bc) {
-		logger.Info("Workload name is held by another owner; not adopting it", "workload", workload.Name, "bucketClaim", bc.Name)
-		if r.Recorder != nil {
-			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
-				"Workload %s for BucketClaim %s is owned by another object and is left untouched", workload.Name, bc.Name)
-		}
-		return nil
-	}
 
-	legacy, err := r.legacyBucketWorkload(ctx, &bc)
-	if err != nil {
-		return err
+	var legacy *cozyv1alpha1.Workload
+	if migrate {
+		if legacy, err = r.legacyBucketWorkload(ctx, &bc); err != nil {
+			return err
+		}
 	}
 	// A legacy Workload with other owners is another bucket's renamed one that
 	// a rolled-back controller also attached bc to: neither its sizes nor the
