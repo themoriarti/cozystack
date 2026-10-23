@@ -14,6 +14,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -2431,5 +2432,122 @@ func TestReconcile_PVCOfANotReadyDataVolumeIsNotOperational(t *testing.T) {
 				t.Errorf("PVC Workload Operational = %v, want %v", workload.Status.Operational, tc.want)
 			}
 		})
+	}
+}
+
+func TestBucketWorkloadName(t *testing.T) {
+	for claim, want := range map[string]string{
+		// a Bucket application's claim is named after its bucket- release
+		"bucket-cozy-backups": "bucket-cozy-backups",
+		"my-bucket":           "bucket-my-bucket",
+		"harbor-x-registry":   "bucket-harbor-x-registry",
+	} {
+		if got := bucketWorkloadName(claim); got != want {
+			t.Errorf("bucketWorkloadName(%q) = %q, want %q", claim, got, want)
+		}
+	}
+}
+
+// reconcileBucketApp reconciles a Bucket application named cozy-backups
+// alongside the given existing objects and returns the client.
+func reconcileBucketApp(t *testing.T, existing ...client.Object) client.Client {
+	t.Helper()
+	s := newTestScheme()
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "bucket-cozy-backups", Namespace: "tenant-demo"},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Kind:     "bucket",
+			Type:     "s3",
+			Selector: map[string]string{"app.kubernetes.io/instance": "bucket-cozy-backups"},
+		},
+	}
+	bc := &cosiv1alpha1.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "bucket-cozy-backups",
+			Namespace: "tenant-demo",
+			UID:       "claim-uid",
+			Labels:    map[string]string{"app.kubernetes.io/instance": "bucket-cozy-backups"},
+		},
+		Spec:   cosiv1alpha1.BucketClaimSpec{BucketClassName: "seaweedfs", Protocols: []cosiv1alpha1.Protocol{cosiv1alpha1.ProtocolS3}},
+		Status: cosiv1alpha1.BucketClaimStatus{BucketReady: true, BucketName: "cosi-abc123"},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(append([]client.Object{monitor, bc}, existing...)...).
+		WithStatusSubresource(monitor).
+		Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: monitor.Name, Namespace: monitor.Namespace}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	return c
+}
+
+func legacyBucketWorkloadOwnedBy(uid types.UID) *cozyv1alpha1.Workload {
+	return &cozyv1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "bucket-bucket-cozy-backups",
+			Namespace: "tenant-demo",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "objectstorage.k8s.io/v1alpha1",
+				Kind:       "BucketClaim",
+				Name:       "bucket-cozy-backups",
+				UID:        uid,
+			}},
+		},
+		Status: cozyv1alpha1.WorkloadStatus{
+			Kind: "bucket",
+			Type: "s3",
+			Resources: map[string]resource.Quantity{
+				resourceS3StorageBytes: resource.MustParse("689Gi"),
+			},
+		},
+	}
+}
+
+func TestReconcileBucketApp_NoDoublePrefix(t *testing.T) {
+	c := reconcileBucketApp(t)
+
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-cozy-backups", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{}); err != nil {
+		t.Fatalf("expected Workload bucket-cozy-backups, got error: %v", err)
+	}
+	err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-cozy-backups", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected no Workload bucket-bucket-cozy-backups, got error %v", err)
+	}
+}
+
+func TestReconcileBucketApp_ReplacesLegacyWorkload(t *testing.T) {
+	c := reconcileBucketApp(t, legacyBucketWorkloadOwnedBy("claim-uid"))
+
+	err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-cozy-backups", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected the legacy Workload to be deleted, got error %v", err)
+	}
+	workload := &cozyv1alpha1.Workload{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-cozy-backups", Namespace: "tenant-demo"}, workload); err != nil {
+		t.Fatalf("expected Workload bucket-cozy-backups, got error: %v", err)
+	}
+	// no metrics endpoint in this test, so the size can only come from the legacy Workload
+	got := workload.Status.Resources[resourceS3StorageBytes]
+	if want := resource.MustParse("689Gi"); got.Cmp(want) != 0 {
+		t.Errorf("%s = %s, want %s carried over from the legacy Workload", resourceS3StorageBytes, got.String(), want.String())
+	}
+}
+
+func TestReconcileBucketApp_KeepsLegacyNameOwnedByAnotherClaim(t *testing.T) {
+	c := reconcileBucketApp(t, legacyBucketWorkloadOwnedBy("other-claim-uid"))
+
+	foreign := &cozyv1alpha1.Workload{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-cozy-backups", Namespace: "tenant-demo"}, foreign); err != nil {
+		t.Fatalf("expected a Workload owned by another claim to stay, got error: %v", err)
+	}
+	workload := &cozyv1alpha1.Workload{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-cozy-backups", Namespace: "tenant-demo"}, workload); err != nil {
+		t.Fatalf("expected Workload bucket-cozy-backups, got error: %v", err)
+	}
+	if _, ok := workload.Status.Resources[resourceS3StorageBytes]; ok {
+		t.Errorf("expected no size taken from a Workload owned by another claim, got %v", workload.Status.Resources)
 	}
 }

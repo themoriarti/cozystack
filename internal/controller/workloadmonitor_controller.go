@@ -587,6 +587,36 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 	return result, nil
 }
 
+// bucketWorkloadName names the Workload of a BucketClaim. A Bucket application
+// names its claim after its release, which already starts with "bucket-", so
+// the prefix is added only when the claim name does not carry it.
+func bucketWorkloadName(claimName string) string {
+	if strings.HasPrefix(claimName, "bucket-") {
+		return claimName
+	}
+	return "bucket-" + claimName
+}
+
+// legacyBucketWorkload returns the Workload a previous version created for bc
+// under the unconditionally prefixed name, if it is still there and owned by
+// bc, so its sizes can be carried over and the duplicate removed.
+func (r *WorkloadMonitorReconciler) legacyBucketWorkload(ctx context.Context, bc *cosiv1alpha1.BucketClaim) (*cozyv1alpha1.Workload, error) {
+	name := "bucket-" + bc.Name
+	if name == bucketWorkloadName(bc.Name) {
+		return nil, nil
+	}
+	legacy := &cozyv1alpha1.Workload{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: bc.Namespace, Name: name}, legacy); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	for _, ref := range legacy.OwnerReferences {
+		if ref.UID == bc.UID {
+			return legacy, nil
+		}
+	}
+	return nil, nil
+}
+
 // reconcileBucketClaimForMonitor creates or updates a Workload object for the given BucketClaim and WorkloadMonitor.
 func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	ctx context.Context,
@@ -597,14 +627,18 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	logger := log.FromContext(ctx)
 	workload := &cozyv1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("bucket-%s", bc.Name),
+			Name:      bucketWorkloadName(bc.Name),
 			Namespace: bc.Namespace,
 			Labels:    make(map[string]string, len(bc.Labels)),
 		},
 	}
+	legacy, err := r.legacyBucketWorkload(ctx, &bc)
+	if err != nil {
+		return err
+	}
 
 	monitorLabels := r.getMonitorLabels(monitor)
-	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
+	_, err = ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		updateOwnerReferences(workload.GetObjectMeta(), &bc)
 
 		if workload.Labels == nil {
@@ -628,11 +662,17 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		// Start from the sizes already recorded on the Workload: when the
 		// metrics endpoint is unreachable or reports nothing for this bucket,
 		// the last known good values must survive rather than collapse to
-		// "no size", which billing would read as an empty bucket.
+		// "no size", which billing would read as an empty bucket. A Workload
+		// renamed from its legacy name starts from the legacy sizes, so the
+		// rename leaves no gap in the bucket's metered size.
 		resources := make(map[string]resource.Quantity)
 		for _, key := range []string{resourceS3StorageBytes, resourceS3PhysicalStorageBytes} {
 			if q, ok := workload.Status.Resources[key]; ok {
 				resources[key] = q
+			} else if legacy != nil {
+				if q, ok := legacy.Status.Resources[key]; ok {
+					resources[key] = q
+				}
 			}
 		}
 
@@ -658,6 +698,15 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	if err != nil {
 		logger.Error(err, "Failed to CreateOrUpdate Workload", "workload", workload.Name)
 		return err
+	}
+
+	// Billing reads every Workload as a consumer, so the legacy one must go
+	// once its replacement exists, or the bucket is metered twice.
+	if legacy != nil {
+		if err := r.Delete(ctx, legacy); client.IgnoreNotFound(err) != nil {
+			logger.Error(err, "Failed to delete legacy bucket Workload", "workload", legacy.Name)
+			return err
+		}
 	}
 
 	return nil
