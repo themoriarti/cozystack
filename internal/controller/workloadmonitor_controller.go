@@ -659,7 +659,7 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		logger.Info("Workload name is held by another BucketClaim; not adopting it", "workload", workload.Name, "bucketClaim", bc.Name)
 		if r.Recorder != nil {
 			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
-				"Workload %s for BucketClaim %s is owned by another BucketClaim; waiting for it to be released", workload.Name, bc.Name)
+				"Workload %s for BucketClaim %s is owned by another BucketClaim and is left untouched", workload.Name, bc.Name)
 		}
 		return nil
 	}

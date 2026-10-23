@@ -2500,7 +2500,8 @@ func legacyBucketWorkloadOwnedBy(uid types.UID) *cozyv1alpha1.Workload {
 			Kind: "bucket",
 			Type: "s3",
 			Resources: map[string]resource.Quantity{
-				resourceS3StorageBytes: resource.MustParse("689Gi"),
+				resourceS3StorageBytes:         resource.MustParse("689Gi"),
+				resourceS3PhysicalStorageBytes: resource.MustParse("1378Gi"),
 			},
 		},
 	}
@@ -2529,10 +2530,12 @@ func TestReconcileBucketApp_ReplacesLegacyWorkload(t *testing.T) {
 	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-cozy-backups", Namespace: "tenant-demo"}, workload); err != nil {
 		t.Fatalf("expected Workload bucket-cozy-backups, got error: %v", err)
 	}
-	// no metrics endpoint in this test, so the size can only come from the legacy Workload
-	got := workload.Status.Resources[resourceS3StorageBytes]
-	if want := resource.MustParse("689Gi"); got.Cmp(want) != 0 {
-		t.Errorf("%s = %s, want %s carried over from the legacy Workload", resourceS3StorageBytes, got.String(), want.String())
+	// no metrics endpoint in this test, so the sizes can only come from the legacy Workload
+	for key, size := range map[string]string{resourceS3StorageBytes: "689Gi", resourceS3PhysicalStorageBytes: "1378Gi"} {
+		got := workload.Status.Resources[key]
+		if want := resource.MustParse(size); got.Cmp(want) != 0 {
+			t.Errorf("%s = %s, want %s carried over from the legacy Workload", key, got.String(), want.String())
+		}
 	}
 }
 
@@ -2724,5 +2727,32 @@ func TestReconcileBucketApp_LegacyAlreadyGone(t *testing.T) {
 	}
 	if got, _ := workloadSize(t, c, "bucket-cozy-backups"); got.Cmp(resource.MustParse("689Gi")) != 0 {
 		t.Errorf("size = %s, want 689Gi carried over", got.String())
+	}
+}
+
+// A claim's own Workload, with its ownerRef as a live cluster's cache records
+// it (Kind set), must keep being updated rather than look like another claim's.
+func TestReconcileBucketClaim_UpdatesItsOwnWorkload(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-x", "uid-x")
+	own := bucketWorkloadWithSize("bucket-x", "bucket-x", "uid-x", "1Gi")
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, own).
+		WithStatusSubresource(monitor).Build()
+	recorder := record.NewFakeRecorder(10)
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s, Recorder: recorder}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "bucket-x", Namespace: "tenant-demo"}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	_, w := workloadSize(t, c, "bucket-x")
+	if got := w.Labels[workloadMonitorLabel]; got != "bucket-x" {
+		t.Errorf("monitor label = %q, want the Workload updated by its own claim", got)
+	}
+	select {
+	case e := <-recorder.Events:
+		t.Errorf("unexpected event %q for the claim's own Workload", e)
+	default:
 	}
 }
