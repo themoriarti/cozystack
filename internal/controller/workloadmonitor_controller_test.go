@@ -2697,3 +2697,32 @@ func TestReconcileBucketClaim_DoesNotAdoptAnotherClaimsWorkload(t *testing.T) {
 		t.Error("expected a BucketWorkloadNameTaken event")
 	}
 }
+
+// The legacy Workload can disappear between the lookup and the delete, for
+// example through owner garbage collection; that must not fail the reconcile.
+func TestReconcileBucketApp_LegacyAlreadyGone(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-cozy-backups", "claim-uid")
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, legacyBucketWorkloadOwnedBy("claim-uid")).
+		WithStatusSubresource(monitor).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if obj.GetName() == "bucket-bucket-cozy-backups" {
+					if err := c.Delete(ctx, obj, opts...); err != nil {
+						return err
+					}
+					return apierrors.NewNotFound(schema.GroupResource{Group: "cozystack.io", Resource: "workloads"}, obj.GetName())
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	// Reconcile only logs per-claim errors, so check the per-claim result
+	if err := reconciler.reconcileBucketClaimForMonitor(context.TODO(), monitor, *claim, nil); err != nil {
+		t.Fatalf("reconcileBucketClaimForMonitor returned error: %v", err)
+	}
+	if got, _ := workloadSize(t, c, "bucket-cozy-backups"); got.Cmp(resource.MustParse("689Gi")) != 0 {
+		t.Errorf("size = %s, want 689Gi carried over", got.String())
+	}
+}
