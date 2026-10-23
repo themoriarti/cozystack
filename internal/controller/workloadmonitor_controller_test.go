@@ -2756,3 +2756,25 @@ func TestReconcileBucketClaim_UpdatesItsOwnWorkload(t *testing.T) {
 	default:
 	}
 }
+
+// A Workload that lost its owner references belongs to nobody, so the claim
+// whose name it carries takes it over instead of being blocked by it forever.
+func TestReconcileBucketClaim_AdoptsOwnerlessWorkload(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-x", "uid-x")
+	orphan := bucketWorkloadWithSize("bucket-x", "bucket-x", "uid-x", "1Gi")
+	orphan.OwnerReferences = nil
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, orphan).
+		WithStatusSubresource(monitor).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "bucket-x", Namespace: "tenant-demo"}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	_, w := workloadSize(t, c, "bucket-x")
+	if len(w.OwnerReferences) != 1 || w.OwnerReferences[0].UID != "uid-x" {
+		t.Errorf("owners = %v, want the claim uid-x", w.OwnerReferences)
+	}
+}
