@@ -169,10 +169,9 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// Auto-registering on connect (removed) created a tap-managed Package whose
 		// install-marked components Flux deployed under its cluster-admin service
 		// account, so a publisher's install chart ran on connect with no operator
-		// step (issue #4978). Installing is now explicit: `cozypkg add` (or a
-		// dashboard action) creates the Package. Populating the catalog from
-		// PackageSource metadata without an install is the long-term shape in
-		// issue #4359.
+		// step (issue #4978). Installing is now explicit: `cozypkg add` creates the
+		// Package. Populating the catalog from PackageSource metadata without an
+		// install is the long-term shape in issue #4359.
 		applied[ps.GetName()] = true
 		logger.Info("materialized PackageSource from tap", "name", ps.GetName(), "tap", repo.Name)
 	}
