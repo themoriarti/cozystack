@@ -71,7 +71,8 @@ COZYSTACK_VERSION = $(patsubst v%,%,$(shell git describe --tags --match 'v*'))
 # the image itself, which hack/stitch-multiarch.sh and hack/verify-multiarch.sh
 # both handle. Attestations need the docker-container buildx driver. The scanner
 # is pinned by digest like every other build input, where --sbom=true would pull
-# a floating tag; bump the version and the digest together.
+# a floating tag. Renovate bumps the version and the digest together, through
+# the manager in .github/renovate.json that reads the SBOM_SCANNER line below.
 SBOM ?= 0
 SBOM_SCANNER ?= docker.io/docker/buildkit-syft-scanner:1.12.0@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
 # A variable, because the commas would split the arguments of $(if) below.
