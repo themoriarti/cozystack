@@ -212,7 +212,7 @@ tests:
         memory: 4Gi
     asserts:
       - failedTemplate:
-          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither'
+          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither and set instanceType$'
 
   # A quoted zero is truthy, so it never took the unset path. It was refused
   # before this guard existed as well, by the kubelet CPU reservation check,

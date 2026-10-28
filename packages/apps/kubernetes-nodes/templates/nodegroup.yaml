@@ -667,7 +667,13 @@ spec:
 {{- $hasCpu := and $group.resources $group.resources.cpu }}
 {{- $hasMem := and $group.resources $group.resources.memory }}
 {{- if or (and $hasCpu (not $hasMem)) (and $hasMem (not $hasCpu)) }}
-{{-   fail (printf "nodeGroup %s: set both resources.cpu and resources.memory, or neither" $groupName) }}
+{{-   $orElse := "neither" }}
+{{- /* Without an instancetype "neither" alone leads straight into the
+       refusal below, so name the other sizing source too. */}}
+{{-   if not $group.instanceType }}
+{{-     $orElse = "neither and set instanceType" }}
+{{-   end }}
+{{-   fail (printf "nodeGroup %s: set both resources.cpu and resources.memory, or %s" $groupName $orElse) }}
 {{- end }}
 {{- /* With neither sizing source the VM has no memory at all, and KubeVirt
        refuses it at admission, long after helm has reported success. No pool

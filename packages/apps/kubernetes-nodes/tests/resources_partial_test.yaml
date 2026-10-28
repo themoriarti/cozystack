@@ -31,7 +31,7 @@ tests:
         cpu: "2"
     asserts:
       - failedTemplate:
-          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither'
+          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither and set instanceType$'
 
   - it: refuses memory without cpu on a pool with no instancetype
     set:
@@ -39,7 +39,7 @@ tests:
         memory: 4Gi
     asserts:
       - failedTemplate:
-          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither'
+          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither and set instanceType$'
 
   # The case the check always caught. Pinned so the two halves cannot drift:
   # the partial check runs before the instancetype lookup, so no stub is needed.
@@ -50,7 +50,7 @@ tests:
         cpu: "2"
     asserts:
       - failedTemplate:
-          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither'
+          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither$'
 
   - it: refuses memory without cpu on a pool sized by an instancetype
     set:
@@ -59,7 +59,7 @@ tests:
         memory: 4Gi
     asserts:
       - failedTemplate:
-          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither'
+          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither$'
 
   - it: refuses a pool with neither an instancetype nor explicit resources
     asserts:
