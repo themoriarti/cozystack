@@ -134,6 +134,8 @@ type Kubelet struct {
 }
 
 type Proxmox struct {
+	// Boot disk size of each worker VM, in GiB. Unset keeps the template's disk. It must be larger than that disk, because Proxmox cannot shrink one, and Talos grows its EPHEMERAL partition into the rest on first boot. Changing it rolls the pool.
+	DiskSizeGb int `json:"diskSizeGb,omitempty"`
 	// Nameservers written into the worker machineconfig. On kubevirt the workers use the management cluster's CoreDNS, which they reach over the pod network; an off-cluster Proxmox worker cannot, so it needs reachable resolvers of its own. Required when `substrate` is `proxmox`. Keep in sync with the parent kubernetes chart's `proxmox.dnsServers`.
 	// +kubebuilder:default:={}
 	DnsServers []string `json:"dnsServers,omitempty"`

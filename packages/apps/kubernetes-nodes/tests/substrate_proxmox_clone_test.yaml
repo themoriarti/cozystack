@@ -52,6 +52,28 @@ tests:
           path: spec.template.spec.full
           value: true
 
+  - it: keeps the template's disk unless a size is set
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - notExists:
+          path: spec.template.spec.disks
+
+  - it: grows the boot disk when a size is set
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    set:
+      proxmox:
+        diskSizeGb: 24
+    asserts:
+      - equal:
+          path: spec.template.spec.disks.bootVolume
+          value:
+            disk: scsi0
+            sizeGb: 24
+
   - it: refuses a target storage for a linked clone
     set:
       proxmox:

@@ -149,6 +149,12 @@ spec:
   {{- with .group.proxmox.pool }}
   pool: {{ . | quote }}
   {{- end }}
+  {{- with .group.proxmox.diskSizeGb }}
+  disks:
+    bootVolume:
+      disk: scsi0
+      sizeGb: {{ . | int }}
+  {{- end }}
   network:
     default:
       bridge: {{ .group.proxmox.network.bridge | quote }}
